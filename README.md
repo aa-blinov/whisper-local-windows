@@ -103,6 +103,14 @@ pyinstaller -y --clean --name LazyToText `
 
 A curated spec file `lazy_to_text.spec` is included. It bundles assets and the root `config.yaml`.
 
+If you're using uv, you can build with:
+
+```bash
+uv run pyinstaller lazy_to_text.spec
+```
+
+Or if you're not using uv:
+
 ```powershell
 python -m pip install pyinstaller
 pyinstaller lazy_to_text.spec
