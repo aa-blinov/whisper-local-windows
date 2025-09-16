@@ -4,7 +4,7 @@ Param(
   [string]$Python = 'python'
 )
 
-Write-Host '== WhisperKey build script =='
+Write-Host '== Lazy to text build script =='
 
 if ($Clean) {
   Write-Host 'Cleaning dist/ and build/ ...'
@@ -28,7 +28,7 @@ try {
 if ($OneFile) {
   Write-Host 'Building one-file variant (experimental)...'
   # One-file: assets внутри exe -> придётся доставать их из _MEIPASS
-  & $Python -m PyInstaller --onefile --name WhisperKey `
+  & $Python -m PyInstaller --onefile --name LazyToText `
     --icon src\whisper_key\assets\tray_idle.ico `
     --add-data "src\\whisper_key\\assets;whisper_key\\assets" `
     --add-data "config.yaml;." `
@@ -36,16 +36,16 @@ if ($OneFile) {
     --hidden-import PIL._tkinter_finder `
     --hidden-import pystray._win32 `
     --hidden-import win32timezone `
-    whisper-key-ui.py
+    lazy-to-text-ui.py
 } else {
   Write-Host 'Building using spec file (folder mode)...'
-  & $Python -m PyInstaller whisper_key.spec
+  & $Python -m PyInstaller lazy_to_text.spec
 }
 
 if ($LASTEXITCODE -eq 0) {
   Write-Host 'Build finished successfully.' -ForegroundColor Green
-  Write-Host 'Output:' (Resolve-Path dist\WhisperKey)
-  Write-Host 'Run:' (Join-Path (Resolve-Path dist\WhisperKey) 'WhisperKey.exe')
+  Write-Host 'Output:' (Resolve-Path dist\LazyToText)
+  Write-Host 'Run:' (Join-Path (Resolve-Path dist\LazyToText) 'LazyToText.exe')
 } else {
   Write-Host 'Build failed.' -ForegroundColor Red
   exit 1

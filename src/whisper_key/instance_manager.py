@@ -7,7 +7,7 @@ import win32event
 
 logger = logging.getLogger(__name__)
 
-def guard_against_multiple_instances(app_name: str = "WhisperKeyLocal"):
+def guard_against_multiple_instances(app_name: str = "LazyToTextLocal"):
     mutex_name = f"{app_name}_SingleInstance"
     
     try:

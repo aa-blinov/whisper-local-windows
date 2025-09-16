@@ -40,7 +40,7 @@ uv run whisper-key-ui
 #### Option 2: Install as a Global Tool
 ```bash
 uv tool install . --force
-whisper-key-ui
+lazy-to-text-ui
 ```
 
 #### Option 3: Development Setup
@@ -63,11 +63,11 @@ uv run whisper-key-ui
 ```
 
 #### Option 4: Portable Executable
-Download a packaged build, extract it, and run `whisper-key-ui.exe`. Note that the model container must be running for the application to work.
+Download a packaged build, extract it, and run `lazy-to-text-ui.exe`. Note that the model container must be running for the application to work.
 
 ## Building a Windows Executable (PyInstaller)
 
-You can create a standalone `WhisperKey.exe` so end users do not install Python and dependencies.
+You can create a standalone `LazyToText.exe` so end users do not install Python and dependencies.
 
 ### Prerequisites
 - Python 3.12 (x64) installed and on PATH
@@ -76,7 +76,7 @@ You can create a standalone `WhisperKey.exe` so end users do not install Python 
 
 ### Fast One‑Shot Build (no spec)
 ```powershell
-pyinstaller -y --clean --name WhisperKey `
+pyinstaller -y --clean --name LazyToText `
   --icon src\whisper_key\assets\tray_idle.ico `
   --add-data "src\\whisper_key\\assets;whisper_key\\assets" `
   --add-data "config.yaml;." `
@@ -84,16 +84,16 @@ pyinstaller -y --clean --name WhisperKey `
   --hidden-import PIL._tkinter_finder `
   --hidden-import pystray._win32 `
   --hidden-import win32timezone `
-  whisper-key-ui.py
+  lazy-to-text-ui.py
 ```
 
 ### Recommended (Spec File)
-A curated spec file `whisper_key.spec` is included. It bundles assets and the root `config.yaml`.
+A curated spec file `lazy_to_text.spec` is included. It bundles assets and the root `config.yaml`.
 ```powershell
 python -m pip install pyinstaller
-pyinstaller whisper_key.spec
+pyinstaller lazy_to_text.spec
 ```
-Result: `dist\WhisperKey\WhisperKey.exe`
+Result: `dist\LazyToText\LazyToText.exe`
 
 ### PowerShell Helper Script
 Script `build-exe.ps1` automates the build:
@@ -137,7 +137,7 @@ Re-run the build (add `-Clean` to purge old bundles). If you change only config 
 
 ### Verification Checklist
 After building run:
-1. Start `WhisperKey.exe`
+1. Start `LazyToText.exe`
 2. Confirm tray icon appears (if enabled)
 3. Open UI → Start Server (or detect running container)
 4. Press hotkeys and verify transcription
@@ -145,7 +145,7 @@ After building run:
 
 ---
 
-If you need a signed build or an installer (MSIX / Inno Setup), that can be layered on top of the `dist/WhisperKey` output.
+If you need a signed build or an installer (MSIX / Inno Setup), that can be layered on top of the `dist/LazyToText` output.
 
 
 ## Core Runtime Dependencies
@@ -168,7 +168,7 @@ Note: Local model inference libraries (e.g., `faster-whisper`) have been removed
 ## Usage
 
 1. **Start the Backend Service**: Launch the Docker container that provides the speech recognition service (see Docker Backend section below).
-2. **Launch the UI**: Run `uv run whisper-key-ui` or execute the portable executable.
+2. **Launch the UI**: Run `uv run lazy-to-text-ui` or execute the portable executable.
 3. **Record Audio**: Press the start hotkey (default `ctrl+f2`) to begin recording, then press the stop hotkey (`ctrl+f3`) to end.
 4. **View Results**: The transcribed text appears in the log panel and is automatically copied (and optionally pasted) into your active application.
 5. **Change Models**: Select a different model from the dropdown and click the `Switch` button to change the transcription model.
@@ -270,12 +270,12 @@ You can override settings using environment variables when launching the UI:
 
 Bash:
 ```bash
-WHISPER_URL=http://localhost:10300 WHISPER_MODEL=base uv run whisper-key-ui
+WHISPER_URL=http://localhost:10300 WHISPER_MODEL=base uv run lazy-to-text-ui
 ```
 
 PowerShell:
 ```powershell
-$env:WHISPER_URL="http://localhost:10300"; $env:WHISPER_MODEL="base"; uv run whisper-key-ui
+$env:WHISPER_URL="http://localhost:10300"; $env:WHISPER_MODEL="base"; uv run lazy-to-text-ui
 ```
 
 ### Model Switching
@@ -381,7 +381,7 @@ All configuration is stored in `config.yaml`. Local model inference was removed 
 pip install --upgrade uv
 uv venv --python 3.12
 uv sync
-uv run whisper-key-ui
+uv run lazy-to-text-ui
 ```
 
 The `uv sync` command installs dependencies strictly from `pyproject.toml`.

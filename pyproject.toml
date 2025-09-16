@@ -31,7 +31,7 @@ dependencies = [
 ]
 
 [project.scripts]
-whisper-key-ui = "whisper_key.ui_tkinter:main"
+lazy-to-text-ui = "whisper_key.ui_tkinter:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

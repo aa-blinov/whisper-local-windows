@@ -193,7 +193,7 @@ class AppContext:
         if self.hotkey_listener:
             return
         try:
-            self._mutex_handle = guard_against_multiple_instances("WhisperKeyUIHotkeys")
+            self._mutex_handle = guard_against_multiple_instances("LazyToTextUIHotkeys")
         except SystemExit:
             self._mutex_handle = None
             logging.getLogger(__name__).warning("Another instance already holds hotkey mutex; hotkeys disabled in this window.")
@@ -239,7 +239,7 @@ class AppContext:
         self.disable_hotkeys()
 
 
-class WhisperKeyUI:
+class LazyToTextUI:
     def __init__(self):
         self.root = ctk.CTk()
         self.root.title("Lazy to text")
@@ -1402,7 +1402,7 @@ def main():
     setup_exception_handler()
     
     try:
-        app = WhisperKeyUI()
+        app = LazyToTextUI()
         app.run()
     except KeyboardInterrupt:
         logging.getLogger(__name__).info("UI shutting down...")
