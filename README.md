@@ -105,8 +105,8 @@ A curated spec file `lazy_to_text.spec` is included. It bundles assets and the r
 
 If you're using uv, you can build with:
 
-```bash
-uv run pyinstaller lazy_to_text.spec
+```powershell
+Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue; uv run pyinstaller lazy_to_text.spec
 ```
 
 Or if you're not using uv:
