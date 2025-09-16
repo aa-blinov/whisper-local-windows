@@ -135,6 +135,14 @@ class HotkeyListener:
             return
         try:
             stop_checking_hotkeys()
+            # Принудительно очищаем все регистрации горячих клавиш
+            try:
+                from global_hotkeys import clear_hotkeys
+                clear_hotkeys()
+                self.logger.debug("Cleared all hotkey registrations")
+            except (ImportError, AttributeError):
+                # Если функция clear_hotkeys недоступна, используем альтернативный подход
+                self.logger.debug("clear_hotkeys not available, using alternative cleanup")
             self.is_listening = False
             self.logger.info("Hotkey listener stopped")
         except Exception as e:

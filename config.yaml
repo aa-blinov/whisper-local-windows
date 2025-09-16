@@ -7,7 +7,7 @@ whisper:
   external_url: http://remote-host:10300
 hotkey:
   start_recording_hotkey: ctrl+f2
-  stop_recording_hotkey: ctrl+f6
+  stop_recording_hotkey: ctrl+f3
 audio:
   channels: 1
   dtype: float32
