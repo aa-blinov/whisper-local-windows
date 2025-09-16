@@ -3,7 +3,7 @@ import os
 import threading
 import winsound
 
-from .utils import resolve_asset_path
+from app.utils import resolve_asset_path
 
 class AudioFeedback:    
     def __init__(self, enabled=True, start_sound='', stop_sound='', cancel_sound=''):

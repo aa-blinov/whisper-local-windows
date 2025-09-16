@@ -3,7 +3,7 @@ import threading
 from typing import Optional, TYPE_CHECKING
 from pathlib import Path
 
-from .utils import resolve_asset_path
+from app.utils import resolve_asset_path
 
 try:
     import pystray
@@ -15,8 +15,8 @@ except ImportError:
     Image = None
 
 if TYPE_CHECKING:
-    from .state_manager import StateManager
-    from .config_manager import ConfigManager
+    from app.state_manager import StateManager
+    from app.config_manager import ConfigManager
 
 class SystemTray:
     def __init__(self,

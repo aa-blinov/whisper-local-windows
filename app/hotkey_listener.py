@@ -11,7 +11,7 @@ try:
 except Exception:
     pass
 
-from .state_manager import StateManager
+from app.state_manager import StateManager
 
 class HotkeyListener:
     def __init__(self, state_manager: StateManager, start_recording_hotkey: str,

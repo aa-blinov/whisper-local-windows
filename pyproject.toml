@@ -31,10 +31,10 @@ dependencies = [
 ]
 
 [project.scripts]
-lazy-to-text-ui = "whisper_key.ui_tkinter:main"
+lazy-to-text-ui = "app.ui_tkinter:main"
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["app"]
 
 [tool.setuptools.package-data]
-"whisper_key" = ["assets/**/*"]
+"app" = ["assets/**/*"]

@@ -128,7 +128,7 @@ class ConfigManager:
         changed = False
         # Determine canonical model
         if legacy_model_size or legacy_model:
-            from .model_mapping import canonical_for
+            from app.model_mapping import canonical_for
             # priority: explicit whisper_model if non-empty else map model_size
             candidate = legacy_model if legacy_model else legacy_model_size
             if isinstance(candidate, str) and candidate:

@@ -3,13 +3,13 @@ import time
 import threading
 from typing import Optional
 
-from .audio_recorder import AudioRecorder
-from .whisper_engine import WhisperEngine
-from .clipboard_manager import ClipboardManager
-from .system_tray import SystemTray
-from .config_manager import ConfigManager
-from .audio_feedback import AudioFeedback
-from .utils import OptionalComponent
+from app.audio_recorder import AudioRecorder
+from app.whisper_engine import WhisperEngine
+from app.clipboard_manager import ClipboardManager
+from app.system_tray import SystemTray
+from app.config_manager import ConfigManager
+from app.audio_feedback import AudioFeedback
+from app.utils import OptionalComponent
 
 class StateManager:
     def __init__(self, 

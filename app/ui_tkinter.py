@@ -9,20 +9,20 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from PIL import Image
 
-from .config_manager import ConfigManager
-from .whisper_engine import WhisperEngine
-from .clipboard_manager import ClipboardManager
-from .model_mapping import alias_for, ALIAS_TO_MODEL
-from .state_manager import StateManager
-from .hotkey_listener import HotkeyListener
-from .instance_manager import guard_against_multiple_instances
-from .audio_recorder import AudioRecorder
-from .audio_feedback import AudioFeedback
-from .logging_utils import setup_logging, setup_exception_handler
-from .utils import get_project_logs_path, resolve_asset_path
-from .system_tray import SystemTray
-from .logging_utils import EarlyBufferHandler
-from .docker_backend_manager import DockerBackendManager
+from app.config_manager import ConfigManager
+from app.whisper_engine import WhisperEngine
+from app.clipboard_manager import ClipboardManager
+from app.model_mapping import alias_for, ALIAS_TO_MODEL
+from app.state_manager import StateManager
+from app.hotkey_listener import HotkeyListener
+from app.instance_manager import guard_against_multiple_instances
+from app.audio_recorder import AudioRecorder
+from app.audio_feedback import AudioFeedback
+from app.logging_utils import setup_logging, setup_exception_handler
+from app.utils import get_project_logs_path, resolve_asset_path
+from app.system_tray import SystemTray
+from app.logging_utils import EarlyBufferHandler
+from app.docker_backend_manager import DockerBackendManager
 
 MODEL_OPTIONS = list(ALIAS_TO_MODEL.keys())
 LANGUAGE_OPTIONS = ['ru', 'en']

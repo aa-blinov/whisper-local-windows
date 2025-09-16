@@ -3,7 +3,7 @@ import os
 from logging.handlers import RotatingFileHandler
 from typing import List
 
-from .utils import get_project_logs_path
+from app.utils import get_project_logs_path
 
 
 class EarlyBufferHandler(logging.Handler):
