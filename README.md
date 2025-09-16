@@ -1,28 +1,35 @@
-# Lazy to text – Hotkey Speech-to-Text (Remote Whisper Backend)
+# Lazy to Text – Hotkey Speech-to-Text with Remote Whisper Backend
 
-Lightweight Windows desktop helper that allows you to transcribe speech to text using hotkeys. Press a hotkey to start recording, press another to stop, and the transcribed text is automatically pasted into your active application.
+Lazy to Text is a lightweight Windows desktop application that enables speech-to-text transcription using customizable hotkeys. Simply press a hotkey to start recording, press another to stop, and the transcribed text is automatically pasted into your active application.
+
+The application uses a remote [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper) backend for speech recognition, providing high-quality transcription without requiring powerful local hardware.
 
 ## Features
 
 - **Global Hotkeys**: Start and stop recording with customizable keyboard shortcuts
-- **Remote Transcription**: Uses a remote Faster-Whisper backend for speech recognition
+- **Remote Transcription**: Uses a remote Faster-Whisper backend for high-quality speech recognition
 - **Auto-Paste Functionality**: Automatically paste transcribed text into the active application
 - **Simple Configuration**: Single configuration file (`config.yaml`) for all settings
-- **Modern UI**: Intuitive Tkinter-based interface for model selection and settings
+- **Modern UI**: Intuitive CustomTkinter-based interface for model selection and settings
 - **System Tray Integration**: Minimize to system tray for unobtrusive operation
 - **Audio Feedback**: Optional sound cues for recording start/stop events
 - **Docker Integration**: Built-in Docker container management for the backend service
+- **Multiple Language Support**: Supports transcription in multiple languages
+- **Model Flexibility**: Switch between different Whisper model sizes (turbo, base, small, medium, large-v3)
 
 ## Quick Start
 
 ### Prerequisites
+
 - Windows 10/11
 - Microphone
 - Docker Desktop (for running the backend service)
+- Python 3.12 (if running from source)
 
 ### Installation Options
 
 #### Option 1: Using uv (Recommended)
+
 ```bash
 # Install uv if not already installed
 pip install --upgrade uv
@@ -34,16 +41,18 @@ uv venv --python 3.12
 uv sync
 
 # Run the application
-uv run whisper-key-ui
+uv run lazy-to-text-ui
 ```
 
 #### Option 2: Install as a Global Tool
+
 ```bash
 uv tool install . --force
 lazy-to-text-ui
 ```
 
 #### Option 3: Development Setup
+
 ```bash
 # Clone the repository
 git clone https://github.com/aa-blinov/whisper-local-windows.git
@@ -59,26 +68,29 @@ uv venv --python 3.12
 uv sync
 
 # Run the application
-uv run whisper-key-ui
+uv run lazy-to-text-ui
 ```
 
 #### Option 4: Portable Executable
-Download a packaged build, extract it, and run `lazy-to-text-ui.exe`. Note that the model container must be running for the application to work.
+
+Download a packaged build, extract it, and run `LazyToText.exe`. Note that the model container must be running for the application to work.
 
 ## Building a Windows Executable (PyInstaller)
 
-You can create a standalone `LazyToText.exe` so end users do not install Python and dependencies.
+You can create a standalone `LazyToText.exe` so end users do not need to install Python and dependencies.
 
 ### Prerequisites
+
 - Python 3.12 (x64) installed and on PATH
 - (Recommended) Virtual environment with project dependencies installed: `pip install -e .`
 - `pip install pyinstaller`
 
 ### Fast One‑Shot Build (no spec)
+
 ```powershell
 pyinstaller -y --clean --name LazyToText `
-  --icon src\whisper_key\assets\tray_idle.ico `
-  --add-data "src\\whisper_key\\assets;whisper_key\\assets" `
+  --icon app\assets\tray_idle.ico `
+  --add-data "app\\assets;app\\assets" `
   --add-data "config.yaml;." `
   --hidden-import customtkinter `
   --hidden-import PIL._tkinter_finder `
@@ -88,15 +100,20 @@ pyinstaller -y --clean --name LazyToText `
 ```
 
 ### Recommended (Spec File)
+
 A curated spec file `lazy_to_text.spec` is included. It bundles assets and the root `config.yaml`.
+
 ```powershell
 python -m pip install pyinstaller
 pyinstaller lazy_to_text.spec
 ```
+
 Result: `dist\LazyToText\LazyToText.exe`
 
 ### PowerShell Helper Script
+
 Script `build-exe.ps1` automates the build:
+
 ```powershell
 ./build-exe.ps1            # folder build using spec
 ./build-exe.ps1 -Clean     # clean + build
@@ -104,30 +121,37 @@ Script `build-exe.ps1` automates the build:
 ```
 
 ### One-File Mode Notes
+
 `--onefile` unpacks to a temp folder at runtime (slower first start). Assets are still accessible via `_MEIPASS` (already handled in `resolve_asset_path`). Use only if you need a single binary; otherwise prefer the folder build for faster startup and easier inspection.
 
 ### Docker Integration Safety
+
 The app communicates with Docker via the standard Python SDK (`docker` package) and the host's Docker daemon (named pipe on Windows). Packaging with PyInstaller does not break this, because:
+
 - No dynamic code generation required for core calls
 - We are not vendoring the daemon itself, only the client library
 - Network / pipe access functions the same from a frozen exe
 
 If Docker appears "unavailable" in the packaged build:
+
 1. Ensure Docker Desktop is running
 2. Run the exe as the same user that can run `docker ps`
 3. Test from PowerShell: `docker version`
 4. If corporate security blocks named pipes, run the app elevated or configure Docker to expose TCP (not recommended on unsecured networks)
 
 ### Updating After Changes
+
 Re-run the build (add `-Clean` to purge old bundles). If you change only config defaults, users may still have an existing `config.yaml` beside the exe—document that they may need to delete it to pick up new defaults.
 
 ### Reducing Size (Optional)
+
 - Remove unused locales / assets
 - Use `--exclude-module` for modules you are certain are not needed
 - UPX packing (enable after verifying antivirus does not flag): `--upx-dir <path>` and set `upx=True` in spec
 - (Advanced) Switch to Nuitka for further optimization
 
 ### Troubleshooting Build
+
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Missing icon | Path wrong | Check `tray_idle.ico` exists |
@@ -136,7 +160,9 @@ Re-run the build (add `-Clean` to purge old bundles). If you change only config 
 | Docker unavailable | Daemon not running / permissions | Start Docker Desktop / check user rights |
 
 ### Verification Checklist
+
 After building run:
+
 1. Start `LazyToText.exe`
 2. Confirm tray icon appears (if enabled)
 3. Open UI → Start Server (or detect running container)
@@ -147,10 +173,10 @@ After building run:
 
 If you need a signed build or an installer (MSIX / Inno Setup), that can be layered on top of the `dist/LazyToText` output.
 
-
 ## Core Runtime Dependencies
 
 The client application depends on the following Python packages:
+
 - `sounddevice`: Audio recording
 - `global-hotkeys`: Global hotkey detection
 - `pyperclip`: Clipboard management
@@ -173,6 +199,20 @@ Note: Local model inference libraries (e.g., `faster-whisper`) have been removed
 4. **View Results**: The transcribed text appears in the log panel and is automatically copied (and optionally pasted) into your active application.
 5. **Change Models**: Select a different model from the dropdown and click the `Switch` button to change the transcription model.
 
+### Hotkey Controls
+
+- **Start Recording**: Default `Ctrl+F2` (customizable in config)
+- **Stop Recording**: Default `Ctrl+F3` (customizable in config)
+
+### User Interface
+
+The application features a modern UI built with CustomTkinter:
+
+1. **Model Section**: Select and switch between different Whisper models
+2. **Status Panel**: View server and container status
+3. **Hotkeys Section**: Configure recording hotkeys and auto-paste settings
+4. **Logs Section**: View application logs and status messages
+
 ## Configuration
 
 The `config.yaml` file contains all application settings and is located at the repository root (or beside the executable). To reset to defaults, simply delete this file and restart the application.
@@ -182,7 +222,7 @@ The `config.yaml` file contains all application settings and is located at the r
 #### whisper
 - `backend_mode`: Either "local" or "external" (default: "local")
 - `model`: Model alias to use (default: "turbo")
-- `language`: Language for transcription, "auto" for automatic detection (default: "auto")
+- `language`: Language for transcription, "auto" for automatic detection (default: "ru")
 - `beam_size`: Beam search size for better accuracy (default: 5)
 - `local_url`: URL for the local Docker backend (default: "http://localhost:10300")
 - `external_url`: URL for an external backend service
@@ -307,6 +347,7 @@ The client periodically checks the backend service health by calling `GET /healt
 - **Reset settings**: Delete `config.yaml` to regenerate with default values
 - **View logs**: Check `logs/app.log` for detailed application logs
 - **Docker issues**: Ensure Docker Desktop is running and you have sufficient permissions
+- **GPU not detected**: The container uses GPU by default; ensure NVIDIA Container Toolkit is installed
 
 ## Technical Architecture
 
@@ -341,12 +382,14 @@ Lazy to text follows a modular architecture with clearly separated components:
 We welcome contributions to Lazy to text! Here's how you can help:
 
 ### Reporting Issues
+
 - Check existing issues before creating a new one
 - Provide detailed information about your environment
 - Include steps to reproduce the issue
 - Attach relevant log files if applicable
 
 ### Code Contributions
+
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Commit your changes (`git commit -m 'Add amazing feature'`)
@@ -354,6 +397,7 @@ We welcome contributions to Lazy to text! Here's how you can help:
 5. Open a Pull Request
 
 ### Development Setup
+
 1. Follow the development installation instructions above
 2. Make your changes
 3. Test thoroughly
@@ -361,6 +405,7 @@ We welcome contributions to Lazy to text! Here's how you can help:
 5. Update documentation as needed
 
 ### Code Style
+
 - Follow PEP 8 Python style guide
 - Use descriptive variable and function names
 - Include docstrings for public functions and classes
@@ -370,12 +415,8 @@ We welcome contributions to Lazy to text! Here's how you can help:
 
 All configuration is stored in `config.yaml`. Local model inference was removed to reduce complexity and resource usage. For offline operation, you would need to reintroduce a local backend (outside the current scope).
 
-### Migration from Older Versions
-- Default port changed from 9090 to 10300. Update `whisper.local_url` or set `WHISPER_URL`.
-- Removed sections: `vad`, `device`, `compute_type` (safe to delete from old configs).
-- Environment variables in use: `WHISPER_URL`, `WHISPER_MODEL`, `WHISPER_MODEL_SIZE`.
-
 ### Using uv / Python 3.12
+
 ```bash
 # Optional: deactivate old virtualenv
 pip install --upgrade uv
