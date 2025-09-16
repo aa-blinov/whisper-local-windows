@@ -1,6 +1,7 @@
 import logging
 import time
 import asyncio
+import re
 from typing import Optional
 import numpy as np
 from urllib.parse import urlparse
@@ -18,6 +19,15 @@ class WhisperEngine:
     """
 
     SAMPLE_RATE = 16000
+
+    @staticmethod
+    def _clean_transcription_text(text: str) -> str:
+        """Clean transcription text by removing multiple spaces and trimming."""
+        if not text:
+            return text
+        # Replace multiple spaces with single space using regex
+        cleaned = re.sub(r'\s+', ' ', text)
+        return cleaned.strip()
 
     def __init__(self,
                  base_url: str,
@@ -211,7 +221,9 @@ class WhisperEngine:
                 if event and event.type == 'transcript':
                     text = event.data.get('text', '')
                     await client.disconnect()
-                    return text.strip() if text else None
+                    # Clean multiple spaces and trim the result
+                    cleaned_text = self._clean_transcription_text(text)
+                    return cleaned_text if cleaned_text else None
                 elif event and event.type == 'error':
                     error_msg = event.data.get('text', 'Unknown error')
                     self.logger.error(f"Wyoming transcription error: {error_msg}")

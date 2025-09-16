@@ -34,7 +34,8 @@ dependencies = [
 lazy-to-text-ui = "app.ui_tkinter:main"
 
 [tool.setuptools.packages.find]
-where = ["app"]
+where = ["."]
+include = ["app*"]
 
 [tool.setuptools.package-data]
 "app" = ["assets/**/*"]
