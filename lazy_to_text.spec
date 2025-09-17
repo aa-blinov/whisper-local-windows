@@ -92,6 +92,7 @@ exe = EXE(
     upx=False,
     console=_console_flag,  # set LAZYTOTEXT_DEBUG_CONSOLE=1 to debug with console
     icon=str(assets_src / 'tray_idle.ico') if (assets_src / 'tray_idle.ico').exists() else None,
+    disable_windowed_traceback=False,
 )
 
 coll = COLLECT(
