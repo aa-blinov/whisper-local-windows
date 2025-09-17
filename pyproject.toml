@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lazy-to-text"
+version = "0.0.1"
+description = "Hotkey STT client for remote faster-whisper backend (Windows)"
+readme = "README.md"
+authors = [
+    {name = "Alexander Blinov", email = "iam@blinovcorp.ru"}
+]
+requires-python = ">=3.12"
+urls = { Homepage = "https://github.com/aa-blinov/whisper-local-windows" }
+dependencies = [
+    "numpy>=1.24.0",
+    "sounddevice>=0.4.6",
+    "global-hotkeys>=0.1.7; platform_system=='Windows'",
+    "pyperclip>=1.8.2",
+    "ruamel.yaml>=0.18.14",
+    "pywin32>=306; platform_system=='Windows'",
+    "pyautogui>=0.9.54; platform_system=='Windows'",
+    "pystray>=0.19.5",
+    "Pillow>=10.0.0",
+    "customtkinter>=5.2.0",
+    "requests>=2.31.0",
+    "docker>=7.0.0",
+    "wyoming>=1.7.2",
+    "pyyaml>=6.0.2",
+    "pyinstaller>=6.16.0",
+]
+
+[project.scripts]
+whisper-key-ui = "whisper_key.ui_tkinter:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"whisper_key" = ["assets/**/*"]

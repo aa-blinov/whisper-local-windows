@@ -1,0 +1,39 @@
+whisper:
+  backend_mode: local
+  model: turbo
+  language: ru
+  beam_size: 5
+  local_url: http://localhost:10300
+  external_url: http://remote-host:10300
+hotkey:
+  start_recording_hotkey: ctrl+f2
+  stop_recording_hotkey: ctrl+f3
+audio:
+  channels: 1
+  dtype: float32
+  max_duration: 300
+clipboard:
+  auto_paste: true
+  preserve_clipboard: false
+  key_simulation_delay: 0.05
+logging:
+  level: INFO
+  file:
+    enabled: true
+    filename: app.log
+    rotation:
+      enabled: true
+      max_bytes: 1048576
+      backup_count: 5
+      encoding: utf-8
+  console:
+    enabled: true
+    level: WARNING
+audio_feedback:
+  enabled: true
+  start_sound: assets/sounds/record_start.wav
+  stop_sound: assets/sounds/record_stop.wav
+  cancel_sound: assets/sounds/record_cancel.wav
+system_tray:
+  enabled: true
+  tooltip: Lazy to text

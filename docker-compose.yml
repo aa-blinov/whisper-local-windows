@@ -1,0 +1,24 @@
+services:
+  faster-whisper:
+    image: linuxserver/faster-whisper:gpu
+    container_name: faster-whisper
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Etc/UTC
+      - WHISPER_MODEL=turbo
+      - WHISPER_BEAM=5
+      - WHISPER_LANG=ru
+    ports:
+      - "10300:10300"
+    volumes:
+      - models_cache:/config
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [ gpu ]
+    restart: unless-stopped
+
+volumes:
+  models_cache:
