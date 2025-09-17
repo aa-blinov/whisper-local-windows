@@ -27,7 +27,6 @@ MANIFEST
 
 # PyInstaller
 *.manifest
-*.spec
 # Exception: Keep our custom build spec files
 !py-build/*.spec
 
