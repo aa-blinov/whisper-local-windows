@@ -22,11 +22,21 @@ class WhisperEngine:
 
     @staticmethod
     def _clean_transcription_text(text: str) -> str:
-        """Clean transcription text by removing multiple spaces and trimming."""
+        """Clean transcription text by removing multiple spaces, trimming, and filtering unwanted phrases."""
         if not text:
             return text
-        # Replace multiple spaces with single space using regex
-        cleaned = re.sub(r'\s+', ' ', text)
+        
+        unwanted_phrases = [
+            r'субтитры\s+создавал\s+dimatorbok',
+            r'субтитры\s+сделал\s+dimatorbok', 
+            r'продолжение\s+следует\.{0,3}'
+        ]
+        
+        cleaned = text
+        for phrase_pattern in unwanted_phrases:
+            cleaned = re.sub(phrase_pattern, '', cleaned, flags=re.IGNORECASE)
+        
+        cleaned = re.sub(r'\s+', ' ', cleaned)
         return cleaned.strip()
 
     def __init__(self,
