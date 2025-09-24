@@ -31,9 +31,7 @@ The application uses a remote [Faster-Whisper](https://github.com/SYSTRAN/faster
 #### Option 1: Using uv (Recommended)
 
 ```bash
-# Install uv if not already installed
-pip install --upgrade uv
-
+# Ensure uv is installed (see https://docs.astral.sh/uv/getting-started/installation/)
 # Create a Python 3.12 virtual environment
 uv venv --python 3.12
 
@@ -57,10 +55,7 @@ lazy-to-text-ui
 # Clone the repository
 git clone https://github.com/aa-blinov/whisper-local-windows.git
 cd whisper-local-windows
-
-# Install uv if not already installed
-pip install --upgrade uv
-
+# Ensure uv is installed (see https://docs.astral.sh/uv/getting-started/installation/)
 # Create a Python 3.12 virtual environment
 uv venv --python 3.12
 
@@ -81,21 +76,21 @@ You can create a standalone `LazyToText.exe` so end users do not need to install
 
 ### Prerequisites
 
-- Python 3.12 (x64) installed and on PATH
-- (Recommended) Virtual environment with project dependencies installed: `pip install -e .`
-- `pip install pyinstaller`
+- [uv](https://github.com/astral-sh/uv) – handles dependency resolution and runs PyInstaller inside the project environment
+- Python 3.12 (x64) available (uv will create/manage the virtual environment automatically)
 
 ### Fast One‑Shot Build (no spec)
 
 ```powershell
-pyinstaller -y --clean --name LazyToText `
+uv run pyinstaller -y --clean --name LazyToText `
   --icon app\assets\tray_idle.ico `
-  --add-data "app\\assets;app\\assets" `
+  --add-data "app\\assets;assets" `
   --add-data "config.yaml;." `
   --hidden-import customtkinter `
   --hidden-import PIL._tkinter_finder `
   --hidden-import pystray._win32 `
   --hidden-import win32timezone `
+  --hidden-import global_hotkeys `
   lazy-to-text-ui.py
 ```
 
@@ -103,30 +98,27 @@ pyinstaller -y --clean --name LazyToText `
 
 A curated spec file `lazy_to_text.spec` is included. It bundles assets and the root `config.yaml`.
 
-If you're using uv, you can build with:
-
 ```powershell
-Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue; uv run pyinstaller lazy_to_text.spec
-```
-
-Or if you're not using uv:
-
-```powershell
-python -m pip install pyinstaller
-pyinstaller lazy_to_text.spec
+uv sync --frozen
+uv run pyinstaller lazy_to_text.spec
 ```
 
 Result: `dist\LazyToText\LazyToText.exe`
 
 ### PowerShell Helper Script
 
-Script `build-exe.ps1` automates the build:
+Script `build-exe.ps1` automates the build via uv:
 
 ```powershell
-./build-exe.ps1            # folder build using spec
-./build-exe.ps1 -Clean     # clean + build
-./build-exe.ps1 -OneFile   # experimental one-file build
+./build-exe.ps1                 # sync deps and build folder bundle via spec
+./build-exe.ps1 -Clean          # clean build/ + dist/ before building
+./build-exe.ps1 -OneFile        # experimental one-file build (uv run pyinstaller --onefile)
+./build-exe.ps1 -SkipSync       # reuse existing environment, skip uv sync
+./build-exe.ps1 -DryRun         # verify tooling without running PyInstaller
+./build-exe.ps1 -Uv C:\tools\uv.exe # custom uv executable path (alias: -Python)
 ```
+
+The script checks that `uv` is available, runs `uv sync --frozen` when `uv.lock` exists, and then invokes `uv run pyinstaller` with the appropriate arguments.
 
 ### One-File Mode Notes
 
@@ -425,9 +417,10 @@ All configuration is stored in `config.yaml`. Local model inference was removed 
 
 ### Using uv / Python 3.12
 
+Install uv once via the official instructions (https://docs.astral.sh/uv/getting-started/installation/), then:
+
 ```bash
 # Optional: deactivate old virtualenv
-pip install --upgrade uv
 uv venv --python 3.12
 uv sync
 uv run lazy-to-text-ui

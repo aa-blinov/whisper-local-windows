@@ -233,7 +233,9 @@ class WhisperEngine:
                     await client.disconnect()
                     # Clean multiple spaces and trim the result
                     cleaned_text = self._clean_transcription_text(text)
-                    return cleaned_text if cleaned_text else None
+                    if cleaned_text:
+                        return f"{cleaned_text} "
+                    return None
                 elif event and event.type == 'error':
                     error_msg = event.data.get('text', 'Unknown error')
                     self.logger.error(f"Wyoming transcription error: {error_msg}")
