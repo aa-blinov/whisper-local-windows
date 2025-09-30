@@ -10,6 +10,7 @@ from app.system_tray import SystemTray
 from app.config_manager import ConfigManager
 from app.audio_feedback import AudioFeedback
 from app.utils import OptionalComponent
+from app.history_manager import HistoryManager
 
 class StateManager:
     def __init__(self, 
@@ -26,6 +27,20 @@ class StateManager:
         self.system_tray = OptionalComponent(system_tray)
         self.config_manager = config_manager
         self.audio_feedback = OptionalComponent(audio_feedback)
+        
+        # Initialize history manager
+        from app.utils import get_project_logs_path
+        import os
+        history_config = self.config_manager.get_history_config()
+        if history_config.get('enabled', True):
+            history_file = os.path.join(get_project_logs_path(), "transcription_history.json")
+            max_entries = history_config.get('max_entries', 1000)
+            self.history_manager = HistoryManager(max_entries=max_entries, history_file=history_file)
+        else:
+            self.history_manager = None
+        
+        # History update callback (to be set by UI)
+        self.history_update_callback = None
         
         self.is_processing = False
         self.is_model_loading = False
@@ -124,6 +139,24 @@ class StateManager:
             if success:
                 self.last_transcription = transcribed_text
                 self.logger.debug("[Pipeline] last_transcription updated")
+                
+                # Add to history
+                if self.history_manager:
+                    try:
+                        self.history_manager.add_entry(
+                            text=transcribed_text,
+                            duration=duration,
+                            model=self.whisper_engine.model_size,
+                            language=self.whisper_engine.language or "auto"
+                        )
+                        self.logger.debug("[Pipeline] Added entry to history")
+                        
+                        # Notify UI to update history display
+                        if self.history_update_callback:
+                            self.history_update_callback()
+                            
+                    except Exception as e:
+                        self.logger.warning(f"Failed to add entry to history: {e}")
             
         except Exception as e:
             self.logger.error(f"Error in processing workflow: {e}")

@@ -48,6 +48,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "cancel_sound": "assets/sounds/record_cancel.wav",
     },
     "system_tray": {"enabled": True, "tooltip": "Lazy to text"},
+    "history": {
+        "enabled": True,
+        "max_entries": 1000,
+        "auto_cleanup_days": 30,
+    },
 }
 
 
@@ -195,6 +200,9 @@ class ConfigManager:
 
     def get_audio_feedback_config(self) -> Dict[str, Any]:
         return self.config.get("audio_feedback", {}).copy()
+
+    def get_history_config(self) -> Dict[str, Any]:
+        return self.config.get("history", {}).copy()
 
     # Deprecated method kept for minimal surface compatibility (no-op now)
     def print_stop_instructions_based_on_config(self):

@@ -2,7 +2,7 @@ whisper:
   backend_mode: local
   model: turbo
   language: ru
-  beam_size: 5
+  beam_size: 7
   local_url: http://localhost:10300
   external_url: http://remote-host:10300
 hotkey:
@@ -37,3 +37,7 @@ audio_feedback:
 system_tray:
   enabled: true
   tooltip: Lazy to text
+history:
+  enabled: true
+  max_entries: 1000
+  auto_cleanup_days: 30

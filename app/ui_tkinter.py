@@ -28,9 +28,51 @@ MODEL_OPTIONS = list(ALIAS_TO_MODEL.keys())
 LANGUAGE_OPTIONS = ['ru', 'en']
 BUTTON_WIDTH = 140  # Unified width for all primary buttons
 
-# Configure CustomTkinter
-ctk.set_appearance_mode("system")  # Modes: system (default), light, dark
-ctk.set_default_color_theme("blue")  # Themes: blue (default), dark-blue, green
+# Configure CustomTkinter with modern theme
+ctk.set_appearance_mode("dark")  # Modern dark theme by default
+ctk.set_default_color_theme("dark-blue")  # Professional dark-blue theme
+
+# Modern color scheme - improved for better readability and aesthetics
+COLORS = {
+    "primary": "#1E1E1E",        # Darker, more elegant background
+    "secondary": "#2D2D30",     # Softer secondary background
+    "accent": "#007ACC",        # Softer blue, better contrast
+    "accent_light": "#4FC3F7",  # Light blue for hover states
+    "success": "#4CAF50",       # Material green, more pleasant
+    "success_light": "#81C784", # Light green for hover
+    "warning": "#FF9800",       # Material orange, warmer
+    "warning_light": "#FFB74D", # Light orange for hover
+    "danger": "#F44336",        # Material red, less aggressive
+    "danger_light": "#E57373",  # Light red for hover
+    "text_primary": "#FFFFFF",  # Pure white for main text
+    "text_secondary": "#E0E0E0", # Lighter gray for better readability
+    "text_muted": "#B0B0B0",    # Less muted, more readable
+    "text_disabled": "#888888", # Readable color for disabled text
+    "border": "#404040",        # Lighter border for subtlety
+    "hover": "#3C3C3C",         # Consistent hover state
+    "surface": "#252526",       # For elevated surfaces
+    "disabled": "#3A3A3A"      # Background for disabled buttons
+}
+
+# Modern font system - carefully selected for Windows compatibility
+FONTS = {
+    # Primary fonts (widely available on Windows)
+    "family_primary": "Segoe UI",      # Modern Windows system font
+    "family_secondary": "Calibri",     # Clean, readable alternative
+    "family_monospace": "Consolas",    # Modern monospace for logs/code
+    
+    # Font sizes with better scaling
+    "size_title": 20,          # Main titles
+    "size_heading": 16,        # Section headings  
+    "size_body": 13,           # Regular text (increased from 12)
+    "size_small": 11,          # Small text
+    "size_button": 12,         # Button text
+    "size_logs": 11,           # Log text (increased from 9)
+    
+    # Font weights
+    "weight_normal": "normal",
+    "weight_bold": "bold",
+}
 
 class ToolTip:
     """Class for creating tooltips for CustomTkinter widgets"""
@@ -78,7 +120,7 @@ class ToolTip:
             background="#ffffe0",
             relief="solid",
             borderwidth=1,
-            font=("Arial", 9),
+            font=(FONTS["family_primary"], FONTS["size_small"]),
             wraplength=300
         )
         label.pack()
@@ -242,8 +284,9 @@ class AppContext:
 class LazyToTextUI:
     def __init__(self):
         self.root = ctk.CTk()
-        self.root.title("Lazy to text")
-        self.root.geometry("720x550")
+        self.root.title("Lazy to Text")
+        self.root.geometry("900x650")  # Larger, more modern proportions
+        self.root.minsize(800, 600)  # Minimum size for usability
         
         # Set application icon
         self.set_app_icon()
@@ -390,9 +433,18 @@ class LazyToTextUI:
 
     def create_widgets(self):
         """Create interface widgets"""
-        # Create main frames without scrollable container
-        main_frame = ctk.CTkFrame(self.root, fg_color="transparent")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        # Create main container with modern padding
+        main_container = ctk.CTkFrame(self.root, fg_color="transparent")
+        main_container.pack(fill="both", expand=True, padx=24, pady=20)
+        
+        # Create main scrollable frame for better UX with large content
+        main_frame = ctk.CTkScrollableFrame(
+            main_container, 
+            fg_color="transparent",
+            scrollbar_button_color=COLORS["accent"],
+            scrollbar_button_hover_color=COLORS["hover"]
+        )
+        main_frame.pack(fill="both", expand=True)
         
         # Model section
         self.create_model_section(main_frame)
@@ -400,16 +452,19 @@ class LazyToTextUI:
         # Status section (new) placed after model for organic grouping
         self.create_status_section(main_frame)
         
-        # Separator
-        separator1 = ctk.CTkFrame(main_frame, height=1)
-        separator1.pack(fill="x", pady=5)
+        # Modern spacing instead of visible separators
         
         # Hotkeys section
         self.create_hotkeys_section(main_frame)
         
-        # Separator
-        separator2 = ctk.CTkFrame(main_frame, height=1)
-        separator2.pack(fill="x", pady=5)
+        # Modern spacing
+        
+        # History section (only if enabled)
+        history_config = self.ctx.config_manager.get_history_config()
+        if history_config.get('enabled', True):
+            self.create_history_section(main_frame)
+        
+        # Modern spacing
         
         # Logs section
         self.create_logs_section(main_frame)
@@ -419,76 +474,144 @@ class LazyToTextUI:
         
         # Save original values after creating UI
         self.save_original_values()
+        
+        # Set history update callback
+        self.ctx.state_manager.history_update_callback = self.on_history_updated
 
     def create_model_section(self, parent):
         """Create model settings section"""
-        # Title
-        model_title = ctk.CTkLabel(parent, text="Model", font=ctk.CTkFont(size=18, weight="bold"))
-        model_title.pack(pady=(5, 3))
+        # Title with improved typography
+        model_title = ctk.CTkLabel(
+            parent, 
+            text="Model Configuration", 
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_title"], weight=FONTS["weight_bold"]),
+            text_color=COLORS["text_primary"]
+        )
+        model_title.pack(pady=(0, 20), anchor="w")  # More space below
         
-        # First row: Backend mode, External URL and Backend buttons in one line
-        backend_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        backend_frame.pack(fill="x", padx=10, pady=3)
+        # Backend frame with improved colors
+        backend_frame = ctk.CTkFrame(
+            parent, 
+            fg_color=COLORS["surface"],
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["border"]
+        )
+        backend_frame.pack(fill="x", padx=0, pady=(0, 16))  # More space
+        
+        # Add padding to backend frame
+        backend_inner = ctk.CTkFrame(backend_frame, fg_color="transparent")
+        backend_inner.pack(fill="x", padx=16, pady=12)
         
         self.widgets['backend_mode'] = ctk.CTkOptionMenu(
-            backend_frame,
+            backend_inner,
             values=['local', 'external'],
-            command=self.on_backend_mode_change
+            command=self.on_backend_mode_change,
+            width=120,
+            height=34,  # Slightly taller for better touch targets
+            corner_radius=8,
+            button_color=COLORS["accent"],
+            button_hover_color=COLORS["accent_light"],
+            dropdown_hover_color=COLORS["hover"],
+            text_color="#FFFFFF",
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_normal"])
         )
         self.widgets['backend_mode'].set(self.ctx.backend_mode)
-        self.widgets['backend_mode'].pack(side="left", padx=5)
+        self.widgets['backend_mode'].pack(side="left", padx=(0, 12))
         
         self.widgets['external_url'] = ctk.CTkEntry(
-            backend_frame,
-            placeholder_text="Server URL",
-            width=200
+            backend_inner,
+            placeholder_text="Server URL (e.g., localhost:10300)",
+            width=240,
+            height=34,
+            corner_radius=8,
+            border_width=1,
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            placeholder_text_color=COLORS["text_muted"],
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"])
         )
         self.widgets['external_url'].insert(0, self.ctx.config_manager.get_setting('whisper','external_url'))
-        self.widgets['external_url'].pack(side="left", padx=5)
+        self.widgets['external_url'].pack(side="left", padx=(0, 12))
         
-        # Backend buttons frame (Start/Stop) - in the same line
-        self.widgets['backend_buttons_frame'] = ctk.CTkFrame(backend_frame, fg_color="transparent")
-        # Было: padx=5, что давало суммарно больший зазор (поле URL padx=5 + фрейм 5 + первая кнопка 5 = 15).
-        # Теперь padx=0, итоговый визуальный промежуток: 5 (URL) + 0 (фрейм) + 5 (кнопка) = 10, как между beam и language.
+        # Backend buttons frame with modern styling
+        self.widgets['backend_buttons_frame'] = ctk.CTkFrame(backend_inner, fg_color="transparent")
         self.widgets['backend_buttons_frame'].pack(side="left", padx=0)
         
-        # Second row: Model, Beam size, Language, Switch
-        model_controls_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        model_controls_frame.pack(fill="x", padx=10, pady=3)
+        # Model controls with improved styling
+        model_controls_frame = ctk.CTkFrame(
+            parent,
+            fg_color=COLORS["surface"],
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["border"]
+        )
+        model_controls_frame.pack(fill="x", padx=0, pady=(0, 16))
+        
+        # Add padding to model controls
+        model_inner = ctk.CTkFrame(model_controls_frame, fg_color="transparent")
+        model_inner.pack(fill="x", padx=16, pady=12)
         
         self.widgets['model_dropdown'] = ctk.CTkOptionMenu(
-            model_controls_frame,
+            model_inner,
             values=MODEL_OPTIONS,
-            command=self.on_model_change
+            command=self.on_model_change,
+            width=140,
+            height=34,
+            corner_radius=8,
+            button_color=COLORS["accent"],
+            button_hover_color=COLORS["accent_light"],
+            text_color="#FFFFFF",
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_normal"])
         )
         current_model = self.ctx.engine.model_size if self.ctx.engine.model_size in MODEL_OPTIONS else MODEL_OPTIONS[0]
         self.widgets['model_dropdown'].set(current_model)
-        self.widgets['model_dropdown'].pack(side="left", padx=5)
+        self.widgets['model_dropdown'].pack(side="left", padx=(0, 12))
         
         self.widgets['beam_size'] = ctk.CTkEntry(
-            model_controls_frame,
+            model_inner,
             placeholder_text="Beam size",
-            width=200
+            width=120,
+            height=34,
+            corner_radius=8,
+            border_width=1,
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            placeholder_text_color=COLORS["text_muted"],
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"])
         )
         self.widgets['beam_size'].insert(0, str(self.ctx.engine.beam_size))
-        self.widgets['beam_size'].pack(side="left", padx=5)
+        self.widgets['beam_size'].pack(side="left", padx=(0, 12))
         
         self.widgets['language_dropdown'] = ctk.CTkOptionMenu(
-            model_controls_frame,
+            model_inner,
             values=LANGUAGE_OPTIONS,
-            command=self.on_language_change
+            command=self.on_language_change,
+            width=100,
+            height=34,
+            corner_radius=8,
+            button_color=COLORS["accent"],
+            button_hover_color=COLORS["accent_light"],
+            text_color="#FFFFFF",
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_normal"])
         )
         current_lang = self.ctx.engine.language if self.ctx.engine.language in LANGUAGE_OPTIONS else 'ru'
         self.widgets['language_dropdown'].set(current_lang)
-        self.widgets['language_dropdown'].pack(side="left", padx=5)
+        self.widgets['language_dropdown'].pack(side="left", padx=(0, 12))
         
         self.widgets['switch_button'] = ctk.CTkButton(
-            model_controls_frame,
-            text="Switch",
+            model_inner,
+            text="Apply Changes",
             command=self.switch_model,
-            width=BUTTON_WIDTH
+            width=140,
+            height=34,
+            corner_radius=8,
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
+            fg_color=COLORS["success"],
+            hover_color=COLORS["success_light"],
+            text_color="#FFFFFF"
         )
-        self.widgets['switch_button'].pack(side="left", padx=5)
+        self.widgets['switch_button'].pack(side="left", padx=0)
         
         # Progress bar (initially hidden)
         self.widgets['progress_bar'] = ctk.CTkProgressBar(model_controls_frame)
@@ -508,15 +631,35 @@ class LazyToTextUI:
 
     def create_status_section(self, parent):
         """Create status panel similar to logs but compact"""
-        status_title = ctk.CTkLabel(parent, text="Status", font=ctk.CTkFont(size=18, weight="bold"))
-        status_title.pack(pady=(5,3))
+        # Status title with better typography
+        status_title = ctk.CTkLabel(
+            parent, 
+            text="System Status", 
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_title"], weight=FONTS["weight_bold"]),
+            text_color=COLORS["text_primary"]
+        )
+        status_title.pack(pady=(20, 20), anchor="w")
 
-        status_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        status_frame.pack(fill="x", padx=10, pady=3)
+        status_frame = ctk.CTkFrame(
+            parent, 
+            fg_color=COLORS["surface"],
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["border"]
+        )
+        status_frame.pack(fill="x", padx=0, pady=(0, 16))
 
-        # Textbox for status info
-        self.widgets['status_output'] = ctk.CTkTextbox(status_frame, height=60)
-        self.widgets['status_output'].pack(fill="x", expand=False)
+        # Status textbox with improved styling
+        self.widgets['status_output'] = ctk.CTkTextbox(
+            status_frame, 
+            height=80,
+            corner_radius=8,
+            border_width=0,
+            fg_color=COLORS["primary"],
+            text_color=COLORS["text_secondary"],
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"])
+        )
+        self.widgets['status_output'].pack(fill="x", expand=False, padx=16, pady=12)
         try:
             self.widgets['status_output'].configure(state="disabled")
         except Exception:
@@ -563,17 +706,29 @@ class LazyToTextUI:
                 self.widgets['backend_buttons_frame'],
                 text="Start Server",
                 command=self.start_backend,
-                width=BUTTON_WIDTH
+                width=120,
+                height=34,
+                corner_radius=8,
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
+                fg_color=COLORS["success"],
+                hover_color=COLORS["success_light"],
+                text_color="#FFFFFF"
             )
-            self.widgets['start_backend_button'].pack(side="left", padx=5)
+            self.widgets['start_backend_button'].pack(side="left", padx=(0, 8))
             
             self.widgets['stop_backend_button'] = ctk.CTkButton(
                 self.widgets['backend_buttons_frame'],
                 text="Stop Server",
                 command=self.stop_backend,
-                width=BUTTON_WIDTH
+                width=120,
+                height=34,
+                corner_radius=8,
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
+                fg_color=COLORS["danger"],
+                hover_color=COLORS["danger_light"],
+                text_color="#FFFFFF"
             )
-            self.widgets['stop_backend_button'].pack(side="left", padx=5)
+            self.widgets['stop_backend_button'].pack(side="left", padx=0)
             
             # Add tooltips for backend buttons
             try:
@@ -586,83 +741,313 @@ class LazyToTextUI:
 
     def create_hotkeys_section(self, parent):
         """Create hotkeys settings section"""
-        # Title
-        hotkeys_title = ctk.CTkLabel(parent, text="Hotkeys", font=ctk.CTkFont(size=18, weight="bold"))
-        hotkeys_title.pack(pady=(5, 3))
+        # Hotkeys title with better typography
+        hotkeys_title = ctk.CTkLabel(
+            parent, 
+            text="Keyboard Shortcuts", 
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=COLORS["text_primary"]
+        )
+        hotkeys_title.pack(pady=(20, 20), anchor="w")
         
-        # Hotkey controls
-        hotkey_controls_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        hotkey_controls_frame.pack(fill="x", padx=10, pady=5)
+        # Hotkey controls with improved styling
+        hotkey_controls_frame = ctk.CTkFrame(
+            parent,
+            fg_color=COLORS["surface"],
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["border"]
+        )
+        hotkey_controls_frame.pack(fill="x", padx=0, pady=(0, 16))
+        
+        # Add padding to hotkey controls
+        hotkey_inner = ctk.CTkFrame(hotkey_controls_frame, fg_color="transparent")
+        hotkey_inner.pack(fill="x", padx=16, pady=12)
         
         self.widgets['start_hotkey'] = ctk.CTkEntry(
-            hotkey_controls_frame,
-            placeholder_text="Start hotkey",
-            width=160
+            hotkey_inner,
+            placeholder_text="Start recording hotkey",
+            width=180,
+            height=34,
+            corner_radius=8,
+            border_width=1,
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            placeholder_text_color=COLORS["text_muted"],
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"])
         )
         self.widgets['start_hotkey'].insert(0, self.ctx.config_manager.get_setting('hotkey','start_recording_hotkey'))
         self.widgets['start_hotkey'].bind('<KeyRelease>', self.on_hotkey_settings_change)
-        self.widgets['start_hotkey'].pack(side="left", padx=5)
+        self.widgets['start_hotkey'].pack(side="left", padx=(0, 12))
         
         self.widgets['stop_hotkey'] = ctk.CTkEntry(
-            hotkey_controls_frame,
-            placeholder_text="Stop hotkey",
-            width=160
+            hotkey_inner,
+            placeholder_text="Stop recording hotkey",
+            width=180,
+            height=34,
+            corner_radius=8,
+            border_width=1,
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            placeholder_text_color=COLORS["text_muted"],
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"])
         )
         stop_value = self.ctx.config_manager.get_setting('hotkey','stop_recording_hotkey') if 'stop_recording_hotkey' in self.ctx.config_manager.config['hotkey'] else ''
         self.widgets['stop_hotkey'].insert(0, stop_value)
         self.widgets['stop_hotkey'].bind('<KeyRelease>', self.on_hotkey_settings_change)
-        self.widgets['stop_hotkey'].pack(side="left", padx=5)
+        self.widgets['stop_hotkey'].pack(side="left", padx=(0, 12))
         
         self.widgets['auto_paste_checkbox'] = ctk.CTkCheckBox(
-            hotkey_controls_frame,
+            hotkey_inner,
             text="Auto paste",
-            command=self.on_hotkey_settings_change
+            command=self.on_hotkey_settings_change,
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_normal"]),
+            text_color=COLORS["text_secondary"],
+            checkbox_width=20,
+            checkbox_height=20,
+            corner_radius=4
         )
         if self.ctx.clipboard_manager.auto_paste:
             self.widgets['auto_paste_checkbox'].select()
-        self.widgets['auto_paste_checkbox'].pack(side="left", padx=5)
+        self.widgets['auto_paste_checkbox'].pack(side="left", padx=(0, 12))
         
         # Spacer to push Apply button to the right
-        spacer = ctk.CTkLabel(hotkey_controls_frame, text="", width=1)
+        spacer = ctk.CTkLabel(hotkey_inner, text="", width=1)
         spacer.pack(side="left", fill="x", expand=True)
 
-        # Apply button (right aligned)
+        # Improved Apply button
         self.widgets['save_hotkeys_button'] = ctk.CTkButton(
-            hotkey_controls_frame,
+            hotkey_inner,
             text="Apply",
             command=self.save_hotkeys,
             state="disabled",
-            width=BUTTON_WIDTH
+            width=120,
+            height=34,
+            corner_radius=8,
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
+            fg_color=COLORS["disabled"],
+            hover_color=COLORS["warning_light"],
+            text_color=COLORS["text_disabled"],
+            text_color_disabled=COLORS["text_disabled"]
         )
-        self.widgets['save_hotkeys_button'].pack(side="right", padx=5)
+        self.widgets['save_hotkeys_button'].pack(side="right", padx=0)
+        
+        # Initialize disabled state for save hotkeys button
+        self._disable_button('save_hotkeys_button')
         
         # Add tooltips to hotkeys section
         self.add_hotkeys_tooltips()
 
+    def create_history_section(self, parent):
+        """Create history section"""
+        # History title with better typography
+        history_title = ctk.CTkLabel(
+            parent, 
+            text="Transcription History", 
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=COLORS["text_primary"]
+        )
+        history_title.pack(pady=(20, 20), anchor="w")
+        
+        # History controls with improved styling
+        history_controls_frame = ctk.CTkFrame(
+            parent,
+            fg_color=COLORS["surface"],
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["border"]
+        )
+        history_controls_frame.pack(fill="x", padx=0, pady=(0, 12))
+        
+        # Add padding to history controls
+        history_inner = ctk.CTkFrame(history_controls_frame, fg_color="transparent")
+        history_inner.pack(fill="x", padx=16, pady=12)
+        
+        # Improved search entry
+        self.widgets['history_search'] = ctk.CTkEntry(
+            history_inner,
+            placeholder_text="Search transcription history...",
+            width=240,
+            height=34,
+            corner_radius=8,
+            border_width=1,
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            placeholder_text_color=COLORS["text_muted"],
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"])
+        )
+        self.widgets['history_search'].bind('<KeyRelease>', self.on_history_search)
+        self.widgets['history_search'].pack(side="left", padx=(0, 12))
+        
+        # Improved filter combobox
+        self.widgets['history_filter'] = ctk.CTkOptionMenu(
+            history_inner,
+            values=["All", "Today", "Last 7 days", "Last 30 days"],
+            command=self.on_history_filter_change,
+            width=120,
+            height=34,
+            corner_radius=8,
+            button_color=COLORS["accent"],
+            button_hover_color=COLORS["accent_light"],
+            text_color="#FFFFFF",
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_normal"])
+        )
+        self.widgets['history_filter'].set("All")
+        self.widgets['history_filter'].pack(side="left", padx=(0, 12))
+        
+        # Spacer
+        spacer = ctk.CTkLabel(history_inner, text="", width=1)
+        spacer.pack(side="left", fill="x", expand=True)
+        
+        # Improved history buttons
+        self.widgets['copy_history_button'] = ctk.CTkButton(
+            history_inner,
+            text="Copy",
+            command=self.copy_selected_history,
+            width=80,
+            height=34,
+            corner_radius=8,
+            state="disabled",
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
+            fg_color=COLORS["disabled"],
+            hover_color=COLORS["accent_light"],
+            text_color=COLORS["text_disabled"],
+            text_color_disabled=COLORS["text_disabled"]
+        )
+        self.widgets['copy_history_button'].pack(side="right", padx=(8, 0))
+        
+        # Initialize disabled state for copy button
+        self._disable_button('copy_history_button')
+        
+        self.widgets['export_history_button'] = ctk.CTkButton(
+            history_inner,
+            text="Export",
+            command=self.export_history,
+            width=80,
+            height=34,
+            corner_radius=8,
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
+            fg_color=COLORS["success"],
+            hover_color=COLORS["success_light"],
+            text_color="#FFFFFF"
+        )
+        self.widgets['export_history_button'].pack(side="right", padx=(8, 0))
+        
+        self.widgets['clear_history_button'] = ctk.CTkButton(
+            history_inner,
+            text="Clear",
+            command=self.clear_history,
+            width=80,
+            height=34,
+            corner_radius=8,
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
+            fg_color=COLORS["danger"],
+            hover_color=COLORS["danger_light"],
+            text_color="#FFFFFF"
+        )
+        self.widgets['clear_history_button'].pack(side="right", padx=(8, 0))
+        
+        # Initialize disabled state for history buttons
+        self._disable_button('export_history_button')
+        self._disable_button('clear_history_button')
+        
+        # Improved history listbox frame
+        history_frame = ctk.CTkFrame(
+            parent,
+            fg_color=COLORS["surface"],
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["border"]
+        )
+        history_frame.pack(fill="both", expand=False, padx=0, pady=(0, 16))
+        
+        # Configure grid for history frame
+        history_frame.grid_rowconfigure(0, weight=1)
+        history_frame.grid_columnconfigure(0, weight=1)
+        
+        # Improved history scrollable frame
+        self.widgets['history_scrollable'] = ctk.CTkScrollableFrame(
+            history_frame,
+            height=180,
+            corner_radius=8,
+            fg_color=COLORS["primary"],
+            scrollbar_button_color=COLORS["accent"],
+            scrollbar_button_hover_color=COLORS["accent_light"]
+        )
+        self.widgets['history_scrollable'].grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
+        
+        # History entries container
+        self.history_entries = []
+        self.selected_history_index = None
+        
+        # Load initial history
+        self.refresh_history_display()
+        
+        # Add tooltips
+        self.add_history_tooltips()
+
     def create_logs_section(self, parent):
         """Create logs section"""
-        # Title
-        logs_title = ctk.CTkLabel(parent, text="Logs", font=ctk.CTkFont(size=18, weight="bold"))
-        logs_title.pack(pady=(5, 3))
+        # Logs title with better typography
+        logs_title = ctk.CTkLabel(
+            parent, 
+            text="Application Logs", 
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=COLORS["text_primary"]
+        )
+        logs_title.pack(pady=(20, 20), anchor="w")
         
-        # Log control buttons
-        log_controls_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        log_controls_frame.pack(fill="x", padx=10, pady=3)
+        # Improved log control buttons
+        log_controls_frame = ctk.CTkFrame(
+            parent,
+            fg_color=COLORS["surface"],
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["border"]
+        )
+        log_controls_frame.pack(fill="x", padx=0, pady=(0, 12))
+        
+        log_inner = ctk.CTkFrame(log_controls_frame, fg_color="transparent")
+        log_inner.pack(fill="x", padx=16, pady=12)
+        
+        # Spacer to push clear button to the right
+        spacer = ctk.CTkLabel(log_inner, text="")
+        spacer.pack(side="left", fill="x", expand=True)
         
         self.widgets['clear_logs_button'] = ctk.CTkButton(
-            log_controls_frame,
-            text="Clear logs",
+            log_inner,
+            text="Clear Logs",
             command=self.clear_logs,
-            width=BUTTON_WIDTH
+            width=120,
+            height=34,
+            corner_radius=8,
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
+            fg_color=COLORS["warning"],
+            hover_color=COLORS["warning_light"],
+            text_color="#FFFFFF"
         )
-        self.widgets['clear_logs_button'].pack(side="right", padx=5)
+        self.widgets['clear_logs_button'].pack(side="right", padx=0)
         
-        # Text field for logs
-        self.widgets['log_output'] = ctk.CTkTextbox(
+        # Improved text field for logs
+        logs_container = ctk.CTkFrame(
             parent,
-            height=150
+            fg_color=COLORS["surface"],
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["border"]
         )
-        self.widgets['log_output'].pack(fill="both", expand=True, padx=10, pady=3)
+        logs_container.pack(fill="both", expand=True, padx=0, pady=0)
+        
+        self.widgets['log_output'] = ctk.CTkTextbox(
+            logs_container,
+            height=180,
+            corner_radius=8,
+            border_width=0,
+            fg_color=COLORS["primary"],
+            text_color=COLORS["text_secondary"],
+            font=ctk.CTkFont(family=FONTS["family_monospace"], size=FONTS["size_logs"])  # Modern monospace font for logs
+        )
+        self.widgets['log_output'].pack(fill="both", expand=True, padx=12, pady=12)
         
         # Add tooltips to logs section
         self.add_logs_tooltips()
@@ -746,6 +1131,291 @@ class LazyToTextUI:
         except Exception as e:
             logging.getLogger(__name__).warning(f"Failed to add hotkeys tooltips: {e}")
 
+    def add_history_tooltips(self):
+        """Add tooltips to history section widgets"""
+        try:
+            ToolTip(self.widgets['history_search'], "Search in transcription history")
+            ToolTip(self.widgets['history_filter'], "Filter history by date range")
+            ToolTip(self.widgets['copy_history_button'], "Copy selected entry to clipboard")
+            ToolTip(self.widgets['export_history_button'], "Export history to text file")
+            ToolTip(self.widgets['clear_history_button'], "Clear all history entries")
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Failed to add history tooltips: {e}")
+
+    def refresh_history_display(self, force_rebuild=False):
+        """Refresh history display with current filter and search"""
+        try:
+            # Get filtered entries
+            entries = self.get_filtered_history_entries()
+            
+            # Only rebuild if the number of entries changed or force rebuild
+            if force_rebuild or len(entries) != len(self.history_entries):
+                # Clear existing entries
+                for widget in self.history_entries:
+                    widget.destroy()
+                self.history_entries.clear()
+                self.selected_history_index = None
+                
+                # Create display entries
+                for i, entry in enumerate(entries):
+                    self.create_history_entry_widget(entry, i)
+                    
+            # Update button states
+            self.update_history_button_states()
+            
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to refresh history display: {e}")
+
+    def get_filtered_history_entries(self):
+        """Get history entries with current filter and search applied"""
+        try:
+            # Check if history is available
+            if not self.ctx.state_manager.history_manager:
+                return []
+                
+            # Get base entries based on filter
+            filter_value = self.widgets['history_filter'].get()
+            
+            if filter_value == "Today":
+                entries = self.ctx.state_manager.history_manager.get_entries_by_date(1)
+            elif filter_value == "Last 7 days":
+                entries = self.ctx.state_manager.history_manager.get_entries_by_date(7)
+            elif filter_value == "Last 30 days":
+                entries = self.ctx.state_manager.history_manager.get_entries_by_date(30)
+            else:  # "All"
+                entries = self.ctx.state_manager.history_manager.get_entries(limit=100)
+                
+            # Apply search filter
+            search_text = self.widgets['history_search'].get().strip()
+            if search_text:
+                entries = [e for e in entries if search_text.lower() in e.text.lower()]
+                
+            return entries
+            
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to get filtered history entries: {e}")
+            return []
+
+    def create_history_entry_widget(self, entry, index):
+        """Create widget for single history entry"""
+        try:
+            # Improved entry frame with better styling
+            entry_frame = ctk.CTkFrame(
+                self.widgets['history_scrollable'],
+                fg_color=COLORS["surface"],
+                corner_radius=10,
+                border_width=1,
+                border_color=COLORS["border"]
+            )
+            entry_frame.pack(fill="x", padx=6, pady=4)
+            
+            # Configure grid
+            entry_frame.grid_columnconfigure(1, weight=1)
+            
+            # Time label with improved styling
+            time_label = ctk.CTkLabel(
+                entry_frame,
+                text=entry.datetime_str,
+                width=120,
+                font=ctk.CTkFont(size=10, weight="normal"),
+                text_color=COLORS["text_muted"]
+            )
+            time_label.grid(row=0, column=0, padx=12, pady=10, sticky="w")
+            
+            # Text label with better typography
+            text_label = ctk.CTkLabel(
+                entry_frame,
+                text=entry.short_text,
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_normal"]),
+                text_color=COLORS["text_primary"],
+                anchor="w"
+            )
+            text_label.grid(row=0, column=1, padx=12, pady=10, sticky="ew")
+            
+            # Info label with better styling
+            info_text = f"{entry.model} • {entry.language} • {entry.duration:.1f}s"
+            info_label = ctk.CTkLabel(
+                entry_frame,
+                text=info_text,
+                font=ctk.CTkFont(size=10, weight="normal"),
+                text_color=COLORS["text_secondary"],
+                width=140
+            )
+            info_label.grid(row=0, column=2, padx=12, pady=10, sticky="e")
+            
+            # Modern copy button
+            def create_copy_command(entry_index):
+                return lambda: self.copy_history_entry_by_index(entry_index)
+            
+            copy_button = ctk.CTkButton(
+                entry_frame,
+                text="Copy",
+                width=65,
+                height=30,
+                corner_radius=6,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color=COLORS["accent"],
+                hover_color=COLORS["accent_light"],
+                text_color="#FFFFFF",
+                command=create_copy_command(index)
+            )
+            copy_button.grid(row=0, column=3, padx=12, pady=10, sticky="e")
+            
+            # Bind click events
+            def on_click(event, idx=index):
+                self.on_history_entry_click(idx)
+                
+            for widget in [entry_frame, time_label, text_label, info_label]:
+                widget.bind("<Button-1>", on_click)
+                
+            # Add tooltip with full text
+            ToolTip(entry_frame, f"Full text: {entry.text}")
+            ToolTip(copy_button, "Copy this entry to clipboard")
+            
+            self.history_entries.append(entry_frame)
+            
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to create history entry widget: {e}")
+
+    def on_history_entry_click(self, index):
+        """Handle history entry click"""
+        try:
+            # Update selection
+            old_selection = self.selected_history_index
+            self.selected_history_index = index
+            
+            # Update visual selection
+            if old_selection is not None and old_selection < len(self.history_entries):
+                self.history_entries[old_selection].configure(fg_color=("gray86", "gray20"))
+                
+            if index < len(self.history_entries):
+                self.history_entries[index].configure(fg_color=("gray78", "gray30"))
+                
+            # Update button states
+            self.update_history_button_states()
+            
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to handle history entry click: {e}")
+
+    def on_history_search(self, event=None):
+        """Handle search text change"""
+        self.refresh_history_display(force_rebuild=True)
+
+    def on_history_filter_change(self, value):
+        """Handle filter change"""
+        self.refresh_history_display(force_rebuild=True)
+
+    def copy_history_entry_by_index(self, index):
+        """Copy history entry by index directly"""
+        try:
+            entries = self.get_filtered_history_entries()
+            
+            if 0 <= index < len(entries):
+                entry = entries[index]
+                success = self.ctx.clipboard_manager.copy_text(entry.text)
+                if success:
+                    self.update_status(f"Copied: {entry.short_text}")
+                else:
+                    self.update_status("Failed to copy to clipboard")
+            else:
+                self.update_status(f"Invalid entry index: {index}")
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to copy entry: {e}")
+            self.update_status(f"Failed to copy entry: {e}")
+
+    def copy_selected_history(self):
+        """Copy selected history entry to clipboard"""
+        try:
+            if self.selected_history_index is None:
+                return
+                
+            entries = self.get_filtered_history_entries()
+            if self.selected_history_index < len(entries):
+                entry = entries[self.selected_history_index]
+                success = self.ctx.clipboard_manager.copy_text(entry.text)
+                if success:
+                    self.update_status("Copied history entry to clipboard")
+                else:
+                    self.update_status("Failed to copy to clipboard")
+                
+        except Exception as e:
+            self.update_status(f"Failed to copy history entry: {e}")
+
+    def export_history(self):
+        """Export history to file"""
+        try:
+            if not self.ctx.state_manager.history_manager:
+                self.update_status("History is disabled")
+                return
+                
+            import tkinter.filedialog as fd
+            filename = fd.asksaveasfilename(
+                title="Export History",
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+            )
+            
+            if filename:
+                success = self.ctx.state_manager.history_manager.export_to_text(filename)
+                if success:
+                    self.update_status(f"History exported to {filename}")
+                else:
+                    self.update_status("Failed to export history")
+                    
+        except Exception as e:
+            self.update_status(f"Failed to export history: {e}")
+
+    def clear_history(self):
+        """Clear all history"""
+        try:
+            if not self.ctx.state_manager.history_manager:
+                self.update_status("History is disabled")
+                return
+                
+            # Confirm dialog
+            import tkinter.messagebox as mb
+            result = mb.askyesno(
+                "Clear History",
+                "Are you sure you want to clear all transcription history?\nThis action cannot be undone.",
+                icon="warning"
+            )
+            
+            if result:
+                self.ctx.state_manager.history_manager.clear_history()
+                self.refresh_history_display(force_rebuild=True)
+                self.update_status("History cleared")
+                
+        except Exception as e:
+            self.update_status(f"Failed to clear history: {e}")
+
+    def update_history_button_states(self):
+        """Update history button states based on selection"""
+        try:
+            has_selection = self.selected_history_index is not None
+            if has_selection:
+                self._enable_button('copy_history_button', 'primary')
+            else:
+                self._disable_button('copy_history_button')
+            
+            has_entries = len(self.history_entries) > 0
+            if has_entries:
+                self._enable_button('export_history_button', 'success')
+                self._enable_button('clear_history_button', 'danger')
+            else:
+                self._disable_button('export_history_button')
+                self._disable_button('clear_history_button')
+                    
+        except Exception as e:
+            logging.getLogger(__name__).debug(f"Failed to update history button states: {e}")
+
+    def on_history_updated(self):
+        """Callback when history is updated"""
+        try:
+            # Schedule UI update in main thread with force rebuild for new entries
+            self.root.after(0, lambda: self.refresh_history_display(force_rebuild=True))
+        except Exception as e:
+            logging.getLogger(__name__).debug(f"Failed to schedule history update: {e}")
+
     def add_logs_tooltips(self):
         """Add tooltips to logs section widgets"""
         try:
@@ -782,6 +1452,9 @@ class LazyToTextUI:
                 # Update Switch button state
                 if self.window_visible:
                     self.root.after(0, self.update_switch_button_state)
+                    # Update history display occasionally (less frequent to reduce flicker)
+                    if counter % 60 == 0:  # Every 30 seconds
+                        self.root.after(0, self.refresh_history_display)
                     
             except Exception as e:
                 logging.getLogger(__name__).debug(f"Polling error: {e}")
@@ -887,6 +1560,39 @@ class LazyToTextUI:
             'auto_paste_checkbox': self.widgets['auto_paste_checkbox'].get()
         }
 
+    def _enable_button(self, button_name, button_type="primary"):
+        """Enable button with proper colors based on type"""
+        button = self.widgets.get(button_name)
+        if not button:
+            return
+            
+        colors_map = {
+            "primary": (COLORS["accent"], COLORS["accent_light"]),
+            "success": (COLORS["success"], COLORS["success_light"]),
+            "warning": (COLORS["warning"], COLORS["warning_light"]),
+            "danger": (COLORS["danger"], COLORS["danger_light"])
+        }
+        
+        fg_color, hover_color = colors_map.get(button_type, colors_map["primary"])
+        button.configure(
+            state="normal",
+            fg_color=fg_color,
+            hover_color=hover_color,
+            text_color="#FFFFFF"
+        )
+    
+    def _disable_button(self, button_name):
+        """Disable button with proper colors"""
+        button = self.widgets.get(button_name)
+        if not button:
+            return
+            
+        button.configure(
+            state="disabled",
+            fg_color=COLORS["disabled"],
+            text_color=COLORS["text_disabled"]
+        )
+
     def check_hotkey_settings_changed(self):
         """Check for changes in hotkey settings"""
         current_values = {
@@ -897,7 +1603,11 @@ class LazyToTextUI:
         
         changed = current_values != self.original_hotkey_settings
         self.hotkey_settings_changed = changed
-        self.widgets['save_hotkeys_button'].configure(state="normal" if changed else "disabled")
+        
+        if changed:
+            self._enable_button('save_hotkeys_button', 'warning')
+        else:
+            self._disable_button('save_hotkeys_button')
 
     def update_switch_button_state(self):
         """Update Switch button state"""
@@ -933,7 +1643,10 @@ class LazyToTextUI:
                 is_lang_different = selected_language != current_language
                 should_enable = is_model_different or is_beam_different or is_lang_different
             
-            self.widgets['switch_button'].configure(state="normal" if should_enable else "disabled")
+            if should_enable:
+                self._enable_button('switch_button', 'success')
+            else:
+                self._disable_button('switch_button')
             
         except Exception as e:
             logging.getLogger(__name__).debug(f"Error updating switch button state: {e}")
@@ -948,27 +1661,19 @@ class LazyToTextUI:
             docker_available = self.docker_mgr.is_available()
             
             if not docker_available:
-                if 'start_backend_button' in self.widgets:
-                    self.widgets['start_backend_button'].configure(state="disabled")
-                if 'stop_backend_button' in self.widgets:
-                    self.widgets['stop_backend_button'].configure(state="disabled")
+                self._disable_button('start_backend_button')
+                self._disable_button('stop_backend_button')
                 return
                 
             if container_status == 'running':
-                if 'start_backend_button' in self.widgets:
-                    self.widgets['start_backend_button'].configure(state="disabled")
-                if 'stop_backend_button' in self.widgets:
-                    self.widgets['stop_backend_button'].configure(state="normal")
+                self._disable_button('start_backend_button')
+                self._enable_button('stop_backend_button', 'danger')
             elif container_status in ('stopped', 'not_found'):
-                if 'start_backend_button' in self.widgets:
-                    self.widgets['start_backend_button'].configure(state="normal")
-                if 'stop_backend_button' in self.widgets:
-                    self.widgets['stop_backend_button'].configure(state="disabled")
+                self._enable_button('start_backend_button', 'success')
+                self._disable_button('stop_backend_button')
             else:
-                if 'start_backend_button' in self.widgets:
-                    self.widgets['start_backend_button'].configure(state="normal")
-                if 'stop_backend_button' in self.widgets:
-                    self.widgets['stop_backend_button'].configure(state="disabled")
+                self._enable_button('start_backend_button', 'success')
+                self._disable_button('stop_backend_button')
                     
         except Exception as e:
             logging.getLogger(__name__).debug(f"Error updating backend buttons state: {e}")
@@ -996,7 +1701,7 @@ class LazyToTextUI:
             
             # Reset change flag and disable button
             self.hotkey_settings_changed = False
-            self.widgets['save_hotkeys_button'].configure(state="disabled")
+            self._disable_button('save_hotkeys_button')
             
             # Save new original values
             self.original_hotkey_settings = {
@@ -1106,10 +1811,8 @@ class LazyToTextUI:
         """Start backend"""
         try:
             # Disable buttons
-            if 'start_backend_button' in self.widgets:
-                self.widgets['start_backend_button'].configure(state="disabled")
-            if 'stop_backend_button' in self.widgets:
-                self.widgets['stop_backend_button'].configure(state="disabled")
+            self._disable_button('start_backend_button')
+            self._disable_button('stop_backend_button')
             
             self.update_status("Starting container...")
             
@@ -1142,10 +1845,8 @@ class LazyToTextUI:
         """Stop backend"""
         try:
             # Disable buttons
-            if 'start_backend_button' in self.widgets:
-                self.widgets['start_backend_button'].configure(state="disabled")
-            if 'stop_backend_button' in self.widgets:
-                self.widgets['stop_backend_button'].configure(state="disabled")
+            self._disable_button('start_backend_button')
+            self._disable_button('stop_backend_button')
             
             self.update_status("Stopping container...")
             
