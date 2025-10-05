@@ -2027,16 +2027,48 @@ class LazyToTextUI:
     def show_window(self):
         """Show window"""
         try:
-            self.root.deiconify()  # Show window
-            self.root.lift()       # Bring to front
-            self.root.focus_force()  # Give focus
+            # Make window transparent while CustomTkinter toggles titlebar colors.
+            # This keeps the unavoidable withdraw/deiconify dance invisible to the user.
+            try:
+                self.root.attributes('-alpha', 0.0)
+            except tk.TclError:
+                pass
+
+            # Deiconify first
+            self.root.deiconify()
+            
+            # Force update to complete rendering before lift/focus
+            # This minimizes visible flicker from CTk's titlebar color manipulation on Windows
+            self.root.update_idletasks()
+            
+            # Small delay to let CTk finish titlebar color setting
+            # CTk internally calls withdraw/deiconify which causes flicker
+            self.root.after(60, lambda: self._complete_show_window())
+            
             self.window_visible = True
-            # Update tray menu to reflect window state change
-            if self.system_tray and self.system_tray.is_running:
-                self.system_tray.refresh_menu()
             logging.getLogger(__name__).info("Window shown via callback")
         except Exception as ex:
             logging.getLogger(__name__).error(f"Show window failed: {ex}")
+    
+    def _complete_show_window(self):
+        """Complete window show after titlebar color is set"""
+        try:
+            self.root.lift()       # Bring to front
+            self.root.focus_force()  # Give focus
+            # Update tray menu to reflect window state change
+            if self.system_tray and self.system_tray.is_running:
+                self.system_tray.refresh_menu()
+            # Restore opacity once the window is fully ready.
+            def _restore_opacity():
+                try:
+                    self.root.attributes('-alpha', 1.0)
+                except tk.TclError:
+                    pass
+
+            # Give Windows a bit more time on first reveal to finish DWM tweaks.
+            self.root.after(90, _restore_opacity)
+        except Exception as ex:
+            logging.getLogger(__name__).debug(f"Complete show window failed: {ex}")
 
     def is_window_visible(self) -> bool:
         """Check window visibility"""
