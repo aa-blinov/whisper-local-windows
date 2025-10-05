@@ -333,6 +333,40 @@ class DockerBackendManager:
                 ok = False
         return st, ok
 
+    def get_container_details(self) -> Optional[dict]:
+        """Return basic container details if container exists.
+
+        Returns dict with keys: short_id, name, image (tag or short_id), status.
+        Returns None if Docker unavailable or container not found.
+        """
+        cli = self._client_or_none()
+        if cli is None:
+            return None
+        try:
+            c = self._get_container()
+            if c is None:
+                return None
+            c.reload()
+            image_text = None
+            try:
+                # Prefer first tag if available
+                if getattr(c.image, "tags", None):
+                    image_text = c.image.tags[0]
+                else:
+                    # Fallback to short id
+                    image_text = getattr(c.image, "short_id", None)
+            except Exception:
+                image_text = None
+            return {
+                "short_id": getattr(c, "short_id", None),
+                "name": getattr(c, "name", None),
+                "image": image_text,
+                "status": getattr(c, "status", None),
+            }
+        except Exception as e:
+            logger.debug(f"Failed to get container details: {e}")
+            return None
+
     def get_container_model_info(self, engine=None) -> Optional[str]:
         """Get current model information from container environment or Wyoming engine.
         Returns model name if available, None if unavailable.

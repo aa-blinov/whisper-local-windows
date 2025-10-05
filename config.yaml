@@ -13,7 +13,7 @@ audio:
   dtype: float32
   max_duration: 300
 clipboard:
-  auto_paste: true
+  auto_paste: 1
   preserve_clipboard: false
   key_simulation_delay: 0.05
 logging:

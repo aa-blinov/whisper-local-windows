@@ -1098,7 +1098,7 @@ class LazyToTextUI:
         self.add_model_tooltips()
 
     def create_status_section(self, parent):
-        """Create status panel similar to logs but compact"""
+        """Create modern status panel with visual indicators"""
         # Status title with better typography
         status_title = ctk.CTkLabel(
             parent, 
@@ -1108,60 +1108,294 @@ class LazyToTextUI:
         )
         status_title.pack(pady=(20, 20), anchor="w")
 
-        status_frame = ctk.CTkFrame(
+        status_container = ctk.CTkFrame(
             parent, 
             fg_color=COLORS["surface"],
             corner_radius=12,
             border_width=1,
             border_color=COLORS["border"]
         )
-        status_frame.pack(fill="x", padx=0, pady=(0, 16))
+        status_container.pack(fill="x", padx=0, pady=(0, 16))
+        
+        # Inner frame for padding
+        status_inner = ctk.CTkFrame(status_container, fg_color="transparent")
+        status_inner.pack(fill="x", padx=16, pady=16)
 
-        # Status textbox with improved styling
-        self.widgets['status_output'] = ctk.CTkTextbox(
-            status_frame, 
-            height=80,
-            corner_radius=8,
-            border_width=0,
-            fg_color=COLORS["primary"],
-            text_color=COLORS["text_secondary"],
-            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"])
-        )
-        self.widgets['status_output'].pack(fill="x", expand=False, padx=16, pady=12)
-        try:
-            self.widgets['status_output'].configure(state="disabled")
-        except Exception:
-            pass
-
+        # Configure grid layout - 2 columns, equal height rows
+        status_inner.grid_columnconfigure(0, weight=1)
+        status_inner.grid_columnconfigure(1, weight=1)
+        status_inner.grid_rowconfigure(0, weight=1)
+        
+        # Docker Status Card (only for local mode)
+        if self.ctx.backend_mode == 'local':
+            docker_card = ctk.CTkFrame(
+                status_inner,
+                fg_color=COLORS["primary"],
+                corner_radius=8,
+                border_width=1,
+                border_color=COLORS["border"]
+            )
+            docker_card.grid(row=0, column=0, padx=(0, 8), sticky="nsew")
+            
+            docker_card_inner = ctk.CTkFrame(docker_card, fg_color="transparent")
+            docker_card_inner.pack(fill="both", expand=True, padx=12, pady=12)
+            
+            # Docker status indicator (colored dot + text)
+            docker_status_row = ctk.CTkFrame(docker_card_inner, fg_color="transparent")
+            docker_status_row.pack(fill="x", pady=(0, 8))
+            
+            self.widgets['docker_status_indicator'] = ctk.CTkLabel(
+                docker_status_row,
+                text="●",
+                font=ctk.CTkFont(size=20),
+                text_color="gray",
+                width=30
+            )
+            self.widgets['docker_status_indicator'].pack(side="left")
+            
+            self.widgets['docker_status_text'] = ctk.CTkLabel(
+                docker_status_row,
+                text="Docker",
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_bold"]),
+                text_color=COLORS["text_primary"],
+                anchor="w"
+            )
+            self.widgets['docker_status_text'].pack(side="left", fill="x", expand=True)
+            
+            # Docker details
+            self.widgets['docker_details'] = ctk.CTkLabel(
+                docker_card_inner,
+                text="Checking...",
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_small"]),
+                text_color=COLORS["text_secondary"],
+                anchor="w"
+            )
+            self.widgets['docker_details'].pack(fill="x")
+            
+            # Container Status Card
+            container_card = ctk.CTkFrame(
+                status_inner,
+                fg_color=COLORS["primary"],
+                corner_radius=8,
+                border_width=1,
+                border_color=COLORS["border"]
+            )
+            container_card.grid(row=0, column=1, padx=(8, 0), sticky="nsew")
+            
+            container_card_inner = ctk.CTkFrame(container_card, fg_color="transparent")
+            container_card_inner.pack(fill="both", expand=True, padx=12, pady=12)
+            
+            # Container status indicator
+            container_status_row = ctk.CTkFrame(container_card_inner, fg_color="transparent")
+            container_status_row.pack(fill="x", pady=(0, 8))
+            
+            self.widgets['container_status_indicator'] = ctk.CTkLabel(
+                container_status_row,
+                text="●",
+                font=ctk.CTkFont(size=20),
+                text_color="gray",
+                width=30
+            )
+            self.widgets['container_status_indicator'].pack(side="left")
+            
+            self.widgets['container_status_text'] = ctk.CTkLabel(
+                container_status_row,
+                text="Container",
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_bold"]),
+                text_color=COLORS["text_primary"],
+                anchor="w"
+            )
+            self.widgets['container_status_text'].pack(side="left", fill="x", expand=True)
+            
+            # Container details (ID and Image)
+            self.widgets['container_details'] = ctk.CTkLabel(
+                container_card_inner,
+                text="No container",
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_small"]),
+                text_color=COLORS["text_secondary"],
+                anchor="w",
+                justify="left",
+                wraplength=300
+            )
+            self.widgets['container_details'].pack(fill="x")
+        else:
+            # External mode - show Server and Model
+            server_card = ctk.CTkFrame(
+                status_inner,
+                fg_color=COLORS["primary"],
+                corner_radius=8,
+                border_width=1,
+                border_color=COLORS["border"]
+            )
+            server_card.grid(row=0, column=0, padx=(0, 8), sticky="nsew")
+            
+            server_card_inner = ctk.CTkFrame(server_card, fg_color="transparent")
+            server_card_inner.pack(fill="both", expand=True, padx=12, pady=12)
+            
+            server_status_row = ctk.CTkFrame(server_card_inner, fg_color="transparent")
+            server_status_row.pack(fill="x", pady=(0, 8))
+            
+            self.widgets['server_status_indicator'] = ctk.CTkLabel(
+                server_status_row,
+                text="●",
+                font=ctk.CTkFont(size=20),
+                text_color="gray",
+                width=30
+            )
+            self.widgets['server_status_indicator'].pack(side="left")
+            
+            self.widgets['server_status_text'] = ctk.CTkLabel(
+                server_status_row,
+                text="External Server",
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_bold"]),
+                text_color=COLORS["text_primary"],
+                anchor="w"
+            )
+            self.widgets['server_status_text'].pack(side="left", fill="x", expand=True)
+            
+            self.widgets['server_details'] = ctk.CTkLabel(
+                server_card_inner,
+                text="Checking...",
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_small"]),
+                text_color=COLORS["text_secondary"],
+                anchor="w",
+                justify="left"
+            )
+            self.widgets['server_details'].pack(fill="x")
+            
+            # Model configuration card
+            model_card = ctk.CTkFrame(
+                status_inner,
+                fg_color=COLORS["primary"],
+                corner_radius=8,
+                border_width=1,
+                border_color=COLORS["border"]
+            )
+            model_card.grid(row=0, column=1, padx=(8, 0), sticky="nsew")
+            
+            model_card_inner = ctk.CTkFrame(model_card, fg_color="transparent")
+            model_card_inner.pack(fill="both", expand=True, padx=12, pady=12)
+            
+            model_status_row = ctk.CTkFrame(model_card_inner, fg_color="transparent")
+            model_status_row.pack(fill="x", pady=(0, 8))
+            
+            self.widgets['model_status_indicator'] = ctk.CTkLabel(
+                model_status_row,
+                text="●",
+                font=ctk.CTkFont(size=20),
+                text_color="gray",
+                width=30
+            )
+            self.widgets['model_status_indicator'].pack(side="left")
+            
+            self.widgets['model_status_text'] = ctk.CTkLabel(
+                model_status_row,
+                text="Model Config",
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_bold"]),
+                text_color=COLORS["text_primary"],
+                anchor="w"
+            )
+            self.widgets['model_status_text'].pack(side="left", fill="x", expand=True)
+            
+            self.widgets['model_details'] = ctk.CTkLabel(
+                model_card_inner,
+                text=f"{self.ctx.engine.model_size} • {self.ctx.engine.language} • beam {self.ctx.engine.beam_size}",
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_small"]),
+                text_color=COLORS["text_secondary"],
+                anchor="w",
+                justify="left"
+            )
+            self.widgets['model_details'].pack(fill="x")
+        
         # Initial fill
         self.refresh_status_panel()
 
     def refresh_status_panel(self):
-        """Compose and display status text in status_output"""
-        box = self.widgets.get('status_output')
-        if not box:
-            return
+        """Update status panel with current Docker and Container information"""
         try:
-            # Gather data
-            server_lbl = self.widgets.get('server_status')
-            container_lbl = self.widgets.get('container_model')
-            server_text = server_lbl.cget('text') if server_lbl else 'Server status: ?'
-            container_text = container_lbl.cget('text') if container_lbl else 'Container model: ?'
-            lines: list[str] = []
-            lines.append(server_text)
             if self.ctx.backend_mode == 'local':
-                lines.append(container_text)
+                # Check Docker availability
+                docker_available = self.docker_mgr.is_available()
+                
+                # Update Docker status
+                if self.widgets.get('docker_status_indicator'):
+                    if docker_available:
+                        self.widgets['docker_status_indicator'].configure(text_color='green')
+                        if self.widgets.get('docker_details'):
+                            self.widgets['docker_details'].configure(text="Docker Desktop available")
+                    else:
+                        self.widgets['docker_status_indicator'].configure(text_color='red')
+                        if self.widgets.get('docker_details'):
+                            self.widgets['docker_details'].configure(text="Docker Desktop not running")
+                
+                # Get container information
+                if docker_available:
+                    container_status, health_ok = self.docker_mgr.get_health_and_status(self.ctx.engine.health_check)
+                    details = self.docker_mgr.get_container_details()
+                    container_id = details.get('short_id') if details else None
+                    container_name = details.get('name') if details else None
+                    container_image = details.get('image') if details else None
+                    
+                    # Update container status indicator color
+                    if self.widgets.get('container_status_indicator'):
+                        if container_status == 'running' and health_ok:
+                            indicator_color = 'green'
+                        elif container_status == 'running':
+                            indicator_color = 'orange'
+                        elif container_status in ('stopped', 'not_found'):
+                            indicator_color = 'gray'
+                        else:
+                            indicator_color = 'red'
+                        self.widgets['container_status_indicator'].configure(text_color=indicator_color)
+
+                    # Always show ID/Name/Image if container exists, independent of health
+                    if self.widgets.get('container_details'):
+                        if details:
+                            # Build details text lines
+                            lines = []
+                            if container_id:
+                                lines.append(f"ID: {container_id}")
+                            if container_name:
+                                lines.append(f"Name: {container_name}")
+                            if container_image:
+                                lines.append(f"Image: {container_image}")
+                            # Add status line when not healthy/starting/etc.
+                            if not (container_status == 'running' and health_ok):
+                                lines.append(f"Status: {container_status}")
+                            detail_text = "\n".join(lines) if lines else f"Status: {container_status}"
+                        else:
+                            detail_text = "No container"
+                        self.widgets['container_details'].configure(text=detail_text)
+                else:
+                    # Docker not available - container can't run
+                    if self.widgets.get('container_status_indicator'):
+                        self.widgets['container_status_indicator'].configure(text_color='gray')
+                    if self.widgets.get('container_details'):
+                        self.widgets['container_details'].configure(text="Docker required")
             else:
-                lines.append(f"Current model: {self.ctx.engine.model_size} (lang: {self.ctx.engine.language}, beam: {self.ctx.engine.beam_size})")
-
-            text = "\n".join(lines)
-
-            box.configure(state="normal")
-            box.delete("1.0","end")
-            box.insert("1.0", text)
-            box.configure(state="disabled")
-        except Exception:
-            pass
+                # External mode - check server availability
+                try:
+                    server_ok = self.ctx.engine.health_check()
+                except Exception:
+                    server_ok = False
+                
+                if self.widgets.get('server_status_indicator'):
+                    if server_ok:
+                        self.widgets['server_status_indicator'].configure(text_color='green')
+                        if self.widgets.get('server_details'):
+                            external_url = self.ctx.config_manager.get_setting('whisper', 'external_url')
+                            self.widgets['server_details'].configure(text=f"Connected to {external_url}")
+                    else:
+                        self.widgets['server_status_indicator'].configure(text_color='red')
+                        if self.widgets.get('server_details'):
+                            self.widgets['server_details'].configure(text="Server unreachable")
+                
+                # Model indicator follows server status
+                if self.widgets.get('model_status_indicator'):
+                    self.widgets['model_status_indicator'].configure(text_color='green' if server_ok else 'gray')
+                    
+        except Exception as e:
+            logging.getLogger(__name__).debug(f"Failed to refresh status panel: {e}")
 
     def create_backend_buttons(self):
         """Create backend control buttons"""
