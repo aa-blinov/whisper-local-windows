@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import logging
 from typing import Optional, Dict
+import time
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +87,37 @@ class DockerBackendManager:
         try:
             return cli.containers.get(self.container_name)
         except NotFound:
-            return None
+            pass
         except Exception as e:  # pragma: no cover
             logger.debug(f"Error getting container {self.container_name}: {e}")
+            return None
+
+        # Fallback search: try to locate a likely container (port 10300, name heuristics)
+        try:
+            candidates = cli.containers.list(all=True)
+            best = None
+            for c in candidates:
+                try:
+                    name = getattr(c, "name", "") or ""
+                    ports = c.attrs.get('NetworkSettings', {}).get('Ports', {})
+                    exposes_10300 = any(str(p).startswith('10300/') for p in ports.keys()) or any(
+                        isinstance(v, list) and any(d.get('HostPort') == str(self.port) for d in v or [])
+                        for v in ports.values()
+                    )
+                    img = getattr(c, 'image', None)
+                    tags = getattr(img, 'tags', []) if img is not None else []
+                    image_text = (tags[0] if tags else getattr(img, 'short_id', '')) or ''
+                    name_match = any(k in name for k in (self.container_name, 'faster', 'whisper', 'wyoming'))
+                    image_match = any(k in image_text for k in ('faster-whisper', 'wyoming'))
+
+                    if exposes_10300 and (name_match or image_match):
+                        best = c
+                        break
+                except Exception:
+                    continue
+            return best
+        except Exception as e:
+            logger.debug(f"Fallback container search failed: {e}")
             return None
 
     def status(self) -> str:
@@ -366,6 +396,125 @@ class DockerBackendManager:
         except Exception as e:
             logger.debug(f"Failed to get container details: {e}")
             return None
+
+    def wait_for_log_line(self, pattern: str, timeout: int = 60, since: Optional[float] = None) -> bool:
+        """Wait until a container log line matching pattern appears.
+
+        Args:
+            pattern: Regex or plain string to search in logs.
+            timeout: Max seconds to wait.
+            since:   Only consider logs since this epoch time (float). If None, use now.
+
+        Returns:
+            True if pattern seen within timeout, else False.
+        """
+        cli = self._client_or_none()
+        if cli is None or not self.is_available():
+            return False
+        c = self._get_container()
+        if c is None:
+            return False
+        try:
+            regex = re.compile(pattern)
+        except re.error:
+            # Treat as literal
+            regex = re.compile(re.escape(pattern))
+
+        start = time.time()
+        since_ts = int((since if since is not None else start) - 1)
+
+        # Poll logs periodically to avoid blocking stream issues and to honor timeout
+        last_seen = None
+        while time.time() - start < timeout:
+            try:
+                c.reload()
+                logs = c.logs(since=since_ts, tail=200)
+                if logs:
+                    try:
+                        text = logs.decode(errors="ignore")
+                    except Exception:
+                        text = str(logs)
+                    if last_seen != text:
+                        last_seen = text
+                        if regex.search(text):
+                            return True
+                time.sleep(0.5)
+            except Exception:
+                time.sleep(0.5)
+        return False
+
+    def get_recent_logs(self, tail: int = 200, since: Optional[float] = None) -> Optional[str]:
+        """Return recent container logs as a decoded string.
+
+        Args:
+            tail: number of lines (approximate) to fetch from the end.
+            since: only logs since this epoch time; if None, Docker default is used.
+        """
+        cli = self._client_or_none()
+        if cli is None or not self.is_available():
+            return None
+        c = self._get_container()
+        if c is None:
+            return None
+        try:
+            kwargs = {}
+            if since is not None:
+                kwargs["since"] = int(since)
+            if tail is not None:
+                kwargs["tail"] = tail
+            raw = c.logs(**kwargs)
+            try:
+                return raw.decode(errors="ignore") if isinstance(raw, (bytes, bytearray)) else str(raw)
+            except Exception:
+                return str(raw)
+        except Exception as e:
+            logger.debug(f"Failed to read container logs: {e}")
+            return None
+
+    def has_ready_log_line(self, pattern: str, tail: int = 400) -> bool:
+        """Check if recent logs contain a line matching pattern (regex or literal).
+        
+        Only checks logs since the container's StartedAt time to avoid false positives
+        from previous container runs.
+        """
+        cli = self._client_or_none()
+        if cli is None or not self.is_available():
+            return False
+        c = self._get_container()
+        if c is None:
+            return False
+        
+        # Get container start time to check only logs from current run
+        try:
+            c.reload()
+            started_at = c.attrs.get('State', {}).get('StartedAt')
+            if started_at:
+                # Parse ISO 8601 timestamp (e.g., "2025-10-05T12:34:56.123456789Z")
+                from datetime import datetime
+                # Remove nanoseconds if present (Python datetime only supports microseconds)
+                if '.' in started_at:
+                    base, frac = started_at.rsplit('.', 1)
+                    # Keep only first 6 digits (microseconds) and remove 'Z'
+                    frac = frac.rstrip('Z')[:6]
+                    started_at = f"{base}.{frac}Z"
+                # Parse timestamp
+                start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                # Convert to Unix timestamp
+                since = start_time.timestamp()
+            else:
+                since = None
+        except Exception:
+            since = None
+        
+        # Get logs since container started
+        logs = self.get_recent_logs(tail=tail, since=since)
+        if not logs:
+            return False
+        try:
+            regex = re.compile(pattern)
+        except re.error:
+            regex = re.compile(re.escape(pattern))
+        return bool(regex.search(logs))
 
     def get_container_model_info(self, engine=None) -> Optional[str]:
         """Get current model information from container environment or Wyoming engine.

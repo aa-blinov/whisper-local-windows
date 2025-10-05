@@ -665,6 +665,11 @@ class LazyToTextUI:
         self.last_history_update_time = 0
         self.history_update_debounce_ms = 500  # 500ms debounce
         
+        # Lock for backend operations to prevent button flickering
+        self.backend_operation_in_progress = False
+        self.scheduled_button_update_id = None
+        self.last_button_update_time = 0
+        
         # History window
         self.history_window = None
         
@@ -1218,6 +1223,21 @@ class LazyToTextUI:
                 wraplength=300
             )
             self.widgets['container_details'].pack(fill="x")
+
+            # View Logs button
+            self.widgets['container_logs_button'] = ctk.CTkButton(
+                container_card_inner,
+                text="View Logs",
+                command=self.open_container_logs,
+                width=120,
+                height=30,
+                corner_radius=8,
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
+                fg_color=COLORS["accent"],
+                hover_color=COLORS["accent_light"],
+                text_color="#FFFFFF"
+            )
+            self.widgets['container_logs_button'].pack(pady=(8, 0), anchor="w")
         else:
             # External mode - show Server and Model
             server_card = ctk.CTkFrame(
@@ -1336,9 +1356,17 @@ class LazyToTextUI:
                     container_name = details.get('name') if details else None
                     container_image = details.get('image') if details else None
                     
+                    # Refine 'running' state by checking readiness log line
+                    ready = False
+                    if container_status == 'running':
+                        try:
+                            ready = self.docker_mgr.has_ready_log_line(r"Connection to .*10300 port .* succeeded!")
+                        except Exception:
+                            ready = False
+
                     # Update container status indicator color
                     if self.widgets.get('container_status_indicator'):
-                        if container_status == 'running' and health_ok:
+                        if container_status == 'running' and ready:
                             indicator_color = 'green'
                         elif container_status == 'running':
                             indicator_color = 'orange'
@@ -1359,8 +1387,13 @@ class LazyToTextUI:
                                 lines.append(f"Name: {container_name}")
                             if container_image:
                                 lines.append(f"Image: {container_image}")
-                            # Add status line when not healthy/starting/etc.
-                            if not (container_status == 'running' and health_ok):
+                            # Add status line based on readiness
+                            if container_status == 'running':
+                                if ready:
+                                    lines.append("Status: ready")
+                                else:
+                                    lines.append("Status: waiting")
+                            else:
                                 lines.append(f"Status: {container_status}")
                             detail_text = "\n".join(lines) if lines else f"Status: {container_status}"
                         else:
@@ -1440,6 +1473,58 @@ class LazyToTextUI:
                        "Stop Docker container")
             except Exception as e:
                 logging.getLogger(__name__).warning(f"Failed to add backend button tooltips: {e}")
+
+    def open_container_logs(self):
+        """Open a simple window to display recent container logs"""
+        try:
+            # Build window
+            log_win = ctk.CTkToplevel(self.root)
+            log_win.title("Container Logs")
+            log_win.geometry("800x480")
+            try:
+                log_win.lift()
+                log_win.focus_force()
+                log_win.attributes('-topmost', True)
+                log_win.after(100, lambda: log_win.attributes('-topmost', False))
+            except Exception:
+                pass
+
+            frame = ctk.CTkFrame(log_win, fg_color=COLORS["surface"], corner_radius=12, border_width=1, border_color=COLORS["border"])
+            frame.pack(fill="both", expand=True, padx=12, pady=12)
+
+            text = ctk.CTkTextbox(frame, corner_radius=8, border_width=0, fg_color=COLORS["primary"], text_color=COLORS["text_secondary"], font=ctk.CTkFont(family=FONTS["family_monospace"], size=FONTS["size_logs"]))
+            text.pack(fill="both", expand=True, padx=8, pady=8)
+            try:
+                text.configure(state="disabled")
+            except Exception:
+                pass
+
+            def load_logs():
+                logs = None
+                try:
+                    logs = self.docker_mgr.get_recent_logs(tail=400)
+                except Exception:
+                    logs = None
+                if logs is None:
+                    logs = "No logs available or Docker not running."
+                try:
+                    text.configure(state="normal")
+                    text.delete("1.0", "end")
+                    text.insert("1.0", logs)
+                    text.configure(state="disabled")
+                except Exception:
+                    pass
+
+            btn_row = ctk.CTkFrame(frame, fg_color="transparent")
+            btn_row.pack(fill="x", padx=8, pady=(0,8))
+            refresh_btn = ctk.CTkButton(btn_row, text="Refresh", command=load_logs, width=100, height=28, corner_radius=8,
+                                        font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"]),
+                                        fg_color=COLORS["accent"], hover_color=COLORS["accent_light"], text_color="#FFFFFF")
+            refresh_btn.pack(side="right")
+
+            load_logs()
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to open logs window: {e}")
 
     def create_hotkeys_section(self, parent):
         """Create hotkeys settings section"""
@@ -1759,6 +1844,8 @@ class LazyToTextUI:
                 if status_check_counter >= check_interval:
                     status_check_counter = 0
                     self._update_backend_status()
+                    # Refresh status panel to show Docker/Container status
+                    self.root.after(0, self.refresh_status_panel)
                     
                 # Update UI elements only when visible and less frequently
                 if self.window_visible:
@@ -1779,22 +1866,30 @@ class LazyToTextUI:
         """Update backend status"""
         try:
             if self.ctx.backend_mode == 'local':
-                container_status, health_ok = self.docker_mgr.get_health_and_status(self.ctx.engine.health_check)
+                container_status, _health_ok = self.docker_mgr.get_health_and_status(self.ctx.engine.health_check)
                 docker_available = self.docker_mgr.is_available()
-                
+
                 self.root.after(0, lambda: self.update_backend_buttons_state())
-                
+
                 if not docker_available:
                     self.root.after(0, lambda: self._update_server_status("Server status: not running (docker unavailable)", "red"))
-                elif container_status == 'running' and health_ok:
-                    self.root.after(0, lambda: self._update_server_status("Server status: running", "green"))
-                    # Update container model information
+                elif container_status == 'running':
+                    # Consider service 'running' only when readiness log line present
+                    try:
+                        ready = self.docker_mgr.has_ready_log_line(r"Connection to .*10300 port .* succeeded!")
+                    except Exception:
+                        ready = False
+                    if ready:
+                        self.root.after(0, lambda: self._update_server_status("Server status: running", "green"))
+                    else:
+                        self.root.after(0, lambda: self._update_server_status("Server status: waiting", "orange"))
+
+                    # Update container model information (optional; color matches status)
                     container_model = self.docker_mgr.get_container_model_info(self.ctx.engine)
                     if container_model:
-                        # Get canonical model name
                         canonical_name = ALIAS_TO_MODEL.get(container_model, container_model)
                         display_text = f"Container model: {container_model} ({canonical_name})"
-                        self.root.after(0, lambda: self._update_container_model(display_text, "green"))
+                        self.root.after(0, lambda: self._update_container_model(display_text, "green" if ready else "orange"))
                     else:
                         self.root.after(0, lambda: self._update_container_model("Container model: unknown", "gray"))
                 elif container_status in ('stopped', 'not_found'):
@@ -1969,6 +2064,10 @@ class LazyToTextUI:
         """Update backend buttons state"""
         if self.ctx.backend_mode != 'local':
             return
+        
+        # Skip update if operation in progress (prevents flickering)
+        if self.backend_operation_in_progress:
+            return
             
         try:
             container_status, _ = self.docker_mgr.get_health_and_status(self.ctx.engine.health_check)
@@ -2088,6 +2187,19 @@ class LazyToTextUI:
                 if container_result == "running":
                     self.root.after(0, lambda: self.update_status(f"Switched to {new_model} (beam: {new_beam_size}, lang: {new_language}, container recreated)"))
                     self.root.after(0, lambda: self._update_server_status("Server status: running", "green"))
+                    # Wait for readiness log line asynchronously (non-blocking UI)
+                    def _wait_ready():
+                        ok = False
+                        try:
+                            ok = self.docker_mgr.wait_for_log_line(r"Connection to .*10300 port .* succeeded!", timeout=40)
+                        except Exception:
+                            ok = False
+                        if ok:
+                            self.root.after(0, lambda: self.update_status("Backend ready (port 10300 reachable)"))
+                        else:
+                            self.root.after(0, lambda: self.update_status("Backend start: readiness log not detected (timeout)"))
+                        self.root.after(0, self._update_backend_status)
+                    self.executor.submit(_wait_ready)
                     
                     # Update container model information
                     container_model = self.docker_mgr.get_container_model_info(self.ctx.engine)
@@ -2124,6 +2236,9 @@ class LazyToTextUI:
     def start_backend(self):
         """Start backend"""
         try:
+            # Set operation in progress flag
+            self.backend_operation_in_progress = True
+            
             # Disable buttons
             self._disable_button('start_backend_button')
             self._disable_button('stop_backend_button')
@@ -2145,19 +2260,40 @@ class LazyToTextUI:
             status_text = "Container running" if res == 'running' else f"Container status: {res}"
             self.root.after(0, lambda: self.update_status(status_text))
             
-            # Update UI state
+            # Clear operation flag
+            self.backend_operation_in_progress = False
+            
+            # Update UI state and wait for readiness line
             self.root.after(0, self._update_backend_status)
             self.root.after(0, self.update_backend_buttons_state)
+            if res == 'running':
+                def _wait_ready():
+                    ok = False
+                    try:
+                        ok = self.docker_mgr.wait_for_log_line(r"Connection to .*10300 port .* succeeded!", timeout=40)
+                    except Exception:
+                        ok = False
+                    if ok:
+                        self.root.after(0, lambda: self.update_status("Backend ready (port 10300 reachable)"))
+                    else:
+                        self.root.after(0, lambda: self.update_status("Backend start: readiness log not detected (timeout)"))
+                    self.root.after(0, self._update_backend_status)
+                self.executor.submit(_wait_ready)
             
         except Exception as ex:
             logging.getLogger(__name__).error(f"Backend start error: {ex}")
             error_msg = str(ex)
+            # Clear operation flag on error
+            self.backend_operation_in_progress = False
             self.root.after(0, lambda: self.update_status(f"Error starting backend: {error_msg}"))
             self.root.after(0, self.update_backend_buttons_state)
 
     def stop_backend(self):
         """Stop backend"""
         try:
+            # Set operation in progress flag
+            self.backend_operation_in_progress = True
+            
             # Disable buttons
             self._disable_button('start_backend_button')
             self._disable_button('stop_backend_button')
@@ -2179,6 +2315,9 @@ class LazyToTextUI:
             status_text = "Container stopped" if res in ('stopped','not_found') else f"Container status: {res}"
             self.root.after(0, lambda: self.update_status(status_text))
             
+            # Clear operation flag
+            self.backend_operation_in_progress = False
+            
             # Update UI state
             self.root.after(0, self._update_backend_status)
             self.root.after(0, self.update_backend_buttons_state)
@@ -2186,6 +2325,8 @@ class LazyToTextUI:
         except Exception as ex:
             logging.getLogger(__name__).error(f"Backend stop error: {ex}")
             error_msg = str(ex)
+            # Clear operation flag on error
+            self.backend_operation_in_progress = False
             self.root.after(0, lambda: self.update_status(f"Error stopping backend: {error_msg}"))
             self.root.after(0, self.update_backend_buttons_state)
 
@@ -2427,6 +2568,8 @@ class LazyToTextUI:
             if self.ctx.backend_mode == 'local':
                 initial_status, _ = self.docker_mgr.get_health_and_status(self.ctx.engine.health_check)
                 self.update_backend_buttons_state()
+            # Initial status panel refresh
+            self.refresh_status_panel()
         except Exception:
             pass
         
