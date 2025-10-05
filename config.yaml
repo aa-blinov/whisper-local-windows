@@ -2,7 +2,7 @@ whisper:
   backend_mode: local
   model: turbo
   language: ru
-  beam_size: 7
+  beam_size: 20
   local_url: http://localhost:10300
   external_url: http://remote-host:10300
 hotkey:
