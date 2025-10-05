@@ -159,11 +159,22 @@ class StateManager:
                         self.logger.warning(f"Failed to add entry to history: {e}")
             
         except Exception as e:
-            self.logger.error(f"Error in processing workflow: {e}")
+            self.logger.error(f"Error in processing workflow: {e}", exc_info=True)
             self.logger.error(f"Error processing recording: {e}", extra={'user_message': True})
         
         finally:
             self.logger.debug("[Pipeline] Enter finally block")
+            
+            # Explicitly free audio data memory
+            try:
+                if audio_data is not None:
+                    del audio_data
+                    import gc
+                    gc.collect()
+                    self.logger.debug("[Pipeline] Audio data memory freed")
+            except Exception as e:
+                self.logger.debug(f"[Pipeline] Failed to free audio memory: {e}")
+            
             with self._state_lock:
                 self.is_processing = False
                 self.logger.debug(f"[Pipeline] is_processing set False; model_loading={self.is_model_loading}")

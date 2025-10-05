@@ -101,41 +101,70 @@ class WhisperEngine:
         """UI compatibility - sets URL through update_server_url."""
         self.update_server_url(url)
 
-    def health_check(self) -> bool:
-        """Checks Wyoming server availability through TCP connection."""
-        try:
-            # Simple TCP connection check
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5.0)
-            result = sock.connect_ex((self.host, self.port))
-            sock.close()
-            return result == 0
-        except Exception as e:
-            self.logger.debug(f"Health check error: {e}")
-            return False
+    def health_check(self, timeout: float = 5.0, retries: int = 2) -> bool:
+        """Checks Wyoming server availability through TCP connection with retry logic."""
+        import socket
+        
+        for attempt in range(retries):
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(timeout)
+                result = sock.connect_ex((self.host, self.port))
+                sock.close()
+                
+                if result == 0:
+                    return True
+                    
+                if attempt < retries - 1:
+                    self.logger.debug(f"Health check failed (attempt {attempt + 1}/{retries}), retrying...")
+                    time.sleep(1)
+                    
+            except socket.timeout:
+                self.logger.debug(f"Health check timeout (attempt {attempt + 1}/{retries})")
+                if attempt < retries - 1:
+                    time.sleep(1)
+            except Exception as e:
+                self.logger.debug(f"Health check error (attempt {attempt + 1}/{retries}): {e}")
+                if attempt < retries - 1:
+                    time.sleep(1)
+                    
+        return False
 
-    async def _get_info(self) -> dict | None:
-        """Gets server information through Wyoming protocol."""
+    async def _get_info(self, timeout: float = 10.0) -> dict | None:
+        """Gets server information through Wyoming protocol with timeout."""
+        client = None
         try:
             client = AsyncTcpClient(self.host, self.port)
             
-            # Establish connection
-            await client.connect()
+            # Establish connection with timeout
+            await asyncio.wait_for(client.connect(), timeout=timeout)
             
             # Send information request
             await client.write_event(Describe().event())
             
-            # Wait for response
-            event = await asyncio.wait_for(client.read_event(), timeout=5.0)
+            # Wait for response with timeout
+            event = await asyncio.wait_for(client.read_event(), timeout=timeout)
             await client.disconnect()
             
             if event and event.type == 'info':
                 return event.data
             return None
+            
+        except asyncio.TimeoutError:
+            self.logger.debug(f"Timeout getting Wyoming info after {timeout}s")
+            return None
+        except (ConnectionError, OSError) as e:
+            self.logger.debug(f"Connection error getting Wyoming info: {e}")
+            return None
         except Exception as e:
             self.logger.debug(f"Failed to get Wyoming info: {e}")
             return None
+        finally:
+            if client:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
 
     def get_models(self, max_age: float = 60.0) -> list[str] | None:
         """Get list of available models from Wyoming server. Caches result for max_age seconds."""
@@ -177,78 +206,129 @@ class WhisperEngine:
         return locally configured model."""
         return self.remote_model if self.remote_model else self.model_size
 
-    async def _transcribe_audio_async(self, audio_data: np.ndarray, sample_rate: int = SAMPLE_RATE) -> Optional[str]:
-        """Asynchronous transcription through Wyoming protocol."""
-        try:
-            # Connect to server
-            client = AsyncTcpClient(self.host, self.port)
-            await client.connect()
-            
-            # Convert audio to required format
-            if len(audio_data.shape) > 1:
-                audio_data = audio_data.flatten()
-            if audio_data.dtype != np.float32:
-                audio_data = audio_data.astype(np.float32)
-            
-            # Normalize audio
-            audio_clip = np.clip(audio_data, -1.0, 1.0)
-            
-            # Convert to int16 for Wyoming
-            audio_int16 = (audio_clip * 32767).astype(np.int16)
-            audio_bytes = audio_int16.tobytes()
-            
-            # Send transcription request
-            transcribe_request = Transcribe(language=self.language).event()
-            await client.write_event(transcribe_request)
-            
-            # Send audio data
-            audio_start = AudioStart(
-                rate=sample_rate,
-                width=2,  # 16-bit = 2 bytes
-                channels=1
-            ).event()
-            await client.write_event(audio_start)
-            
-            # Send audio in chunks
-            chunk_size = 1024
-            for i in range(0, len(audio_bytes), chunk_size):
-                chunk = audio_bytes[i:i + chunk_size]
-                audio_chunk = AudioChunk(
-                    rate=sample_rate,
-                    width=2,
-                    channels=1,
-                    audio=chunk
-                ).event()
-                await client.write_event(audio_chunk)
-            
-            # Finish audio stream
-            audio_stop = AudioStop().event()
-            await client.write_event(audio_stop)
-            
-            # Wait for transcription result
-            while True:
-                event = await asyncio.wait_for(client.read_event(), timeout=self.timeout)
-                if event and event.type == 'transcript':
-                    text = event.data.get('text', '')
-                    await client.disconnect()
-                    # Clean multiple spaces and trim the result
-                    cleaned_text = self._clean_transcription_text(text)
-                    if cleaned_text:
-                        return f"{cleaned_text} "
-                    return None
-                elif event and event.type == 'error':
-                    error_msg = event.data.get('text', 'Unknown error')
-                    self.logger.error(f"Wyoming transcription error: {error_msg}")
-                    await client.disconnect()
-                    return None
-                    
-        except Exception as e:
-            self.logger.error(f"Wyoming transcription error: {e}")
+    async def _transcribe_audio_async(self, audio_data: np.ndarray, sample_rate: int = SAMPLE_RATE, max_retries: int = 3) -> Optional[str]:
+        """Asynchronous transcription through Wyoming protocol with retry logic."""
+        last_error = None
+        
+        for attempt in range(max_retries):
+            client = None
             try:
-                await client.disconnect()
-            except Exception:
-                pass
-            return None
+                # Connect to server with timeout
+                client = AsyncTcpClient(self.host, self.port)
+                
+                # Add connection timeout
+                try:
+                    await asyncio.wait_for(client.connect(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    raise ConnectionError(f"Connection timeout to {self.host}:{self.port}")
+                
+                # Convert audio to required format
+                if len(audio_data.shape) > 1:
+                    audio_data = audio_data.flatten()
+                if audio_data.dtype != np.float32:
+                    audio_data = audio_data.astype(np.float32)
+                
+                # Normalize audio
+                audio_clip = np.clip(audio_data, -1.0, 1.0)
+                
+                # Convert to int16 for Wyoming
+                audio_int16 = (audio_clip * 32767).astype(np.int16)
+                audio_bytes = audio_int16.tobytes()
+                
+                # Send transcription request
+                transcribe_request = Transcribe(language=self.language).event()
+                await client.write_event(transcribe_request)
+                
+                # Send audio data
+                audio_start = AudioStart(
+                    rate=sample_rate,
+                    width=2,  # 16-bit = 2 bytes
+                    channels=1
+                ).event()
+                await client.write_event(audio_start)
+                
+                # Send audio in chunks
+                chunk_size = 1024
+                for i in range(0, len(audio_bytes), chunk_size):
+                    chunk = audio_bytes[i:i + chunk_size]
+                    audio_chunk = AudioChunk(
+                        rate=sample_rate,
+                        width=2,
+                        channels=1,
+                        audio=chunk
+                    ).event()
+                    await client.write_event(audio_chunk)
+                
+                # Finish audio stream
+                audio_stop = AudioStop().event()
+                await client.write_event(audio_stop)
+                
+                # Wait for transcription result
+                while True:
+                    event = await asyncio.wait_for(client.read_event(), timeout=self.timeout)
+                    if event and event.type == 'transcript':
+                        text = event.data.get('text', '')
+                        await client.disconnect()
+                        # Clean multiple spaces and trim the result
+                        cleaned_text = self._clean_transcription_text(text)
+                        if cleaned_text:
+                            return f"{cleaned_text} "
+                        return None
+                    elif event and event.type == 'error':
+                        error_msg = event.data.get('text', 'Unknown error')
+                        self.logger.error(f"Wyoming transcription error: {error_msg}")
+                        await client.disconnect()
+                        return None
+                        
+            except asyncio.TimeoutError as e:
+                last_error = e
+                self.logger.warning(f"Transcription timeout (attempt {attempt + 1}/{max_retries}): {e}")
+                if client:
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+                
+                if attempt < max_retries - 1:
+                    # Exponential backoff: 1s, 2s, 4s
+                    wait_time = 2 ** attempt
+                    self.logger.info(f"Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                    
+            except (ConnectionError, OSError) as e:
+                last_error = e
+                self.logger.warning(f"Connection error (attempt {attempt + 1}/{max_retries}): {e}")
+                if client:
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+                    
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    self.logger.info(f"Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
+                    continue
+                    
+            except Exception as e:
+                last_error = e
+                self.logger.error(f"Wyoming transcription error (attempt {attempt + 1}/{max_retries}): {e}")
+                if client:
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+                    
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    await asyncio.sleep(wait_time)
+                    continue
+        
+        # All retries failed
+        if last_error:
+            self.logger.error(f"Transcription failed after {max_retries} attempts: {last_error}")
+        return None
 
     def transcribe_audio(self, audio_data: np.ndarray, sample_rate: int = SAMPLE_RATE) -> Optional[str]:
         if audio_data is None or len(audio_data) == 0:

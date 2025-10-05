@@ -281,6 +281,348 @@ class AppContext:
         self.disable_hotkeys()
 
 
+class HistoryWindow:
+    """Separate window for transcription history"""
+    
+    def __init__(self, parent_ui):
+        self.parent_ui = parent_ui
+        self.window = None
+        self.history_entries = []
+        self.selected_history_index = None
+        self.widgets = {}
+        
+    def show(self):
+        """Show history window"""
+        if self.window and self.window.winfo_exists():
+            # Window already exists, just raise it
+            self.window.lift()
+            self.window.focus()
+            return
+        
+        # Create new window
+        self.window = ctk.CTkToplevel(self.parent_ui.root)
+        self.window.title("Lazy to Text - History")
+        self.window.geometry("1000x600")
+        self.window.minsize(800, 400)
+        
+        # Set window icon with delay (required for CTkToplevel on Windows)
+        # Must use after() with 200ms+ delay for proper icon loading
+        self.window.after(200, lambda: self._set_window_icon())
+        
+        # Make window appear on top
+        self.window.lift()
+        self.window.focus_force()
+        self.window.attributes('-topmost', True)
+        self.window.after(100, lambda: self.window.attributes('-topmost', False))
+        
+        # Create UI
+        self.create_ui()
+        
+        # Load history
+        self.refresh_history_display()
+    
+    def _set_window_icon(self):
+        """Set icon for history window with proper CTkToplevel method"""
+        try:
+            if self.parent_ui.app_ico_path and Path(self.parent_ui.app_ico_path).exists():
+                self.window.iconbitmap(str(self.parent_ui.app_ico_path))
+                logging.getLogger(__name__).debug("History window icon set using ICO file")
+                return
+            
+            ico_path = Path(resolve_asset_path("assets/tray_idle.ico"))
+            if ico_path.exists():
+                self.window.iconbitmap(str(ico_path))
+                logging.getLogger(__name__).debug("History window icon set using assets ICO file")
+                return
+                
+            png_path = Path(resolve_asset_path("assets/tray_idle.png"))
+            if png_path.exists():
+                photo = tk.PhotoImage(file=str(png_path))
+                self.window.iconphoto(True, photo)
+                self.window._icon = photo  # Keep reference
+                logging.getLogger(__name__).debug("History window icon set using PNG file")
+        except Exception as e:
+            logging.getLogger(__name__).debug(f"Failed to set history window icon: {e}")
+        
+    def create_ui(self):
+        """Create history window UI"""
+        main_container = ctk.CTkFrame(self.window, fg_color="transparent")
+        main_container.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Title
+        title = ctk.CTkLabel(
+            main_container,
+            text="Transcription History",
+            font=ctk.CTkFont(size=24, weight="bold"),
+            text_color=COLORS["text_primary"]
+        )
+        title.pack(pady=(0, 20), anchor="w")
+        
+        # Controls frame
+        controls_frame = ctk.CTkFrame(
+            main_container,
+            fg_color=COLORS["surface"],
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["border"]
+        )
+        controls_frame.pack(fill="x", pady=(0, 12))
+        
+        controls_inner = ctk.CTkFrame(controls_frame, fg_color="transparent")
+        controls_inner.pack(fill="x", padx=16, pady=12)
+        
+        # Search
+        self.widgets['search'] = ctk.CTkEntry(
+            controls_inner,
+            placeholder_text="Search...",
+            width=240,
+            height=34,
+            corner_radius=8,
+            border_width=1,
+            border_color=COLORS["border"],
+            text_color=COLORS["text_primary"],
+            placeholder_text_color=COLORS["text_muted"],
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"])
+        )
+        self.widgets['search'].bind('<KeyRelease>', lambda e: self.refresh_history_display())
+        self.widgets['search'].pack(side="left", padx=(0, 12))
+        
+        # Filter
+        self.widgets['filter'] = ctk.CTkOptionMenu(
+            controls_inner,
+            values=["All", "Today", "Last 7 days", "Last 30 days"],
+            command=lambda v: self.refresh_history_display(),
+            width=140,
+            height=34,
+            corner_radius=8,
+            button_color=COLORS["accent"],
+            button_hover_color=COLORS["accent_light"],
+            text_color="#FFFFFF",
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"])
+        )
+        self.widgets['filter'].set("All")
+        self.widgets['filter'].pack(side="left", padx=(0, 12))
+        
+        # Spacer
+        spacer = ctk.CTkLabel(controls_inner, text="")
+        spacer.pack(side="left", fill="x", expand=True)
+        
+        # Buttons
+        self.widgets['export_button'] = ctk.CTkButton(
+            controls_inner,
+            text="Export",
+            command=self.export_history,
+            width=90,
+            height=34,
+            corner_radius=8,
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
+            fg_color=COLORS["success"],
+            hover_color=COLORS["success_light"],
+            text_color="#FFFFFF"
+        )
+        self.widgets['export_button'].pack(side="right", padx=(8, 0))
+        
+        self.widgets['clear_button'] = ctk.CTkButton(
+            controls_inner,
+            text="Clear All",
+            command=self.clear_history,
+            width=90,
+            height=34,
+            corner_radius=8,
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
+            fg_color=COLORS["danger"],
+            hover_color=COLORS["danger_light"],
+            text_color="#FFFFFF"
+        )
+        self.widgets['clear_button'].pack(side="right", padx=(8, 0))
+        
+        # History list container
+        list_container = ctk.CTkFrame(
+            main_container,
+            fg_color=COLORS["surface"],
+            corner_radius=12,
+            border_width=1,
+            border_color=COLORS["border"]
+        )
+        list_container.pack(fill="both", expand=True)
+        
+        # Scrollable frame for history entries
+        self.widgets['scrollable'] = ctk.CTkScrollableFrame(
+            list_container,
+            fg_color=COLORS["primary"],
+            corner_radius=8,
+            scrollbar_button_color=COLORS["accent"],
+            scrollbar_button_hover_color=COLORS["accent_light"]
+        )
+        self.widgets['scrollable'].pack(fill="both", expand=True, padx=12, pady=12)
+        
+    def get_filtered_entries(self):
+        """Get filtered history entries"""
+        try:
+            if not self.parent_ui.ctx.state_manager.history_manager:
+                return []
+            
+            # Get base entries based on filter
+            filter_value = self.widgets['filter'].get()
+            
+            if filter_value == "Today":
+                entries = self.parent_ui.ctx.state_manager.history_manager.get_entries_by_date(1)
+            elif filter_value == "Last 7 days":
+                entries = self.parent_ui.ctx.state_manager.history_manager.get_entries_by_date(7)
+            elif filter_value == "Last 30 days":
+                entries = self.parent_ui.ctx.state_manager.history_manager.get_entries_by_date(30)
+            else:
+                entries = self.parent_ui.ctx.state_manager.history_manager.get_entries(limit=200)
+            
+            # Apply search
+            search_text = self.widgets['search'].get().strip()
+            if search_text:
+                entries = [e for e in entries if search_text.lower() in e.text.lower()]
+            
+            return entries
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to get filtered entries: {e}")
+            return []
+    
+    def refresh_history_display(self):
+        """Refresh history display"""
+        try:
+            # Clear existing entries
+            for widget in self.history_entries:
+                widget.destroy()
+            self.history_entries.clear()
+            self.selected_history_index = None
+            
+            # Get filtered entries
+            entries = self.get_filtered_entries()
+            
+            # Create widgets
+            for i, entry in enumerate(entries):
+                self.create_entry_widget(entry, i)
+                
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to refresh history: {e}")
+    
+    def create_entry_widget(self, entry, index):
+        """Create widget for single entry"""
+        try:
+            entry_frame = ctk.CTkFrame(
+                self.widgets['scrollable'],
+                fg_color=COLORS["surface"],
+                corner_radius=10,
+                border_width=1,
+                border_color=COLORS["border"]
+            )
+            entry_frame.pack(fill="x", padx=6, pady=4)
+            
+            entry_frame.grid_columnconfigure(1, weight=1)
+            
+            # Time
+            time_label = ctk.CTkLabel(
+                entry_frame,
+                text=entry.datetime_str,
+                width=140,
+                font=ctk.CTkFont(size=11, weight="normal"),
+                text_color=COLORS["text_muted"]
+            )
+            time_label.grid(row=0, column=0, padx=12, pady=10, sticky="w")
+            
+            # Text
+            text_label = ctk.CTkLabel(
+                entry_frame,
+                text=entry.text if len(entry.text) <= 100 else entry.text[:97] + "...",
+                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"]),
+                text_color=COLORS["text_primary"],
+                anchor="w",
+                wraplength=600
+            )
+            text_label.grid(row=0, column=1, padx=12, pady=10, sticky="ew")
+            
+            # Info
+            info_text = f"{entry.model} • {entry.language} • {entry.duration:.1f}s"
+            info_label = ctk.CTkLabel(
+                entry_frame,
+                text=info_text,
+                font=ctk.CTkFont(size=10, weight="normal"),
+                text_color=COLORS["text_secondary"],
+                width=150
+            )
+            info_label.grid(row=0, column=2, padx=12, pady=10, sticky="e")
+            
+            # Copy button
+            copy_button = ctk.CTkButton(
+                entry_frame,
+                text="Copy",
+                width=70,
+                height=30,
+                corner_radius=6,
+                font=ctk.CTkFont(size=10, weight="bold"),
+                fg_color=COLORS["accent"],
+                hover_color=COLORS["accent_light"],
+                text_color="#FFFFFF",
+                command=lambda idx=index: self.copy_entry(idx)
+            )
+            copy_button.grid(row=0, column=3, padx=12, pady=10)
+            
+            self.history_entries.append(entry_frame)
+            
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to create entry widget: {e}")
+    
+    def copy_entry(self, index):
+        """Copy entry to clipboard"""
+        try:
+            entries = self.get_filtered_entries()
+            if 0 <= index < len(entries):
+                entry = entries[index]
+                success = self.parent_ui.ctx.clipboard_manager.copy_text(entry.text)
+                if success:
+                    logging.getLogger(__name__).info("Copied to clipboard", extra={'user_message': True})
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to copy entry: {e}")
+    
+    def export_history(self):
+        """Export history to file"""
+        try:
+            if not self.parent_ui.ctx.state_manager.history_manager:
+                return
+            
+            import tkinter.filedialog as fd
+            filename = fd.asksaveasfilename(
+                title="Export History",
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+            )
+            
+            if filename:
+                success = self.parent_ui.ctx.state_manager.history_manager.export_to_text(filename)
+                if success:
+                    logging.getLogger(__name__).info(f"History exported to {filename}", extra={'user_message': True})
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to export: {e}")
+    
+    def clear_history(self):
+        """Clear all history"""
+        try:
+            if not self.parent_ui.ctx.state_manager.history_manager:
+                return
+            
+            import tkinter.messagebox as mb
+            result = mb.askyesno(
+                "Clear History",
+                "Are you sure you want to clear all history?\nThis cannot be undone.",
+                icon="warning",
+                parent=self.window
+            )
+            
+            if result:
+                self.parent_ui.ctx.state_manager.history_manager.clear_history()
+                self.refresh_history_display()
+                logging.getLogger(__name__).info("History cleared", extra={'user_message': True})
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to clear: {e}")
+
+
 class LazyToTextUI:
     def __init__(self):
         self.root = ctk.CTk()
@@ -305,6 +647,8 @@ class LazyToTextUI:
         
         # UI elements
         self.widgets: Dict[str, Any] = {}
+        self.app_icon = None
+        self.app_ico_path = None
         
         # Track changes for save buttons
         self.hotkey_settings_changed = False
@@ -313,8 +657,16 @@ class LazyToTextUI:
         self.original_hotkey_settings = {}
         
         # Threading for background tasks
-        self.executor = ThreadPoolExecutor(max_workers=2)
+        self.executor = ThreadPoolExecutor(max_workers=4)
         self.polling_running = False
+        
+        # Debouncing for UI updates
+        self.scheduled_history_update_id = None
+        self.last_history_update_time = 0
+        self.history_update_debounce_ms = 500  # 500ms debounce
+        
+        # History window
+        self.history_window = None
         
         self.setup_logging()
         self.setup_system_tray()
@@ -328,6 +680,10 @@ class LazyToTextUI:
             # Try to load the same icon as used in system tray
             png_path = Path(resolve_asset_path("assets/tray_idle.png"))
             ico_path = png_path.parent / "tray_idle.ico"
+
+            # Reset cached references before loading
+            self.app_icon = None
+            self.app_ico_path = None
             
             if png_path.exists():
                 # Convert PNG to ICO if ICO doesn't exist
@@ -351,6 +707,7 @@ class LazyToTextUI:
                     try:
                         self.root.wm_iconbitmap(str(ico_path))
                         success = True
+                        self.app_ico_path = ico_path
                         logging.getLogger(__name__).debug("Application icon set using iconbitmap (ICO)")
                     except Exception as e:
                         logging.getLogger(__name__).debug(f"iconbitmap failed: {e}")
@@ -376,6 +733,65 @@ class LazyToTextUI:
                 
         except Exception as e:
             logging.getLogger(__name__).warning(f"Failed to set application icon: {e}")
+
+    def apply_icon_to_window(self, window: tk.Toplevel) -> None:
+        """Apply application icon to another window"""
+        if not window:
+            return
+
+        applied = False
+        try:
+            # Try ICO file first
+            if self.app_ico_path and Path(self.app_ico_path).exists():
+                try:
+                    window.wm_iconbitmap(str(self.app_ico_path))
+                    applied = True
+                    logging.getLogger(__name__).debug("Applied icon to window using iconbitmap (ICO)")
+                except Exception as e:
+                    logging.getLogger(__name__).debug(f"iconbitmap failed for window: {e}")
+                    applied = False
+
+            # Try PNG via iconphoto with main window's PhotoImage reference
+            if not applied and self.app_icon is not None:
+                try:
+                    window.call("wm", "iconphoto", window._w, self.app_icon)
+                    window.wm_iconphoto(True, self.app_icon)
+                    applied = True
+                    logging.getLogger(__name__).debug("Applied icon to window using iconphoto (main PhotoImage)")
+                except Exception as e:
+                    logging.getLogger(__name__).debug(f"iconphoto with main icon failed for window: {e}")
+                    applied = False
+
+            # Fallback: create new PhotoImage from PNG
+            if not applied:
+                png_path = Path(resolve_asset_path("assets/tray_idle.png"))
+                ico_path = png_path.parent / "tray_idle.ico"
+                
+                # Try ICO file if it exists
+                if not applied and ico_path.exists():
+                    try:
+                        window.wm_iconbitmap(str(ico_path))
+                        applied = True
+                        logging.getLogger(__name__).debug("Applied icon to window using fallback iconbitmap (ICO)")
+                    except Exception as e:
+                        logging.getLogger(__name__).debug(f"Fallback iconbitmap failed for window: {e}")
+                
+                # Try PNG
+                if not applied and png_path.exists():
+                    try:
+                        photo = tk.PhotoImage(file=str(png_path))
+                        window.call("wm", "iconphoto", window._w, photo)
+                        window.wm_iconphoto(True, photo)
+                        window._icon = photo  # Keep reference to prevent garbage collection
+                        applied = True
+                        logging.getLogger(__name__).debug("Applied icon to window using fallback iconphoto (PNG)")
+                    except Exception as e:
+                        logging.getLogger(__name__).debug(f"Fallback iconphoto failed for window: {e}")
+            
+            if not applied:
+                logging.getLogger(__name__).warning("Failed to apply icon to window with all methods")
+        except Exception as e:
+            logging.getLogger(__name__).debug(f"Failed to apply icon to window: {e}")
 
     def setup_logging(self):
         """Setup logging system"""
@@ -430,6 +846,58 @@ class LazyToTextUI:
             except Exception as e:
                 logging.getLogger(__name__).warning(f"System tray init failed: {e}")
                 self.system_tray = None
+
+    def _stop_scroll_propagation(self, scrollable_widget):
+        """Stop scroll events from propagating to parent scrollable frame.
+        
+        When mouse is over a nested scrollable widget, allow it to scroll
+        but prevent events from bubbling up to parent scrollable containers.
+        """
+        # Store reference to widget's canvas for scroll handling
+        canvas = None
+        try:
+            if hasattr(scrollable_widget, '_parent_canvas'):
+                canvas = scrollable_widget._parent_canvas
+        except Exception:
+            pass
+        
+        def on_mousewheel(event):
+            if canvas:
+                # Scroll the nested widget's canvas
+                if event.delta:
+                    # Windows and MacOS
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                elif event.num == 4:
+                    # Linux scroll up
+                    canvas.yview_scroll(-1, "units")
+                elif event.num == 5:
+                    # Linux scroll down
+                    canvas.yview_scroll(1, "units")
+            # Stop propagation to parent
+            return "break"
+        
+        # Bind scroll events to the widget
+        scrollable_widget.bind("<MouseWheel>", on_mousewheel)
+        scrollable_widget.bind("<Button-4>", on_mousewheel)
+        scrollable_widget.bind("<Button-5>", on_mousewheel)
+        
+        # Also bind to all child widgets recursively
+        def bind_children(widget):
+            try:
+                widget.bind("<MouseWheel>", on_mousewheel, add="+")
+                widget.bind("<Button-4>", on_mousewheel, add="+")
+                widget.bind("<Button-5>", on_mousewheel, add="+")
+                for child in widget.winfo_children():
+                    bind_children(child)
+            except Exception:
+                pass
+        
+        try:
+            # Bind to internal frame if it exists (for CTkScrollableFrame)
+            if hasattr(scrollable_widget, '_parent_frame'):
+                bind_children(scrollable_widget._parent_frame)
+        except Exception:
+            pass
 
     def create_widgets(self):
         """Create interface widgets"""
@@ -507,7 +975,7 @@ class LazyToTextUI:
             backend_inner,
             values=['local', 'external'],
             command=self.on_backend_mode_change,
-            width=120,
+            width=140,
             height=34,  # Slightly taller for better touch targets
             corner_radius=8,
             button_color=COLORS["accent"],
@@ -839,8 +1307,8 @@ class LazyToTextUI:
         self.add_hotkeys_tooltips()
 
     def create_history_section(self, parent):
-        """Create history section"""
-        # History title with better typography
+        """Create history section (button to open separate window)"""
+        # History title
         history_title = ctk.CTkLabel(
             parent, 
             text="Transcription History", 
@@ -849,143 +1317,26 @@ class LazyToTextUI:
         )
         history_title.pack(pady=(20, 20), anchor="w")
         
-        # History controls with improved styling
-        history_controls_frame = ctk.CTkFrame(
+        # Open History button
+        open_history_button = ctk.CTkButton(
             parent,
-            fg_color=COLORS["surface"],
-            corner_radius=12,
-            border_width=1,
-            border_color=COLORS["border"]
-        )
-        history_controls_frame.pack(fill="x", padx=0, pady=(0, 12))
-        
-        # Add padding to history controls
-        history_inner = ctk.CTkFrame(history_controls_frame, fg_color="transparent")
-        history_inner.pack(fill="x", padx=16, pady=12)
-        
-        # Improved search entry
-        self.widgets['history_search'] = ctk.CTkEntry(
-            history_inner,
-            placeholder_text="Search transcription history...",
-            width=240,
-            height=34,
-            corner_radius=8,
-            border_width=1,
-            border_color=COLORS["border"],
-            text_color=COLORS["text_primary"],
-            placeholder_text_color=COLORS["text_muted"],
-            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"])
-        )
-        self.widgets['history_search'].bind('<KeyRelease>', self.on_history_search)
-        self.widgets['history_search'].pack(side="left", padx=(0, 12))
-        
-        # Improved filter combobox
-        self.widgets['history_filter'] = ctk.CTkOptionMenu(
-            history_inner,
-            values=["All", "Today", "Last 7 days", "Last 30 days"],
-            command=self.on_history_filter_change,
-            width=120,
-            height=34,
-            corner_radius=8,
-            button_color=COLORS["accent"],
-            button_hover_color=COLORS["accent_light"],
-            text_color="#FFFFFF",
-            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_normal"])
-        )
-        self.widgets['history_filter'].set("All")
-        self.widgets['history_filter'].pack(side="left", padx=(0, 12))
-        
-        # Spacer
-        spacer = ctk.CTkLabel(history_inner, text="", width=1)
-        spacer.pack(side="left", fill="x", expand=True)
-        
-        # Improved history buttons
-        self.widgets['copy_history_button'] = ctk.CTkButton(
-            history_inner,
-            text="Copy",
-            command=self.copy_selected_history,
-            width=80,
-            height=34,
-            corner_radius=8,
-            state="disabled",
-            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
-            fg_color=COLORS["disabled"],
+            text="Open Transcription History",
+            command=self.open_history_window,
+            height=44,
+            corner_radius=10,
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_bold"]),
+            fg_color=COLORS["accent"],
             hover_color=COLORS["accent_light"],
-            text_color=COLORS["text_disabled"],
-            text_color_disabled=COLORS["text_disabled"]
-        )
-        self.widgets['copy_history_button'].pack(side="right", padx=(8, 0))
-        
-        # Initialize disabled state for copy button
-        self._disable_button('copy_history_button')
-        
-        self.widgets['export_history_button'] = ctk.CTkButton(
-            history_inner,
-            text="Export",
-            command=self.export_history,
-            width=80,
-            height=34,
-            corner_radius=8,
-            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
-            fg_color=COLORS["success"],
-            hover_color=COLORS["success_light"],
             text_color="#FFFFFF"
         )
-        self.widgets['export_history_button'].pack(side="right", padx=(8, 0))
-        
-        self.widgets['clear_history_button'] = ctk.CTkButton(
-            history_inner,
-            text="Clear",
-            command=self.clear_history,
-            width=80,
-            height=34,
-            corner_radius=8,
-            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
-            fg_color=COLORS["danger"],
-            hover_color=COLORS["danger_light"],
-            text_color="#FFFFFF"
-        )
-        self.widgets['clear_history_button'].pack(side="right", padx=(8, 0))
-        
-        # Initialize disabled state for history buttons
-        self._disable_button('export_history_button')
-        self._disable_button('clear_history_button')
-        
-        # Improved history listbox frame
-        history_frame = ctk.CTkFrame(
-            parent,
-            fg_color=COLORS["surface"],
-            corner_radius=12,
-            border_width=1,
-            border_color=COLORS["border"]
-        )
-        history_frame.pack(fill="both", expand=False, padx=0, pady=(0, 16))
-        
-        # Configure grid for history frame
-        history_frame.grid_rowconfigure(0, weight=1)
-        history_frame.grid_columnconfigure(0, weight=1)
-        
-        # Improved history scrollable frame
-        self.widgets['history_scrollable'] = ctk.CTkScrollableFrame(
-            history_frame,
-            height=180,
-            corner_radius=8,
-            fg_color=COLORS["primary"],
-            scrollbar_button_color=COLORS["accent"],
-            scrollbar_button_hover_color=COLORS["accent_light"]
-        )
-        self.widgets['history_scrollable'].grid(row=0, column=0, sticky="nsew", padx=12, pady=12)
-        
-        # History entries container
-        self.history_entries = []
-        self.selected_history_index = None
-        
-        # Load initial history
-        self.refresh_history_display()
-        
-        # Add tooltips
-        self.add_history_tooltips()
+        open_history_button.pack(fill="x", pady=(0, 16))
 
+    def open_history_window(self):
+        """Open history window"""
+        if not self.history_window:
+            self.history_window = HistoryWindow(self)
+        self.history_window.show()
+    
     def create_logs_section(self, parent):
         """Create logs section"""
         # Logs title with better typography
@@ -997,38 +1348,7 @@ class LazyToTextUI:
         )
         logs_title.pack(pady=(20, 20), anchor="w")
         
-        # Improved log control buttons
-        log_controls_frame = ctk.CTkFrame(
-            parent,
-            fg_color=COLORS["surface"],
-            corner_radius=12,
-            border_width=1,
-            border_color=COLORS["border"]
-        )
-        log_controls_frame.pack(fill="x", padx=0, pady=(0, 12))
-        
-        log_inner = ctk.CTkFrame(log_controls_frame, fg_color="transparent")
-        log_inner.pack(fill="x", padx=16, pady=12)
-        
-        # Spacer to push clear button to the right
-        spacer = ctk.CTkLabel(log_inner, text="")
-        spacer.pack(side="left", fill="x", expand=True)
-        
-        self.widgets['clear_logs_button'] = ctk.CTkButton(
-            log_inner,
-            text="Clear Logs",
-            command=self.clear_logs,
-            width=120,
-            height=34,
-            corner_radius=8,
-            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
-            fg_color=COLORS["warning"],
-            hover_color=COLORS["warning_light"],
-            text_color="#FFFFFF"
-        )
-        self.widgets['clear_logs_button'].pack(side="right", padx=0)
-        
-        # Improved text field for logs
+        # Improved text field for logs (removed control buttons frame)
         logs_container = ctk.CTkFrame(
             parent,
             fg_color=COLORS["surface"],
@@ -1131,298 +1451,52 @@ class LazyToTextUI:
         except Exception as e:
             logging.getLogger(__name__).warning(f"Failed to add hotkeys tooltips: {e}")
 
-    def add_history_tooltips(self):
-        """Add tooltips to history section widgets"""
-        try:
-            ToolTip(self.widgets['history_search'], "Search in transcription history")
-            ToolTip(self.widgets['history_filter'], "Filter history by date range")
-            ToolTip(self.widgets['copy_history_button'], "Copy selected entry to clipboard")
-            ToolTip(self.widgets['export_history_button'], "Export history to text file")
-            ToolTip(self.widgets['clear_history_button'], "Clear all history entries")
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Failed to add history tooltips: {e}")
+
 
     def refresh_history_display(self, force_rebuild=False):
-        """Refresh history display with current filter and search"""
+        """Refresh history display in separate window if open"""
         try:
-            # Get filtered entries
-            entries = self.get_filtered_history_entries()
-            
-            # Only rebuild if the number of entries changed or force rebuild
-            if force_rebuild or len(entries) != len(self.history_entries):
-                # Clear existing entries
-                for widget in self.history_entries:
-                    widget.destroy()
-                self.history_entries.clear()
-                self.selected_history_index = None
-                
-                # Create display entries
-                for i, entry in enumerate(entries):
-                    self.create_history_entry_widget(entry, i)
-                    
-            # Update button states
-            self.update_history_button_states()
-            
+            if self.history_window and self.history_window.window and self.history_window.window.winfo_exists():
+                self.history_window.refresh_history_display()
         except Exception as e:
-            logging.getLogger(__name__).error(f"Failed to refresh history display: {e}")
-
-    def get_filtered_history_entries(self):
-        """Get history entries with current filter and search applied"""
-        try:
-            # Check if history is available
-            if not self.ctx.state_manager.history_manager:
-                return []
-                
-            # Get base entries based on filter
-            filter_value = self.widgets['history_filter'].get()
-            
-            if filter_value == "Today":
-                entries = self.ctx.state_manager.history_manager.get_entries_by_date(1)
-            elif filter_value == "Last 7 days":
-                entries = self.ctx.state_manager.history_manager.get_entries_by_date(7)
-            elif filter_value == "Last 30 days":
-                entries = self.ctx.state_manager.history_manager.get_entries_by_date(30)
-            else:  # "All"
-                entries = self.ctx.state_manager.history_manager.get_entries(limit=100)
-                
-            # Apply search filter
-            search_text = self.widgets['history_search'].get().strip()
-            if search_text:
-                entries = [e for e in entries if search_text.lower() in e.text.lower()]
-                
-            return entries
-            
-        except Exception as e:
-            logging.getLogger(__name__).error(f"Failed to get filtered history entries: {e}")
-            return []
-
-    def create_history_entry_widget(self, entry, index):
-        """Create widget for single history entry"""
-        try:
-            # Improved entry frame with better styling
-            entry_frame = ctk.CTkFrame(
-                self.widgets['history_scrollable'],
-                fg_color=COLORS["surface"],
-                corner_radius=10,
-                border_width=1,
-                border_color=COLORS["border"]
-            )
-            entry_frame.pack(fill="x", padx=6, pady=4)
-            
-            # Configure grid
-            entry_frame.grid_columnconfigure(1, weight=1)
-            
-            # Time label with improved styling
-            time_label = ctk.CTkLabel(
-                entry_frame,
-                text=entry.datetime_str,
-                width=120,
-                font=ctk.CTkFont(size=10, weight="normal"),
-                text_color=COLORS["text_muted"]
-            )
-            time_label.grid(row=0, column=0, padx=12, pady=10, sticky="w")
-            
-            # Text label with better typography
-            text_label = ctk.CTkLabel(
-                entry_frame,
-                text=entry.short_text,
-                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"], weight=FONTS["weight_normal"]),
-                text_color=COLORS["text_primary"],
-                anchor="w"
-            )
-            text_label.grid(row=0, column=1, padx=12, pady=10, sticky="ew")
-            
-            # Info label with better styling
-            info_text = f"{entry.model} • {entry.language} • {entry.duration:.1f}s"
-            info_label = ctk.CTkLabel(
-                entry_frame,
-                text=info_text,
-                font=ctk.CTkFont(size=10, weight="normal"),
-                text_color=COLORS["text_secondary"],
-                width=140
-            )
-            info_label.grid(row=0, column=2, padx=12, pady=10, sticky="e")
-            
-            # Modern copy button
-            def create_copy_command(entry_index):
-                return lambda: self.copy_history_entry_by_index(entry_index)
-            
-            copy_button = ctk.CTkButton(
-                entry_frame,
-                text="Copy",
-                width=65,
-                height=30,
-                corner_radius=6,
-                font=ctk.CTkFont(size=10, weight="bold"),
-                fg_color=COLORS["accent"],
-                hover_color=COLORS["accent_light"],
-                text_color="#FFFFFF",
-                command=create_copy_command(index)
-            )
-            copy_button.grid(row=0, column=3, padx=12, pady=10, sticky="e")
-            
-            # Bind click events
-            def on_click(event, idx=index):
-                self.on_history_entry_click(idx)
-                
-            for widget in [entry_frame, time_label, text_label, info_label]:
-                widget.bind("<Button-1>", on_click)
-                
-            # Add tooltip with full text
-            ToolTip(entry_frame, f"Full text: {entry.text}")
-            ToolTip(copy_button, "Copy this entry to clipboard")
-            
-            self.history_entries.append(entry_frame)
-            
-        except Exception as e:
-            logging.getLogger(__name__).error(f"Failed to create history entry widget: {e}")
+            logging.getLogger(__name__).debug(f"Failed to refresh history display: {e}")
+    
+    def refresh_history_display_debounced(self, force_rebuild=False):
+        """Debounced version of refresh_history_display"""
+        # Cancel any pending update
+        if self.scheduled_history_update_id:
+            self.root.after_cancel(self.scheduled_history_update_id)
+        
+        # Schedule new update
+        self.scheduled_history_update_id = self.root.after(
+            self.history_update_debounce_ms,
+            lambda: self.refresh_history_display(force_rebuild)
+        )
 
     def on_history_entry_click(self, index):
-        """Handle history entry click"""
-        try:
-            # Update selection
-            old_selection = self.selected_history_index
-            self.selected_history_index = index
-            
-            # Update visual selection
-            if old_selection is not None and old_selection < len(self.history_entries):
-                self.history_entries[old_selection].configure(fg_color=("gray86", "gray20"))
-                
-            if index < len(self.history_entries):
-                self.history_entries[index].configure(fg_color=("gray78", "gray30"))
-                
-            # Update button states
-            self.update_history_button_states()
-            
-        except Exception as e:
-            logging.getLogger(__name__).error(f"Failed to handle history entry click: {e}")
+        """Handle history entry click (deprecated - history now in separate window)"""
+        pass
 
-    def on_history_search(self, event=None):
-        """Handle search text change"""
-        self.refresh_history_display(force_rebuild=True)
 
-    def on_history_filter_change(self, value):
-        """Handle filter change"""
-        self.refresh_history_display(force_rebuild=True)
-
-    def copy_history_entry_by_index(self, index):
-        """Copy history entry by index directly"""
-        try:
-            entries = self.get_filtered_history_entries()
-            
-            if 0 <= index < len(entries):
-                entry = entries[index]
-                success = self.ctx.clipboard_manager.copy_text(entry.text)
-                if success:
-                    self.update_status(f"Copied: {entry.short_text}")
-                else:
-                    self.update_status("Failed to copy to clipboard")
-            else:
-                self.update_status(f"Invalid entry index: {index}")
-        except Exception as e:
-            logging.getLogger(__name__).error(f"Failed to copy entry: {e}")
-            self.update_status(f"Failed to copy entry: {e}")
-
-    def copy_selected_history(self):
-        """Copy selected history entry to clipboard"""
-        try:
-            if self.selected_history_index is None:
-                return
-                
-            entries = self.get_filtered_history_entries()
-            if self.selected_history_index < len(entries):
-                entry = entries[self.selected_history_index]
-                success = self.ctx.clipboard_manager.copy_text(entry.text)
-                if success:
-                    self.update_status("Copied history entry to clipboard")
-                else:
-                    self.update_status("Failed to copy to clipboard")
-                
-        except Exception as e:
-            self.update_status(f"Failed to copy history entry: {e}")
-
-    def export_history(self):
-        """Export history to file"""
-        try:
-            if not self.ctx.state_manager.history_manager:
-                self.update_status("History is disabled")
-                return
-                
-            import tkinter.filedialog as fd
-            filename = fd.asksaveasfilename(
-                title="Export History",
-                defaultextension=".txt",
-                filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
-            )
-            
-            if filename:
-                success = self.ctx.state_manager.history_manager.export_to_text(filename)
-                if success:
-                    self.update_status(f"History exported to {filename}")
-                else:
-                    self.update_status("Failed to export history")
-                    
-        except Exception as e:
-            self.update_status(f"Failed to export history: {e}")
-
-    def clear_history(self):
-        """Clear all history"""
-        try:
-            if not self.ctx.state_manager.history_manager:
-                self.update_status("History is disabled")
-                return
-                
-            # Confirm dialog
-            import tkinter.messagebox as mb
-            result = mb.askyesno(
-                "Clear History",
-                "Are you sure you want to clear all transcription history?\nThis action cannot be undone.",
-                icon="warning"
-            )
-            
-            if result:
-                self.ctx.state_manager.history_manager.clear_history()
-                self.refresh_history_display(force_rebuild=True)
-                self.update_status("History cleared")
-                
-        except Exception as e:
-            self.update_status(f"Failed to clear history: {e}")
-
-    def update_history_button_states(self):
-        """Update history button states based on selection"""
-        try:
-            has_selection = self.selected_history_index is not None
-            if has_selection:
-                self._enable_button('copy_history_button', 'primary')
-            else:
-                self._disable_button('copy_history_button')
-            
-            has_entries = len(self.history_entries) > 0
-            if has_entries:
-                self._enable_button('export_history_button', 'success')
-                self._enable_button('clear_history_button', 'danger')
-            else:
-                self._disable_button('export_history_button')
-                self._disable_button('clear_history_button')
-                    
-        except Exception as e:
-            logging.getLogger(__name__).debug(f"Failed to update history button states: {e}")
 
     def on_history_updated(self):
-        """Callback when history is updated"""
+        """Callback when history is updated with rate limiting"""
         try:
-            # Schedule UI update in main thread with force rebuild for new entries
-            self.root.after(0, lambda: self.refresh_history_display(force_rebuild=True))
+            # Rate limit updates to avoid UI thrashing
+            current_time = time.time()
+            if current_time - self.last_history_update_time < 1.0:  # Min 1 second between updates
+                # Use debounced update if called too frequently
+                self.root.after(0, lambda: self.refresh_history_display_debounced(force_rebuild=True))
+            else:
+                # Update immediately if enough time has passed
+                self.last_history_update_time = current_time
+                self.root.after(0, lambda: self.refresh_history_display(force_rebuild=True))
         except Exception as e:
             logging.getLogger(__name__).debug(f"Failed to schedule history update: {e}")
 
     def add_logs_tooltips(self):
         """Add tooltips to logs section widgets"""
         try:
-            # Clear logs button tooltip
-            ToolTip(self.widgets['clear_logs_button'], 
-                   "Clear all log messages")
-            
             # Log output tooltip
             ToolTip(self.widgets['log_output'], 
                    "Application logs and status messages")
@@ -1438,28 +1512,34 @@ class LazyToTextUI:
     def _polling_loop(self):
         """Background status polling loop"""
         counter = 0
+        status_check_counter = 0
         while self.polling_running and not self.quitting_flag:
             try:
                 counter += 1
+                status_check_counter += 1
                 
-                # Poll less frequently if window is hidden
-                check_interval = 5 if self.window_visible else 20
+                # Poll less frequently - reduced UI load
+                # Check backend status: visible=10s, hidden=40s
+                check_interval = 5 if self.window_visible else 20  # multiplied by 2s sleep = 10s/40s
                 
-                if counter >= check_interval:
-                    counter = 0
+                if status_check_counter >= check_interval:
+                    status_check_counter = 0
                     self._update_backend_status()
                     
-                # Update Switch button state
+                # Update UI elements only when visible and less frequently
                 if self.window_visible:
-                    self.root.after(0, self.update_switch_button_state)
-                    # Update history display occasionally (less frequent to reduce flicker)
-                    if counter % 60 == 0:  # Every 30 seconds
+                    # Update switch button every 4 seconds instead of every 2
+                    if counter % 2 == 0:
+                        self.root.after(0, self.update_switch_button_state)
+                    
+                    # Update history display very rarely (every 60 seconds)
+                    if counter % 30 == 0:
                         self.root.after(0, self.refresh_history_display)
                     
             except Exception as e:
                 logging.getLogger(__name__).debug(f"Polling error: {e}")
                 
-            time.sleep(0.5)
+            time.sleep(2.0)  # Increased from 0.5s to 2s - 4x reduction in polling frequency
 
     def _update_backend_status(self):
         """Update backend status"""
@@ -1875,13 +1955,6 @@ class LazyToTextUI:
             self.root.after(0, lambda: self.update_status(f"Error stopping backend: {error_msg}"))
             self.root.after(0, self.update_backend_buttons_state)
 
-    def clear_logs(self):
-        """Clear logs"""
-        try:
-            self.widgets['log_output'].delete("1.0", "end")
-        except Exception as e:
-            logging.getLogger(__name__).warning(f"Error clearing logs: {e}")
-
     def hide_to_tray_manually(self):
         """Manual hide to tray"""
         try:
@@ -2047,6 +2120,13 @@ class LazyToTextUI:
         # Stop polling
         self.polling_running = False
         
+        # Cancel any pending UI updates
+        if self.scheduled_history_update_id:
+            try:
+                self.root.after_cancel(self.scheduled_history_update_id)
+            except Exception:
+                pass
+        
         # Clean up resources
         try:
             self.ctx.shutdown()
@@ -2059,9 +2139,9 @@ class LazyToTextUI:
         except Exception as e:
             logging.getLogger(__name__).error(f"Error stopping tray: {e}")
         
-        # Stop executor
+        # Stop executor gracefully with timeout
         try:
-            self.executor.shutdown(wait=False)
+            self.executor.shutdown(wait=True, timeout=5.0)
         except Exception as e:
             logging.getLogger(__name__).error(f"Error shutting down executor: {e}")
         

@@ -104,8 +104,8 @@ class DockerBackendManager:
             return "stopped"
         return st or "error"
 
-    def start(self) -> str:
-        """Start backend container. Creates container if missing.
+    def start(self, timeout: int = 30) -> str:
+        """Start backend container with timeout. Creates container if missing.
         Returns resulting status string (see module docstring)."""
         if not self.is_available():
             logger.warning("Docker daemon not available – cannot start backend")
@@ -121,8 +121,19 @@ class DockerBackendManager:
                 return "running"
             try:
                 container.start()
-                container.reload()
-                return "running" if container.status == "running" else "stopped"
+                
+                # Wait for container to be running with timeout
+                import time
+                start_time = time.time()
+                while time.time() - start_time < timeout:
+                    container.reload()
+                    if container.status == "running":
+                        return "running"
+                    time.sleep(0.5)
+                    
+                logger.warning(f"Container start timeout after {timeout}s")
+                return "stopped"
+                
             except DockerException as e:
                 logger.error(f"Failed to start container: {e}")
                 return "error"
@@ -167,7 +178,8 @@ class DockerBackendManager:
             logger.error(f"Failed to create/start container: {e}")
             return "error"
 
-    def stop(self) -> str:
+    def stop(self, timeout: int = 15) -> str:
+        """Stop container with configurable timeout."""
         if not self.is_available():
             return "error"
         container = self._get_container()
@@ -175,8 +187,20 @@ class DockerBackendManager:
             return "not_found"
         try:
             if container.status == "running":
-                logger.info("Stopping faster-whisper container...")
-                container.stop(timeout=10)
+                logger.info(f"Stopping faster-whisper container (timeout: {timeout}s)...")
+                container.stop(timeout=timeout)
+                
+                # Verify container stopped
+                import time
+                start_time = time.time()
+                while time.time() - start_time < timeout + 5:  # Extra 5s grace period
+                    container.reload()
+                    if container.status != "running":
+                        return "stopped"
+                    time.sleep(0.5)
+                    
+                logger.warning(f"Container stop timeout after {timeout}s")
+                
             container.reload()
             return "stopped" if container.status != "running" else "running"
         except DockerException as e:

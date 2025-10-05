@@ -79,22 +79,7 @@ You can create a standalone `LazyToText.exe` so end users do not need to install
 - [uv](https://github.com/astral-sh/uv) – handles dependency resolution and runs PyInstaller inside the project environment
 - Python 3.12 (x64) available (uv will create/manage the virtual environment automatically)
 
-### Fast One‑Shot Build (no spec)
-
-```powershell
-uv run pyinstaller -y --clean --name LazyToText `
-  --icon app\assets\tray_idle.ico `
-  --add-data "app\\assets;assets" `
-  --add-data "config.yaml;." `
-  --hidden-import customtkinter `
-  --hidden-import PIL._tkinter_finder `
-  --hidden-import pystray._win32 `
-  --hidden-import win32timezone `
-  --hidden-import global_hotkeys `
-  lazy-to-text-ui.py
-```
-
-### Recommended (Spec File)
+### Build Using Spec File
 
 A curated spec file `lazy_to_text.spec` is included. It bundles assets and the root `config.yaml`.
 
@@ -104,6 +89,18 @@ uv run pyinstaller lazy_to_text.spec
 ```
 
 Result: `dist\LazyToText\LazyToText.exe`
+
+### Quick Rebuild (Clean Build)
+
+To create a fresh build from scratch (removes old build artifacts):
+
+```powershell
+Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue; uv run pyinstaller lazy_to_text.spec
+```
+
+This command:
+1. Removes old `build/` and `dist/` directories
+2. Runs PyInstaller with the spec file to create a clean build
 
 ### PowerShell Helper Script
 
