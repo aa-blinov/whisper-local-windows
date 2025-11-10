@@ -153,7 +153,7 @@ The `config.yaml` file is created automatically on first run and stores all appl
 ```yaml
 whisper:
   backend_mode: local        # local or external
-  model: turbo               # base, small, medium, turbo, large-v3
+  model: large-v3            # base, small, medium, turbo, large-v3
   beam_size: 7               # 3-10 range
   language: ru               # Language code or "auto"
   local_url: http://localhost:10300

@@ -179,7 +179,7 @@ class AppContext:
             canonical = ALIAS_TO_MODEL[canonical_model]
         else:
             # It's a canonical name, convert to alias  
-            alias = alias_for(canonical_model) if canonical_model else 'turbo'
+            alias = alias_for(canonical_model) if canonical_model else 'large-v3'
             canonical = canonical_model
             
         self.engine = WhisperEngine(
@@ -213,7 +213,8 @@ class AppContext:
             clipboard_manager=self.clipboard_manager,
             config_manager=self.config_manager,
             system_tray=None,
-            audio_feedback=self.audio_feedback
+            audio_feedback=self.audio_feedback,
+            docker_backend_manager=None  # Will be set later by LazyToTextUI
         )
         self.hotkey_listener: HotkeyListener | None = None
         self._mutex_handle = None
@@ -639,6 +640,9 @@ class LazyToTextUI:
         # Initialize application context
         self.ctx = AppContext()
         self.docker_mgr = DockerBackendManager()
+        
+        # Set docker manager in state manager after initialization
+        self.ctx.state_manager.docker_backend_manager = self.docker_mgr
         
         # State flags
         self.quitting_flag = False

@@ -90,7 +90,11 @@ class HotkeyListener:
     def _start_hotkey_pressed(self):
         self.logger.info(f"Start hotkey pressed: {self.start_recording_hotkey}")
         if self.state_manager.get_current_state() == "idle":
-            self.state_manager.toggle_recording()
+            if self.state_manager.can_start_recording():
+                self.state_manager.toggle_recording()
+            else:
+                self.logger.info("Model is not ready yet. Please wait...", extra={'user_message': True})
+                self.logger.debug("Start hotkey ignored - model not ready")
         else:
             self.logger.debug("Start hotkey ignored - not idle")
 
@@ -106,7 +110,11 @@ class HotkeyListener:
         current = self.state_manager.get_current_state()
         if current == "idle":
             self.logger.info(f"Toggle hotkey pressed (start): {self.start_recording_hotkey}")
-            self.state_manager.toggle_recording()
+            if self.state_manager.can_start_recording():
+                self.state_manager.toggle_recording()
+            else:
+                self.logger.info("Model is not ready yet. Please wait...", extra={'user_message': True})
+                self.logger.debug("Toggle hotkey ignored - model not ready")
         elif current == "recording":
             self.logger.info(f"Toggle hotkey pressed (stop): {self.start_recording_hotkey}")
             self.state_manager.stop_recording(use_auto_enter=False)

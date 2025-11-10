@@ -6,7 +6,7 @@ services:
       - PUID=1000
       - PGID=1000
       - TZ=Etc/UTC
-      - WHISPER_MODEL=turbo
+      - WHISPER_MODEL=large-v3
       - WHISPER_BEAM=5
       - WHISPER_LANG=ru
     ports:

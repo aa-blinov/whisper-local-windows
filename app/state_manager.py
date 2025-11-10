@@ -19,7 +19,8 @@ class StateManager:
                  clipboard_manager: ClipboardManager,
                  config_manager: ConfigManager,
                  system_tray: Optional[SystemTray] = None,
-                 audio_feedback: Optional[AudioFeedback] = None):
+                 audio_feedback: Optional[AudioFeedback] = None,
+                 docker_backend_manager = None):
 
         self.audio_recorder = audio_recorder
         self.whisper_engine = whisper_engine
@@ -27,6 +28,7 @@ class StateManager:
         self.system_tray = OptionalComponent(system_tray)
         self.config_manager = config_manager
         self.audio_feedback = OptionalComponent(audio_feedback)
+        self.docker_backend_manager = docker_backend_manager
         
         # Initialize history manager
         from app.utils import get_project_logs_path
@@ -85,23 +87,33 @@ class StateManager:
         
         if not was_recording:
             current_state = self.get_current_state()
-            if self.can_start_recording():
+            can_start = self.can_start_recording()
+            self.logger.debug(f"toggle_recording: current_state={current_state}, can_start={can_start}")
+            
+            if can_start:
                 self._start_recording()
             else:
                 if self.is_processing:
                     self.logger.info("Still processing previous recording...", extra={'user_message': True})
                 elif self.is_model_loading:
                     self.logger.info("Still loading model...", extra={'user_message': True})
+                elif current_state == "idle" and self.docker_backend_manager:
+                    # If idle but can't record, likely model not ready
+                    self.logger.info("Model is not ready yet. Please wait...", extra={'user_message': True})
                 else:
                     self.logger.info(f"Cannot record while {current_state}...", extra={'user_message': True})
 
     def _start_recording(self):
+        self.logger.debug("_start_recording: attempting to start audio recorder")
         success = self.audio_recorder.start_recording()
         
         if success:
+            self.logger.debug("_start_recording: audio recorder started successfully, playing start sound")
             self.config_manager.print_stop_instructions_based_on_config()
             self.audio_feedback.play_start_sound()
             self.system_tray.update_state("recording")
+        else:
+            self.logger.debug("_start_recording: audio recorder failed to start")
     
     def _transcription_pipeline(self, audio_data, use_auto_enter: bool = False):
         try:
@@ -237,7 +249,27 @@ class StateManager:
     
     def can_start_recording(self) -> bool:
         with self._state_lock:
-            return not (self.is_processing or self.is_model_loading or self.audio_recorder.get_recording_status())
+            basic_check = not (self.is_processing or self.is_model_loading or self.audio_recorder.get_recording_status())
+            
+            # If basic checks fail, don't proceed
+            if not basic_check:
+                self.logger.debug(f"can_start_recording: basic_check failed (processing={self.is_processing}, model_loading={self.is_model_loading}, recording={self.audio_recorder.get_recording_status()})")
+                return False
+            
+            # Check if Docker backend is ready (model loaded)
+            if self.docker_backend_manager:
+                try:
+                    # Check if container is running and model is ready
+                    is_ready = self.docker_backend_manager.has_ready_log_line(r"Connection to .*10300 port .* succeeded!")
+                    self.logger.debug(f"can_start_recording: docker_backend check -> is_ready={is_ready}")
+                    return is_ready
+                except Exception as e:
+                    self.logger.debug(f"Failed to check Docker readiness: {e}")
+                    # If we can't check Docker status, fallback to basic checks
+                    return basic_check
+            
+            self.logger.debug("can_start_recording: no docker_backend_manager, returning basic_check=True")
+            return basic_check
     
     def get_current_state(self) -> str:
         with self._state_lock:

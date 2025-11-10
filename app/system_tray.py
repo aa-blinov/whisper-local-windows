@@ -148,7 +148,10 @@ class SystemTray:
             raise
 
     def _tray_toggle_recording(self, icon=None, item=None):
-        self.state_manager.toggle_recording()
+        if self.state_manager.can_start_recording() or self.state_manager.get_current_state() == "recording":
+            self.state_manager.toggle_recording()
+        else:
+            self.logger.info("Model is not ready yet. Please wait...", extra={'user_message': True})
 
     def _set_transcription_mode(self, auto_paste: bool):        
         self.state_manager.update_transcription_mode(auto_paste)

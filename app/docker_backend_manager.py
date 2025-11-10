@@ -49,7 +49,7 @@ class DockerBackendManager:
             "PUID": "1000",
             "PGID": "1000",
             "TZ": "Etc/UTC",
-            "WHISPER_MODEL": "turbo",
+            "WHISPER_MODEL": "large-v3",
             "WHISPER_BEAM": "5",
             "WHISPER_LANG": "ru",
         }
@@ -475,7 +475,7 @@ class DockerBackendManager:
         """Check if recent logs contain a line matching pattern (regex or literal).
         
         Only checks logs since the container's StartedAt time to avoid false positives
-        from previous container runs.
+        from previous container runs. Returns False if container is not running.
         """
         cli = self._client_or_none()
         if cli is None or not self.is_available():
@@ -484,9 +484,18 @@ class DockerBackendManager:
         if c is None:
             return False
         
-        # Get container start time to check only logs from current run
+        # Check if container is actually running
         try:
             c.reload()
+            if c.status != "running":
+                logger.debug(f"Container status is '{c.status}', not 'running' - returning False")
+                return False
+        except Exception as e:
+            logger.debug(f"Failed to check container status: {e}")
+            return False
+        
+        # Get container start time to check only logs from current run
+        try:
             started_at = c.attrs.get('State', {}).get('StartedAt')
             if started_at:
                 # Parse ISO 8601 timestamp (e.g., "2025-10-05T12:34:56.123456789Z")

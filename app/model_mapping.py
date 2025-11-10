@@ -22,7 +22,7 @@ ALIAS_TO_MODEL = {
     # "medium": "Systran/faster-whisper-medium",
     # "large-v1": "Systran/faster-whisper-large-v1",
     # "large-v2": "Systran/faster-whisper-large-v2",
-    # "large-v3": "Systran/faster-whisper-large-v3",
+    "large-v3": "Systran/faster-whisper-large-v3",
     # "large": "Systran/faster-whisper-large-v3",
     # "distil-large-v2": "Systran/faster-distil-whisper-large-v2",
     # "distil-medium.en": "Systran/faster-distil-whisper-medium.en",
@@ -30,7 +30,7 @@ ALIAS_TO_MODEL = {
     # "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
     # "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
     # "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
-    "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+    # "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
 }
 
 MODEL_TO_ALIAS = {}

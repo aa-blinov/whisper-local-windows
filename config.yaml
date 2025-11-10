@@ -1,6 +1,6 @@
 whisper:
   backend_mode: local
-  model: turbo
+  model: large-v3
   language: ru
   beam_size: 20
   local_url: http://localhost:10300
