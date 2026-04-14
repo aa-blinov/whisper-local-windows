@@ -291,6 +291,11 @@ class HistoryWindow:
         self.history_entries = []
         self.selected_history_index = None
         self.widgets = {}
+        # Cached list of entries currently shown in the tree (index-aligned
+        # with tree row iids) so copy_entry() does not re-query + re-filter.
+        self._filtered_entries: List = []
+        # After-id for search debouncing (see _schedule_refresh).
+        self._search_after_id = None
         
     def show(self):
         """Show history window"""
@@ -385,7 +390,7 @@ class HistoryWindow:
             placeholder_text_color=COLORS["text_muted"],
             font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"])
         )
-        self.widgets['search'].bind('<KeyRelease>', lambda e: self.refresh_history_display())
+        self.widgets['search'].bind('<KeyRelease>', lambda e: self._schedule_refresh())
         self.widgets['search'].pack(side="left", padx=(0, 12))
         
         # Filter
@@ -446,17 +451,175 @@ class HistoryWindow:
             border_color=COLORS["border"]
         )
         list_container.pack(fill="both", expand=True)
-        
-        # Scrollable frame for history entries
-        self.widgets['scrollable'] = ctk.CTkScrollableFrame(
-            list_container,
-            fg_color=COLORS["primary"],
-            corner_radius=8,
-            scrollbar_button_color=COLORS["accent"],
-            scrollbar_button_hover_color=COLORS["accent_light"]
+
+        # Use native ttk.Treeview for the entries list. CTk widgets are
+        # far too slow for large histories — ttk.Treeview handles thousands
+        # of rows without the per-row Canvas overhead CTk pays for rounded
+        # corners. Double-click copies the row; single-click updates the
+        # selected index used by _copy_selected().
+        from tkinter import ttk
+
+        # The tree_frame background is intentionally matched to the row
+        # colour so the 1px gap between the tree and the rounded
+        # list_container doesn't flash as a lighter strip.
+        tree_frame = tk.Frame(list_container, bg=COLORS["primary"], bd=0,
+                              highlightthickness=0)
+        tree_frame.pack(fill="both", expand=True, padx=14, pady=14)
+
+        style = ttk.Style(self.window)
+        # "clam" is the only built-in ttk theme on Windows that honours
+        # background/foreground colour configuration on Treeview and
+        # Scrollbar. "vista" (the default) ignores most colour options.
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        row_bg = COLORS["primary"]          # #1E1E1E
+        row_bg_alt = COLORS["secondary"]    # #2D2D30 — subtle zebra
+        header_bg = COLORS["surface"]       # #252526 — matches surrounding card
+        sel_bg = COLORS["accent"]           # #007ACC
+
+        # --- Treeview body --------------------------------------------
+        style.configure(
+            "History.Treeview",
+            background=row_bg,
+            fieldbackground=row_bg,
+            foreground=COLORS["text_primary"],
+            bordercolor=row_bg,
+            lightcolor=row_bg,
+            darkcolor=row_bg,
+            borderwidth=0,
+            relief="flat",
+            rowheight=30,
+            font=(FONTS["family_primary"], 10),
         )
-        self.widgets['scrollable'].pack(fill="both", expand=True, padx=12, pady=12)
-        
+        style.map(
+            "History.Treeview",
+            background=[("selected", sel_bg)],
+            foreground=[("selected", "#FFFFFF")],
+            # Kill the dotted focus rectangle clam draws by default.
+            bordercolor=[("focus", row_bg)],
+            lightcolor=[("focus", row_bg)],
+            darkcolor=[("focus", row_bg)],
+        )
+
+        # --- Treeview header ------------------------------------------
+        style.configure(
+            "History.Treeview.Heading",
+            background=header_bg,
+            foreground=COLORS["text_secondary"],
+            bordercolor=header_bg,
+            lightcolor=header_bg,
+            darkcolor=header_bg,
+            relief="flat",
+            borderwidth=0,
+            padding=(10, 8),
+            font=(FONTS["family_primary"], 10, "bold"),
+        )
+        style.map(
+            "History.Treeview.Heading",
+            background=[("active", COLORS["hover"]), ("pressed", COLORS["hover"])],
+            foreground=[("active", COLORS["text_primary"])],
+            relief=[("pressed", "flat"), ("active", "flat")],
+        )
+
+        # Remove the chunky clam borders ttk draws around the whole tree.
+        try:
+            style.layout(
+                "History.Treeview",
+                [("History.Treeview.treearea", {"sticky": "nswe"})],
+            )
+        except Exception:
+            pass
+
+        # --- Scrollbar (match accent colour) --------------------------
+        style.configure(
+            "History.Vertical.TScrollbar",
+            background=COLORS["secondary"],
+            troughcolor=row_bg,
+            bordercolor=row_bg,
+            arrowcolor=COLORS["text_muted"],
+            lightcolor=COLORS["secondary"],
+            darkcolor=COLORS["secondary"],
+            relief="flat",
+            borderwidth=0,
+            gripcount=0,
+            arrowsize=14,
+        )
+        style.map(
+            "History.Vertical.TScrollbar",
+            background=[("active", COLORS["accent"]), ("pressed", COLORS["accent_light"])],
+            arrowcolor=[("active", COLORS["text_primary"])],
+        )
+
+        columns = ("time", "text", "model", "language", "duration")
+        tree = ttk.Treeview(
+            tree_frame,
+            columns=columns,
+            show="headings",
+            style="History.Treeview",
+            selectmode="browse",
+        )
+        tree.heading("time", text="Time", anchor="w")
+        tree.heading("text", text="Text", anchor="w")
+        tree.heading("model", text="Model", anchor="w")
+        tree.heading("language", text="Lang", anchor="center")
+        tree.heading("duration", text="Duration", anchor="e")
+        tree.column("time", width=150, anchor="w", stretch=False)
+        tree.column("text", width=520, anchor="w", stretch=True)
+        tree.column("model", width=90, anchor="w", stretch=False)
+        tree.column("language", width=60, anchor="center", stretch=False)
+        tree.column("duration", width=80, anchor="e", stretch=False)
+
+        # Zebra striping — configure the two tags used by refresh_history_display.
+        tree.tag_configure("odd", background=row_bg)
+        tree.tag_configure("even", background=row_bg_alt)
+
+        vscroll = ttk.Scrollbar(
+            tree_frame,
+            orient="vertical",
+            command=tree.yview,
+            style="History.Vertical.TScrollbar",
+        )
+        tree.configure(yscrollcommand=vscroll.set)
+        vscroll.pack(side="right", fill="y")
+        tree.pack(side="left", fill="both", expand=True)
+
+        tree.bind("<<TreeviewSelect>>", self._on_tree_select)
+        tree.bind("<Double-1>", lambda e: self._copy_selected())
+        tree.bind("<Return>", lambda e: self._copy_selected())
+
+        self.widgets['tree'] = tree
+
+        # Small footer with row count + explicit Copy button so the action
+        # is discoverable even without knowing about double-click.
+        footer = ctk.CTkFrame(main_container, fg_color="transparent")
+        footer.pack(fill="x", pady=(8, 0))
+
+        self.widgets['count_label'] = ctk.CTkLabel(
+            footer,
+            text="",
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=11),
+            text_color=COLORS["text_muted"],
+        )
+        self.widgets['count_label'].pack(side="left")
+
+        self.widgets['copy_button'] = ctk.CTkButton(
+            footer,
+            text="Copy Selected",
+            command=self._copy_selected,
+            width=130,
+            height=30,
+            corner_radius=8,
+            font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_button"], weight=FONTS["weight_bold"]),
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_light"],
+            text_color="#FFFFFF",
+        )
+        self.widgets['copy_button'].pack(side="right")
+
+
     def get_filtered_entries(self):
         """Get filtered history entries"""
         try:
@@ -485,97 +648,93 @@ class HistoryWindow:
             logging.getLogger(__name__).error(f"Failed to get filtered entries: {e}")
             return []
     
-    def refresh_history_display(self):
-        """Refresh history display"""
+    def _schedule_refresh(self, delay_ms: int = 300):
+        """Debounced trigger for refresh_history_display.
+
+        Called from the search KeyRelease binding so typing doesn't rebuild
+        the whole tree on every keystroke. Cancels any previously scheduled
+        refresh and reschedules one `delay_ms` in the future.
+        """
         try:
-            # Clear existing entries
-            for widget in self.history_entries:
-                widget.destroy()
-            self.history_entries.clear()
+            if self._search_after_id is not None:
+                self.window.after_cancel(self._search_after_id)
+        except Exception:
+            pass
+        self._search_after_id = self.window.after(delay_ms, self._run_scheduled_refresh)
+
+    def _run_scheduled_refresh(self):
+        self._search_after_id = None
+        self.refresh_history_display()
+
+    def refresh_history_display(self):
+        """Refresh history display (ttk.Treeview-based, fast rebuild)."""
+        try:
+            tree = self.widgets.get('tree')
+            if tree is None:
+                return
+
+            # Clear tree
+            tree.delete(*tree.get_children())
             self.selected_history_index = None
-            
-            # Get filtered entries
+
+            # Get filtered entries and cache them for copy_entry()
             entries = self.get_filtered_entries()
-            
-            # Create widgets
+            self._filtered_entries = entries
+
+            # Bulk insert. Truncating text keeps the row height predictable
+            # and the insert itself cheap. Alternating tags give the zebra
+            # striping configured in create_ui().
             for i, entry in enumerate(entries):
-                self.create_entry_widget(entry, i)
-                
+                text = entry.text if len(entry.text) <= 200 else entry.text[:197] + "..."
+                # Treeview renders newlines poorly — collapse to spaces.
+                text = text.replace("\r", " ").replace("\n", " ")
+                tree.insert(
+                    "",
+                    "end",
+                    iid=str(i),
+                    values=(
+                        entry.datetime_str,
+                        text,
+                        entry.model,
+                        entry.language,
+                        f"{entry.duration:.1f}s",
+                    ),
+                    tags=("even" if i % 2 == 0 else "odd",),
+                )
+
+            # Update footer count label
+            count_label = self.widgets.get('count_label')
+            if count_label is not None:
+                count_label.configure(text=f"{len(entries)} entries")
+
         except Exception as e:
             logging.getLogger(__name__).error(f"Failed to refresh history: {e}")
-    
-    def create_entry_widget(self, entry, index):
-        """Create widget for single entry"""
+
+    def _on_tree_select(self, _event=None):
+        """Track selected row index so _copy_selected() knows what to copy."""
         try:
-            entry_frame = ctk.CTkFrame(
-                self.widgets['scrollable'],
-                fg_color=COLORS["surface"],
-                corner_radius=10,
-                border_width=1,
-                border_color=COLORS["border"]
-            )
-            entry_frame.pack(fill="x", padx=6, pady=4)
-            
-            entry_frame.grid_columnconfigure(1, weight=1)
-            
-            # Time
-            time_label = ctk.CTkLabel(
-                entry_frame,
-                text=entry.datetime_str,
-                width=140,
-                font=ctk.CTkFont(size=11, weight="normal"),
-                text_color=COLORS["text_muted"]
-            )
-            time_label.grid(row=0, column=0, padx=12, pady=10, sticky="w")
-            
-            # Text
-            text_label = ctk.CTkLabel(
-                entry_frame,
-                text=entry.text if len(entry.text) <= 100 else entry.text[:97] + "...",
-                font=ctk.CTkFont(family=FONTS["family_primary"], size=FONTS["size_body"]),
-                text_color=COLORS["text_primary"],
-                anchor="w",
-                wraplength=600
-            )
-            text_label.grid(row=0, column=1, padx=12, pady=10, sticky="ew")
-            
-            # Info
-            info_text = f"{entry.model} • {entry.language} • {entry.duration:.1f}s"
-            info_label = ctk.CTkLabel(
-                entry_frame,
-                text=info_text,
-                font=ctk.CTkFont(size=10, weight="normal"),
-                text_color=COLORS["text_secondary"],
-                width=150
-            )
-            info_label.grid(row=0, column=2, padx=12, pady=10, sticky="e")
-            
-            # Copy button
-            copy_button = ctk.CTkButton(
-                entry_frame,
-                text="Copy",
-                width=70,
-                height=30,
-                corner_radius=6,
-                font=ctk.CTkFont(size=10, weight="bold"),
-                fg_color=COLORS["accent"],
-                hover_color=COLORS["accent_light"],
-                text_color="#FFFFFF",
-                command=lambda idx=index: self.copy_entry(idx)
-            )
-            copy_button.grid(row=0, column=3, padx=12, pady=10)
-            
-            self.history_entries.append(entry_frame)
-            
+            tree = self.widgets.get('tree')
+            if tree is None:
+                return
+            sel = tree.selection()
+            if not sel:
+                self.selected_history_index = None
+                return
+            try:
+                self.selected_history_index = int(sel[0])
+            except ValueError:
+                self.selected_history_index = None
         except Exception as e:
-            logging.getLogger(__name__).error(f"Failed to create entry widget: {e}")
-    
-    def copy_entry(self, index):
-        """Copy entry to clipboard"""
+            logging.getLogger(__name__).debug(f"Tree select failed: {e}")
+
+    def _copy_selected(self):
+        """Copy currently selected entry to clipboard."""
+        idx = self.selected_history_index
+        if idx is None:
+            return
         try:
-            entries = self.get_filtered_entries()
-            if 0 <= index < len(entries):
-                entry = entries[index]
+            if 0 <= idx < len(self._filtered_entries):
+                entry = self._filtered_entries[idx]
                 success = self.parent_ui.ctx.clipboard_manager.copy_text(entry.text)
                 if success:
                     logging.getLogger(__name__).info("Copied to clipboard", extra={'user_message': True})
@@ -856,6 +1015,95 @@ class LazyToTextUI:
                 logging.getLogger(__name__).warning(f"System tray init failed: {e}")
                 self.system_tray = None
 
+    def _install_smooth_scroll(self, scrollable_frame):
+        """Replace CTkScrollableFrame's instant canvas scroll with an eased
+        animation.
+
+        Why: CTkScrollableFrame's default mouse-wheel handler calls
+        `canvas.yview_scroll(±3, "units")` per wheel notch. Each call
+        forces Tk to repaint the entire canvas, and on Windows DWM that
+        produces visible tearing/stepping for large panels.
+
+        How: we monkey-patch `canvas.yview_scroll` so that when it's
+        called with units (the mouse-wheel path), it instead sets an
+        animation target and schedules small per-frame interpolation
+        steps via `after(16, ...)` (~60 fps). Direct scrollbar drags
+        still work because they call `canvas.yview("moveto", ...)`,
+        which we don't touch.
+        """
+        try:
+            canvas = getattr(scrollable_frame, "_parent_canvas", None)
+            if canvas is None:
+                return
+
+            # Remove the focus highlight border — it flashes on scroll.
+            try:
+                canvas.configure(highlightthickness=0, bd=0)
+            except Exception:
+                pass
+
+            state = {
+                "target_top": None,  # desired top fraction
+                "anim_id": None,
+                "orig": canvas.yview_scroll,
+            }
+
+            def _step():
+                state["anim_id"] = None
+                target = state["target_top"]
+                if target is None:
+                    return
+                try:
+                    cur_top, cur_bot = canvas.yview()
+                except Exception:
+                    return
+                view_size = max(cur_bot - cur_top, 0.0001)
+                max_top = max(0.0, 1.0 - view_size)
+                target = max(0.0, min(max_top, target))
+
+                diff = target - cur_top
+                # Snap when close enough — avoids infinite micro-stepping.
+                if abs(diff) < 0.0015:
+                    try:
+                        canvas.yview_moveto(target)
+                    except Exception:
+                        pass
+                    state["target_top"] = None
+                    return
+
+                # Ease-out: move 30% of the remaining distance per frame.
+                new_top = cur_top + diff * 0.30
+                try:
+                    canvas.yview_moveto(new_top)
+                except Exception:
+                    return
+                state["anim_id"] = canvas.after(16, _step)
+
+            def smooth_yview_scroll(number, what):
+                # Only intercept the "units" path (mouse wheel / arrow keys).
+                # Let "pages" and anything else fall through unchanged.
+                if what != "units":
+                    try:
+                        return state["orig"](number, what)
+                    except Exception:
+                        return None
+                try:
+                    cur_top, cur_bot = canvas.yview()
+                except Exception:
+                    return None
+                view_size = max(cur_bot - cur_top, 0.0001)
+                # Each "unit" of wheel-delta ≈ 5% of viewport height.
+                step = view_size * 0.05 * float(number)
+                base = state["target_top"] if state["target_top"] is not None else cur_top
+                state["target_top"] = base + step
+                if state["anim_id"] is None:
+                    _step()
+                return None
+
+            canvas.yview_scroll = smooth_yview_scroll
+        except Exception as e:
+            logging.getLogger(__name__).debug(f"Smooth scroll install failed: {e}")
+
     def _stop_scroll_propagation(self, scrollable_widget):
         """Stop scroll events from propagating to parent scrollable frame.
         
@@ -914,14 +1162,25 @@ class LazyToTextUI:
         main_container = ctk.CTkFrame(self.root, fg_color="transparent")
         main_container.pack(fill="both", expand=True, padx=24, pady=20)
         
-        # Create main scrollable frame for better UX with large content
+        # Create main scrollable frame for better UX with large content.
+        # NOTE: fg_color MUST be an explicit colour (not "transparent") —
+        # CTkScrollableFrame is a Canvas under the hood, and a transparent
+        # fill forces CTk to composite the parent chain on every scroll
+        # step, which is the primary source of the tearing/flicker users
+        # see on a fast mouse-wheel scroll. An opaque background lets the
+        # Canvas blit straight to screen.
         main_frame = ctk.CTkScrollableFrame(
-            main_container, 
-            fg_color="transparent",
+            main_container,
+            fg_color=COLORS["primary"],
             scrollbar_button_color=COLORS["accent"],
-            scrollbar_button_hover_color=COLORS["hover"]
+            scrollbar_button_hover_color=COLORS["hover"],
         )
         main_frame.pack(fill="both", expand=True)
+        # Install smooth-scroll interpolation on the underlying canvas.
+        # Default CTk mousewheel handler jumps 3 units per notch which
+        # causes visible stepping/tearing through Windows DWM. We redirect
+        # those calls into an eased animation.
+        self._install_smooth_scroll(main_frame)
         
         # Model section
         self.create_model_section(main_frame)
@@ -1847,9 +2106,11 @@ class LazyToTextUI:
                 
                 if status_check_counter >= check_interval:
                     status_check_counter = 0
+                    # _update_backend_status() now collects all Docker data
+                    # once and schedules a single _apply_backend_state() on
+                    # the UI thread — no separate refresh_status_panel()
+                    # round-trip needed here.
                     self._update_backend_status()
-                    # Refresh status panel to show Docker/Container status
-                    self.root.after(0, self.refresh_status_panel)
                     
                 # Update UI elements only when visible and less frequently
                 if self.window_visible:
@@ -1867,72 +2128,227 @@ class LazyToTextUI:
             time.sleep(2.0)  # Increased from 0.5s to 2s - 4x reduction in polling frequency
 
     def _update_backend_status(self):
-        """Update backend status"""
+        """Collect backend status on the worker thread, then apply to UI.
+
+        All Docker / health-check I/O happens here exactly once per tick.
+        The result is packed into a plain dict and dispatched via a single
+        root.after(0, ...) to _apply_backend_state(), which touches only
+        Tk widgets — no Docker calls from the UI thread.
+
+        This replaces the old path that fanned out 3–5 after(0) callbacks
+        and performed ~16 redundant Docker queries per tick (is_available,
+        get_health_and_status, has_ready_log_line, get_container_details
+        were each re-run multiple times via refresh_status_panel()).
+        """
         try:
+            state: Dict[str, Any] = {'mode': self.ctx.backend_mode}
+
             if self.ctx.backend_mode == 'local':
-                container_status, _health_ok = self.docker_mgr.get_health_and_status(self.ctx.engine.health_check)
+                # Gather everything up-front — each call at most once.
                 docker_available = self.docker_mgr.is_available()
+                container_status = None
+                ready = False
+                container_details = None
+                container_model = None
 
-                self.root.after(0, lambda: self.update_backend_buttons_state())
-
-                if not docker_available:
-                    self.root.after(0, lambda: self._update_server_status("Server status: not running (docker unavailable)", "red"))
-                elif container_status == 'running':
-                    # Consider service 'running' only when readiness log line present
+                if docker_available:
                     try:
-                        ready = self.docker_mgr.has_ready_log_line(r"Connection to .*10300 port .* succeeded!")
+                        container_status, _health_ok = self.docker_mgr.get_health_and_status(
+                            self.ctx.engine.health_check
+                        )
                     except Exception:
-                        ready = False
-                    if ready:
-                        self.root.after(0, lambda: self._update_server_status("Server status: running", "green"))
-                    else:
-                        self.root.after(0, lambda: self._update_server_status("Server status: waiting", "orange"))
+                        container_status = 'error'
 
-                    # Update container model information (optional; color matches status)
-                    container_model = self.docker_mgr.get_container_model_info(self.ctx.engine)
-                    if container_model:
-                        canonical_name = ALIAS_TO_MODEL.get(container_model, container_model)
-                        display_text = f"Container model: {container_model} ({canonical_name})"
-                        self.root.after(0, lambda: self._update_container_model(display_text, "green" if ready else "orange"))
-                    else:
-                        self.root.after(0, lambda: self._update_container_model("Container model: unknown", "gray"))
-                elif container_status in ('stopped', 'not_found'):
-                    self.root.after(0, lambda: self._update_server_status("Server status: not running", "gray"))
-                    self.root.after(0, lambda: self._update_container_model("Container model: -", "gray"))
-                else:
-                    self.root.after(0, lambda: self._update_server_status("Server status: error", "red"))
-                    self.root.after(0, lambda: self._update_container_model("Container model: error", "red"))
+                    try:
+                        container_details = self.docker_mgr.get_container_details()
+                    except Exception:
+                        container_details = None
+
+                    if container_status == 'running':
+                        try:
+                            ready = self.docker_mgr.has_ready_log_line(
+                                r"Connection to .*10300 port .* succeeded!"
+                            )
+                        except Exception:
+                            ready = False
+
+                        try:
+                            container_model = self.docker_mgr.get_container_model_info(self.ctx.engine)
+                        except Exception:
+                            container_model = None
+
+                state.update({
+                    'docker_available': docker_available,
+                    'container_status': container_status,
+                    'ready': ready,
+                    'container_details': container_details,
+                    'container_model': container_model,
+                })
             else:
-                # External mode
+                # External mode — single health probe.
                 try:
-                    ok = self.ctx.engine.health_check()
+                    server_ok = self.ctx.engine.health_check()
                 except Exception:
-                    ok = False
-                
-                if ok:
-                    self.root.after(0, lambda: self._update_server_status("Server status: running", "green"))
-                else:
-                    self.root.after(0, lambda: self._update_server_status("Server status: error", "red"))
-                    
+                    server_ok = False
+                try:
+                    external_url = self.ctx.config_manager.get_setting('whisper', 'external_url')
+                except Exception:
+                    external_url = ""
+                state.update({
+                    'server_ok': server_ok,
+                    'external_url': external_url,
+                })
+
+            # Single UI hop — one after(0), one widget-update pass.
+            self.root.after(0, self._apply_backend_state, state)
+
         except Exception as e:
             logging.getLogger(__name__).debug(f"Backend status update error: {e}")
 
-    def _update_server_status(self, text: str, color: str):
-        """Update server status in UI"""
+    def _apply_backend_state(self, state: Dict[str, Any]):
+        """Apply a pre-collected backend state dict to all UI widgets.
+
+        Runs on the Tk main thread. Performs NO Docker or network I/O —
+        every value it needs is already in `state`. This method is the
+        single point that reconciles server_status label, container_model
+        label, docker/container indicators, details panels, and backend
+        buttons in one pass.
+        """
         try:
-            self.widgets['server_status'].configure(text=text, text_color=color)
-            # Refresh status panel if exists
-            self.refresh_status_panel()
+            if state.get('mode') == 'local':
+                docker_available = state.get('docker_available', False)
+                container_status = state.get('container_status')
+                ready = state.get('ready', False)
+                details = state.get('container_details')
+                container_model = state.get('container_model')
+
+                # Reuse the already-fetched Docker state for button update —
+                # no extra Docker calls from the UI thread.
+                self.update_backend_buttons_state(
+                    container_status=container_status,
+                    docker_available=docker_available,
+                )
+
+                # --- Server status label -------------------------------
+                if not docker_available:
+                    self._set_label('server_status',
+                                    "Server status: not running (docker unavailable)", "red")
+                elif container_status == 'running':
+                    if ready:
+                        self._set_label('server_status', "Server status: running", "green")
+                    else:
+                        self._set_label('server_status', "Server status: waiting", "orange")
+                elif container_status in ('stopped', 'not_found'):
+                    self._set_label('server_status', "Server status: not running", "gray")
+                else:
+                    self._set_label('server_status', "Server status: error", "red")
+
+                # --- Container model label -----------------------------
+                if docker_available and container_status == 'running':
+                    if container_model:
+                        canonical_name = ALIAS_TO_MODEL.get(container_model, container_model)
+                        display_text = f"Container model: {container_model} ({canonical_name})"
+                        self._set_label('container_model', display_text,
+                                        "green" if ready else "orange")
+                    else:
+                        self._set_label('container_model', "Container model: unknown", "gray")
+                elif container_status in ('stopped', 'not_found'):
+                    self._set_label('container_model', "Container model: -", "gray")
+                elif docker_available:
+                    self._set_label('container_model', "Container model: error", "red")
+                else:
+                    self._set_label('container_model', "Container model: -", "gray")
+
+                # --- Docker indicator + details ------------------------
+                if self.widgets.get('docker_status_indicator'):
+                    self.widgets['docker_status_indicator'].configure(
+                        text_color='green' if docker_available else 'red'
+                    )
+                if self.widgets.get('docker_details'):
+                    self.widgets['docker_details'].configure(
+                        text="Docker Desktop available" if docker_available
+                        else "Docker Desktop not running"
+                    )
+
+                # --- Container indicator + details ---------------------
+                if self.widgets.get('container_status_indicator'):
+                    if not docker_available:
+                        indicator_color = 'gray'
+                    elif container_status == 'running' and ready:
+                        indicator_color = 'green'
+                    elif container_status == 'running':
+                        indicator_color = 'orange'
+                    elif container_status in ('stopped', 'not_found'):
+                        indicator_color = 'gray'
+                    else:
+                        indicator_color = 'red'
+                    self.widgets['container_status_indicator'].configure(text_color=indicator_color)
+
+                if self.widgets.get('container_details'):
+                    if not docker_available:
+                        detail_text = "Docker required"
+                    elif details:
+                        lines = []
+                        cid = details.get('short_id')
+                        cname = details.get('name')
+                        cimage = details.get('image')
+                        if cid:
+                            lines.append(f"ID: {cid}")
+                        if cname:
+                            lines.append(f"Name: {cname}")
+                        if cimage:
+                            lines.append(f"Image: {cimage}")
+                        if container_status == 'running':
+                            lines.append("Status: ready" if ready else "Status: waiting")
+                        else:
+                            lines.append(f"Status: {container_status}")
+                        detail_text = "\n".join(lines) if lines else f"Status: {container_status}"
+                    else:
+                        detail_text = "No container"
+                    self.widgets['container_details'].configure(text=detail_text)
+
+            else:
+                # External mode
+                server_ok = state.get('server_ok', False)
+                external_url = state.get('external_url', "")
+
+                if server_ok:
+                    self._set_label('server_status', "Server status: running", "green")
+                else:
+                    self._set_label('server_status', "Server status: error", "red")
+
+                if self.widgets.get('server_status_indicator'):
+                    self.widgets['server_status_indicator'].configure(
+                        text_color='green' if server_ok else 'red'
+                    )
+                if self.widgets.get('server_details'):
+                    self.widgets['server_details'].configure(
+                        text=f"Connected to {external_url}" if server_ok else "Server unreachable"
+                    )
+                if self.widgets.get('model_status_indicator'):
+                    self.widgets['model_status_indicator'].configure(
+                        text_color='green' if server_ok else 'gray'
+                    )
+
+        except Exception as e:
+            logging.getLogger(__name__).debug(f"Failed to apply backend state: {e}")
+
+    def _set_label(self, key: str, text: str, color: str):
+        """Helper: configure a named label widget if it exists."""
+        try:
+            w = self.widgets.get(key)
+            if w is not None:
+                w.configure(text=text, text_color=color)
         except Exception:
             pass
 
+    def _update_server_status(self, text: str, color: str):
+        """Update server status label (kept for any external callers)."""
+        self._set_label('server_status', text, color)
+
     def _update_container_model(self, text: str, color: str):
-        """Update container model information in UI"""
-        try:
-            self.widgets['container_model'].configure(text=text, text_color=color)
-            self.refresh_status_panel()
-        except Exception:
-            pass
+        """Update container model label (kept for any external callers)."""
+        self._set_label('container_model', text, color)
 
     # Event handlers
     def on_backend_mode_change(self, value):
@@ -2064,19 +2480,27 @@ class LazyToTextUI:
         except Exception as e:
             logging.getLogger(__name__).debug(f"Error updating switch button state: {e}")
 
-    def update_backend_buttons_state(self):
-        """Update backend buttons state"""
+    def update_backend_buttons_state(self, container_status=None, docker_available=None):
+        """Update backend buttons state.
+
+        When called from the hot polling path (_apply_backend_state), the
+        caller already has fresh Docker status in hand and passes it in —
+        no extra Docker round-trips on the UI thread. When called from
+        button handlers / user actions, args are omitted and we fall back
+        to querying Docker directly (acceptable: one-off, user-triggered).
+        """
         if self.ctx.backend_mode != 'local':
             return
-        
+
         # Skip update if operation in progress (prevents flickering)
         if self.backend_operation_in_progress:
             return
-            
+
         try:
-            container_status, _ = self.docker_mgr.get_health_and_status(self.ctx.engine.health_check)
-            docker_available = self.docker_mgr.is_available()
-            
+            if container_status is None or docker_available is None:
+                container_status, _ = self.docker_mgr.get_health_and_status(self.ctx.engine.health_check)
+                docker_available = self.docker_mgr.is_available()
+
             if not docker_available:
                 self._disable_button('start_backend_button')
                 self._disable_button('stop_backend_button')
