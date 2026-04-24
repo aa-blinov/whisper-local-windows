@@ -32,7 +32,7 @@ dependencies = [
 ]
 
 [project.scripts]
-lazy-to-text-ui = "app.ui_tkinter:main"
+lazy-to-text-ui = "app.gui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
