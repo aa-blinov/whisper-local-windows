@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol
 
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QApplication
 
+from app.gui.controllers.backend_status_poller import BackendStatusPoller
 from app.gui.main_window import MainWindow
 from app.model_mapping import alias_for, get_model
 
@@ -31,14 +32,18 @@ class AppController(QObject):
         config: _ConfigLike,
         window: MainWindow,
         history: Optional[_HistoryLike] = None,
+        backend_status_fetcher: Optional[Callable[[], str]] = None,
     ) -> None:
         super().__init__(parent=window)
         self._config = config
         self._window = window
         self._history = history
+        self._poller: Optional[BackendStatusPoller] = None
         self._wire_models()
         self._wire_shortcuts()
         self._wire_history()
+        if backend_status_fetcher is not None:
+            self._wire_backend_status(backend_status_fetcher)
 
     def _wire_models(self) -> None:
         view = self._window.models_view
@@ -108,3 +113,8 @@ class AppController(QObject):
 
     def _on_history_copy(self, text: str) -> None:
         QApplication.clipboard().setText(text)
+
+    def _wire_backend_status(self, fetcher: Callable[[], str]) -> None:
+        self._poller = BackendStatusPoller(fetcher=fetcher, parent=self)
+        self._poller.status_changed.connect(self._window.topbar.set_backend_status)
+        self._poller.start()

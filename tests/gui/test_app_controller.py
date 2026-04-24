@@ -311,3 +311,36 @@ def test_controller_works_without_history_manager(qtbot):
     AppController(config=config, window=window)  # no history arg
 
     assert window.history_view._source_model.rowCount() == 0
+
+
+# ---- Backend status poller wiring -------------------------------------------
+
+
+def test_controller_drives_topbar_status_from_fetcher(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+
+    AppController(
+        config=config,
+        window=window,
+        backend_status_fetcher=lambda: "running",
+    )
+
+    assert window.topbar._status_pill.property("status") == "running"
+
+
+def test_controller_without_backend_fetcher_leaves_status_unknown(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+
+    AppController(config=config, window=window)
+
+    assert window.topbar._status_pill.property("status") == "unknown"

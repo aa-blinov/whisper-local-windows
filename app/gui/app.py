@@ -18,6 +18,7 @@ def build_application(
     theme: str = "dark",
     config: Optional[Any] = None,
     history: Optional[Any] = None,
+    backend_status_fetcher: Optional[Any] = None,
     install_logs: bool = False,
 ) -> Tuple[QApplication, MainWindow]:
     app = QApplication.instance()
@@ -31,12 +32,18 @@ def build_application(
         bridge.line_received.connect(window.logs_view.append_line)
         bridge.install()
     if config is not None:
-        AppController(config=config, window=window, history=history)
+        AppController(
+            config=config,
+            window=window,
+            history=history,
+            backend_status_fetcher=backend_status_fetcher,
+        )
     return app, window
 
 
 def main() -> int:
     from app.config_manager import ConfigManager
+    from app.docker_backend_manager import DockerBackendManager
     from app.history_manager import HistoryManager
 
     config = ConfigManager()
@@ -44,9 +51,11 @@ def main() -> int:
     history = HistoryManager(
         max_entries=int(history_cfg.get("max_entries", 1000)),
     )
+    docker = DockerBackendManager()
     app, window = build_application(
         config=config,
         history=history,
+        backend_status_fetcher=docker.status,
         install_logs=True,
     )
     window.show()
