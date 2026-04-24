@@ -1,0 +1,150 @@
+"""Tests for the extended model registry."""
+
+import pytest
+
+
+# ---- ModelInfo dataclass ----------------------------------------------------
+
+
+def test_model_info_exposes_required_fields():
+    from app.model_mapping import ModelInfo
+
+    info = ModelInfo(
+        alias="large-v3",
+        canonical="Systran/faster-whisper-large-v3",
+        display_name="Large v3",
+        size_mb=3000,
+        vram_gb=10.0,
+        speed="slow",
+        quality="excellent",
+        languages="multilingual",
+        description="Highest-quality multilingual model.",
+    )
+    assert info.alias == "large-v3"
+    assert info.canonical == "Systran/faster-whisper-large-v3"
+    assert info.display_name == "Large v3"
+    assert info.size_mb == 3000
+    assert info.vram_gb == 10.0
+    assert info.speed == "slow"
+    assert info.quality == "excellent"
+    assert info.languages == "multilingual"
+    assert info.description
+
+
+def test_model_info_rejects_invalid_speed():
+    from app.model_mapping import ModelInfo
+
+    with pytest.raises(ValueError):
+        ModelInfo(
+            alias="x",
+            canonical="x",
+            display_name="X",
+            size_mb=1,
+            vram_gb=0.1,
+            speed="warp",  # invalid
+            quality="good",
+            languages="multilingual",
+            description="",
+        )
+
+
+def test_model_info_rejects_invalid_quality():
+    from app.model_mapping import ModelInfo
+
+    with pytest.raises(ValueError):
+        ModelInfo(
+            alias="x",
+            canonical="x",
+            display_name="X",
+            size_mb=1,
+            vram_gb=0.1,
+            speed="fast",
+            quality="perfect",  # invalid
+            languages="multilingual",
+            description="",
+        )
+
+
+def test_model_info_is_frozen():
+    from app.model_mapping import ModelInfo
+
+    info = ModelInfo(
+        alias="x",
+        canonical="x",
+        display_name="X",
+        size_mb=1,
+        vram_gb=0.1,
+        speed="fast",
+        quality="good",
+        languages="multilingual",
+        description="",
+    )
+    with pytest.raises((AttributeError, Exception)):
+        info.alias = "y"  # type: ignore[misc]
+
+
+# ---- Registry ---------------------------------------------------------------
+
+
+def test_registry_contains_core_models():
+    from app.model_mapping import MODELS, aliases
+
+    expected = {"tiny", "base", "small", "medium", "large-v3"}
+    assert expected.issubset(set(aliases()))
+    assert len(MODELS) == len(aliases())
+
+
+def test_registry_preserves_order_between_models_and_aliases():
+    from app.model_mapping import MODELS, aliases
+
+    assert [m.alias for m in MODELS] == aliases()
+
+
+def test_get_model_returns_info_by_alias():
+    from app.model_mapping import ModelInfo, get_model
+
+    info = get_model("large-v3")
+    assert isinstance(info, ModelInfo)
+    assert info.alias == "large-v3"
+    assert info.canonical == "Systran/faster-whisper-large-v3"
+
+
+def test_get_model_raises_on_unknown_alias():
+    from app.model_mapping import get_model
+
+    with pytest.raises(KeyError):
+        get_model("not-a-model")
+
+
+# ---- Backward compatibility -------------------------------------------------
+
+
+def test_alias_to_model_derived_from_registry():
+    from app.model_mapping import ALIAS_TO_MODEL, MODELS
+
+    for m in MODELS:
+        assert ALIAS_TO_MODEL[m.alias] == m.canonical
+
+
+def test_canonical_for_returns_canonical_for_known_alias():
+    from app.model_mapping import canonical_for
+
+    assert canonical_for("large-v3") == "Systran/faster-whisper-large-v3"
+
+
+def test_canonical_for_passes_through_unknown_names():
+    from app.model_mapping import canonical_for
+
+    assert canonical_for("custom/model-id") == "custom/model-id"
+
+
+def test_alias_for_returns_alias_for_known_canonical():
+    from app.model_mapping import alias_for
+
+    assert alias_for("Systran/faster-whisper-large-v3") == "large-v3"
+
+
+def test_alias_for_passes_through_unknown_canonicals():
+    from app.model_mapping import alias_for
+
+    assert alias_for("unknown/model") == "unknown/model"
