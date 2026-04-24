@@ -223,3 +223,91 @@ def test_controller_clears_topbar_model_when_unknown(qtbot):
     AppController(config=config, window=window)
 
     assert "no model" in window.topbar._model_pill.text().lower()
+
+
+# ---- History ↔ manager ------------------------------------------------------
+
+
+class FakeHistoryEntry:
+    def __init__(self, text):
+        self.timestamp = 0.0
+        self.text = text
+        self.duration = 1.0
+        self.model = "large-v3"
+        self.language = "ru"
+        self.datetime_str = "00:00:00"
+        self.short_text = text[:50]
+
+
+class FakeHistory:
+    def __init__(self, entries=None):
+        self._entries = list(entries or [])
+        self.cleared = False
+
+    def get_entries(self):
+        return list(self._entries)
+
+    def clear_history(self):
+        self._entries.clear()
+        self.cleared = True
+
+
+def test_controller_populates_history_view_from_manager(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([FakeHistoryEntry("a"), FakeHistoryEntry("b")])
+
+    AppController(config=config, window=window, history=history)
+
+    table_model = window.history_view._source_model
+    assert table_model.rowCount() == 2
+
+
+def test_controller_clears_history_through_manager(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([FakeHistoryEntry("a")])
+
+    AppController(config=config, window=window, history=history)
+    window.history_view.clear_requested.emit()
+
+    assert history.cleared is True
+    assert window.history_view._source_model.rowCount() == 0
+
+
+def test_controller_copy_writes_to_clipboard(qtbot):
+    from PySide6.QtWidgets import QApplication
+
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([FakeHistoryEntry("abc")])
+
+    AppController(config=config, window=window, history=history)
+    window.history_view.copy_requested.emit("abc")
+
+    assert QApplication.clipboard().text() == "abc"
+
+
+def test_controller_works_without_history_manager(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+
+    AppController(config=config, window=window)  # no history arg
+
+    assert window.history_view._source_model.rowCount() == 0

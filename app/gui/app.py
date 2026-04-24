@@ -17,6 +17,7 @@ def build_application(
     argv: Optional[List[str]] = None,
     theme: str = "dark",
     config: Optional[Any] = None,
+    history: Optional[Any] = None,
     install_logs: bool = False,
 ) -> Tuple[QApplication, MainWindow]:
     app = QApplication.instance()
@@ -30,15 +31,24 @@ def build_application(
         bridge.line_received.connect(window.logs_view.append_line)
         bridge.install()
     if config is not None:
-        AppController(config=config, window=window)
+        AppController(config=config, window=window, history=history)
     return app, window
 
 
 def main() -> int:
     from app.config_manager import ConfigManager
+    from app.history_manager import HistoryManager
 
     config = ConfigManager()
-    app, window = build_application(config=config, install_logs=True)
+    history_cfg = config.get_history_config()
+    history = HistoryManager(
+        max_entries=int(history_cfg.get("max_entries", 1000)),
+    )
+    app, window = build_application(
+        config=config,
+        history=history,
+        install_logs=True,
+    )
     window.show()
     return app.exec()
 

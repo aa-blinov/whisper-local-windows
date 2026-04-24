@@ -103,11 +103,22 @@ def test_main_window_has_topbar(qtbot):
     assert window.topbar.parent() is not None
 
 
-def test_main_window_remaining_keys_still_use_placeholder(qtbot):
+def test_main_window_uses_history_view_for_history_key(qtbot):
+    from app.gui.main_window import MainWindow
+    from app.gui.views.history_view import HistoryView
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert isinstance(window.get_view("history"), HistoryView)
+    assert window.history_view is window.get_view("history")
+
+
+def test_main_window_no_placeholders_remain(qtbot):
+    """All nav keys now map to real views."""
     from app.gui.main_window import MainWindow
     from app.gui.views.placeholder import PlaceholderView
 
     window = MainWindow()
     qtbot.addWidget(window)
-    for key in ("history",):
-        assert isinstance(window.get_view(key), PlaceholderView)
+    for key in window.sidebar.items():
+        assert not isinstance(window.get_view(key), PlaceholderView), key

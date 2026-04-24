@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Protocol
+from typing import Any, Optional, Protocol
 
 from PySide6.QtCore import QObject
+from PySide6.QtWidgets import QApplication
 
 from app.gui.main_window import MainWindow
 from app.model_mapping import alias_for, get_model
@@ -19,13 +20,25 @@ class _ConfigLike(Protocol):
     def update_user_setting(self, section: str, key: str, value: Any) -> None: ...
 
 
+class _HistoryLike(Protocol):
+    def get_entries(self) -> list: ...
+    def clear_history(self) -> None: ...
+
+
 class AppController(QObject):
-    def __init__(self, config: _ConfigLike, window: MainWindow) -> None:
+    def __init__(
+        self,
+        config: _ConfigLike,
+        window: MainWindow,
+        history: Optional[_HistoryLike] = None,
+    ) -> None:
         super().__init__(parent=window)
         self._config = config
         self._window = window
+        self._history = history
         self._wire_models()
         self._wire_shortcuts()
+        self._wire_history()
 
     def _wire_models(self) -> None:
         view = self._window.models_view
@@ -79,3 +92,19 @@ class AppController(QObject):
         self._config.update_user_setting(
             "clipboard", "auto_paste", payload["auto_paste"]
         )
+
+    def _wire_history(self) -> None:
+        view = self._window.history_view
+        if self._history is not None:
+            view.set_entries(self._history.get_entries())
+            view.clear_requested.connect(self._on_history_clear)
+        view.copy_requested.connect(self._on_history_copy)
+
+    def _on_history_clear(self) -> None:
+        if self._history is None:
+            return
+        self._history.clear_history()
+        self._window.history_view.set_entries(self._history.get_entries())
+
+    def _on_history_copy(self, text: str) -> None:
+        QApplication.clipboard().setText(text)
