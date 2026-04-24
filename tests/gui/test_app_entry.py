@@ -33,3 +33,31 @@ def test_build_application_reuses_existing_qapplication(qapp):
 
     app, _window = build_application()
     assert app is QApplication.instance()
+
+
+def test_build_application_does_not_wire_controller_when_config_absent(qapp):
+    from app.gui.app import build_application
+    from app.gui.controllers.app_controller import AppController
+
+    _app, window = build_application()
+    assert window.findChildren(AppController) == []
+
+
+def test_build_application_wires_controller_when_config_provided(qapp):
+    from app.gui.app import build_application
+    from app.gui.controllers.app_controller import AppController
+
+    class StubConfig:
+        def __init__(self):
+            self._data = {"whisper": {"model": "large-v3"}}
+
+        def get_setting(self, section, key):
+            return self._data.get(section, {}).get(key)
+
+        def update_user_setting(self, section, key, value):
+            self._data.setdefault(section, {})[key] = value
+
+    _app, window = build_application(config=StubConfig())
+    controllers = window.findChildren(AppController)
+    assert len(controllers) == 1
+    assert window.models_view.active_alias() == "large-v3"
