@@ -61,3 +61,32 @@ def test_build_application_wires_controller_when_config_provided(qapp):
     controllers = window.findChildren(AppController)
     assert len(controllers) == 1
     assert window.models_view.active_alias() == "large-v3"
+
+
+def test_build_application_does_not_install_log_bridge_by_default(qapp):
+    from app.gui.app import build_application
+    from app.gui.log_bridge import QtLogBridge
+
+    _app, window = build_application()
+    assert window.findChildren(QtLogBridge) == []
+
+
+def test_build_application_installs_log_bridge_when_requested(qapp, qtbot):
+    import logging
+
+    from app.gui.app import build_application
+    from app.gui.log_bridge import QtLogBridge
+
+    _app, window = build_application(install_logs=True)
+    bridges = window.findChildren(QtLogBridge)
+    assert len(bridges) == 1
+
+    bridge = bridges[0]
+    try:
+        logger = logging.getLogger("test.entry.logs")
+        logger.setLevel(logging.DEBUG)
+        with qtbot.waitSignal(bridge.line_received, timeout=1000) as blocker:
+            logger.warning("bridge works")
+        assert "bridge works" in blocker.args[0]
+    finally:
+        bridge.uninstall()

@@ -73,11 +73,21 @@ def test_main_window_uses_models_view_for_models_key(qtbot):
     assert window.models_view is window.get_view("models")
 
 
-def test_main_window_other_keys_still_use_placeholder(qtbot):
+def test_main_window_uses_logs_view_for_logs_key(qtbot):
+    from app.gui.main_window import MainWindow
+    from app.gui.views.logs_view import LogsView
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert isinstance(window.get_view("logs"), LogsView)
+    assert window.logs_view is window.get_view("logs")
+
+
+def test_main_window_remaining_keys_still_use_placeholder(qtbot):
     from app.gui.main_window import MainWindow
     from app.gui.views.placeholder import PlaceholderView
 
     window = MainWindow()
     qtbot.addWidget(window)
-    for key in ("shortcuts", "history", "logs"):
+    for key in ("shortcuts", "history"):
         assert isinstance(window.get_view(key), PlaceholderView)

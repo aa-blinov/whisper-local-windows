@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.views.logs_view import LogsView
 from app.gui.views.models_view import ModelsView
 from app.gui.views.placeholder import PlaceholderView
 from app.gui.widgets.sidebar import Sidebar
@@ -39,9 +40,12 @@ class MainWindow(QMainWindow):
 
         self._views: Dict[str, QWidget] = {}
         self.models_view = ModelsView(parent=self.stack)
+        self.logs_view = LogsView(parent=self.stack)
         for key in self.sidebar.items():
             if key == "models":
                 view: QWidget = self.models_view
+            elif key == "logs":
+                view = self.logs_view
             else:
                 view = PlaceholderView(key.capitalize(), parent=self.stack)
             self._views[key] = view
