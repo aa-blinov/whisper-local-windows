@@ -61,3 +61,23 @@ def test_main_window_get_view_raises_on_unknown_key(qtbot):
 
     with pytest.raises(KeyError):
         window.get_view("nope")
+
+
+def test_main_window_uses_models_view_for_models_key(qtbot):
+    from app.gui.main_window import MainWindow
+    from app.gui.views.models_view import ModelsView
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert isinstance(window.get_view("models"), ModelsView)
+    assert window.models_view is window.get_view("models")
+
+
+def test_main_window_other_keys_still_use_placeholder(qtbot):
+    from app.gui.main_window import MainWindow
+    from app.gui.views.placeholder import PlaceholderView
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    for key in ("shortcuts", "history", "logs"):
+        assert isinstance(window.get_view(key), PlaceholderView)
