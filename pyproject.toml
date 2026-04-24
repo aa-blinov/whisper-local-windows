@@ -28,6 +28,7 @@ dependencies = [
     "wyoming>=1.7.2",
     "pyyaml>=6.0.2",
     "pyinstaller>=6.16.0",
+    "pyside6>=6.11.0",
 ]
 
 [project.scripts]
@@ -39,3 +40,16 @@ include = ["app*"]
 
 [tool.setuptools.package-data]
 "app" = ["assets/**/*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "pytest-qt>=4.5.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+qt_api = "pyside6"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
