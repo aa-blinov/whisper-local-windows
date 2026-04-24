@@ -180,3 +180,46 @@ def test_controller_handles_missing_shortcut_sections(qtbot):
     assert window.shortcuts_view.start_hotkey() == ""
     assert window.shortcuts_view.stop_hotkey() == ""
     assert window.shortcuts_view.auto_paste() is False
+
+
+# ---- Topbar sync ------------------------------------------------------------
+
+
+def test_controller_syncs_topbar_model_on_init(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+
+    AppController(config=config, window=window)
+
+    assert "Large v3" in window.topbar._model_pill.text()
+
+
+def test_controller_updates_topbar_on_model_select(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+
+    AppController(config=config, window=window)
+    window.models_view.model_selected.emit("tiny")
+
+    assert "Tiny" in window.topbar._model_pill.text()
+
+
+def test_controller_clears_topbar_model_when_unknown(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "weird-custom-model"}})
+
+    AppController(config=config, window=window)
+
+    assert "no model" in window.topbar._model_pill.text().lower()

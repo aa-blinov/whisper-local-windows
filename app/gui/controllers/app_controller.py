@@ -30,10 +30,11 @@ class AppController(QObject):
     def _wire_models(self) -> None:
         view = self._window.models_view
         raw = self._config.get_setting("whisper", "model")
+        active_info = None
         if isinstance(raw, str) and raw:
             alias = alias_for(raw)
             try:
-                get_model(alias)
+                active_info = get_model(alias)
             except KeyError:
                 log.warning(
                     "Model %r from config is not in the registry — leaving inactive",
@@ -42,6 +43,8 @@ class AppController(QObject):
             else:
                 view.set_active(alias)
 
+        self._sync_topbar_model(active_info)
+
         view.model_selected.connect(self._on_model_selected)
 
     def _on_model_selected(self, alias: str) -> None:
@@ -49,6 +52,13 @@ class AppController(QObject):
             return
         self._config.update_user_setting("whisper", "model", alias)
         self._window.models_view.set_active(alias)
+        try:
+            self._sync_topbar_model(get_model(alias))
+        except KeyError:
+            self._sync_topbar_model(None)
+
+    def _sync_topbar_model(self, info) -> None:
+        self._window.topbar.set_active_model(info.display_name if info else None)
 
     def _wire_shortcuts(self) -> None:
         view = self._window.shortcuts_view

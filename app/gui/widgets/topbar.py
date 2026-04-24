@@ -1,0 +1,77 @@
+"""Top bar — shows app title, current model, and backend status."""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QWidget,
+)
+
+
+_STATUS_VALUES = ("running", "stopped", "error", "unknown")
+_STATUS_DEFAULT_LABELS = {
+    "running": "Backend running",
+    "stopped": "Backend stopped",
+    "error": "Backend error",
+    "unknown": "Status unknown",
+}
+_NO_MODEL_TEXT = "No model"
+
+
+class TopBar(QWidget):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("TopBar")
+        self.setFixedHeight(52)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setSpacing(12)
+
+        self._title = QLabel("Lazy to Text", self)
+        self._title.setObjectName("TopBarTitle")
+        self._title.setProperty("role", "heading")
+        layout.addWidget(self._title)
+
+        layout.addStretch(1)
+
+        self._model_pill = QLabel(_NO_MODEL_TEXT, self)
+        self._model_pill.setObjectName("TopBarModelPill")
+        self._model_pill.setProperty("role", "badge")
+        self._model_pill.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._model_pill)
+
+        self._status_pill = QLabel(_STATUS_DEFAULT_LABELS["unknown"], self)
+        self._status_pill.setObjectName("TopBarStatusPill")
+        self._status_pill.setProperty("role", "status-pill")
+        self._status_pill.setProperty("status", "unknown")
+        self._status_pill.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._status_pill)
+
+    # ---- public API ---------------------------------------------------------
+
+    def set_active_model(self, display_name: Optional[str]) -> None:
+        if display_name:
+            self._model_pill.setText(f"Model: {display_name}")
+        else:
+            self._model_pill.setText(_NO_MODEL_TEXT)
+
+    def set_backend_status(
+        self,
+        status: str,
+        label: Optional[str] = None,
+    ) -> None:
+        if status not in _STATUS_VALUES:
+            raise ValueError(
+                f"status must be one of {_STATUS_VALUES}, got {status!r}"
+            )
+        self._status_pill.setProperty("status", status)
+        self._status_pill.setText(label or _STATUS_DEFAULT_LABELS[status])
+        self._status_pill.style().unpolish(self._status_pill)
+        self._status_pill.style().polish(self._status_pill)

@@ -93,6 +93,16 @@ def test_main_window_uses_shortcuts_view_for_shortcuts_key(qtbot):
     assert window.shortcuts_view is window.get_view("shortcuts")
 
 
+def test_main_window_has_topbar(qtbot):
+    from app.gui.main_window import MainWindow
+    from app.gui.widgets.topbar import TopBar
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert isinstance(window.topbar, TopBar)
+    assert window.topbar.parent() is not None
+
+
 def test_main_window_remaining_keys_still_use_placeholder(qtbot):
     from app.gui.main_window import MainWindow
     from app.gui.views.placeholder import PlaceholderView

@@ -87,3 +87,37 @@ QLabel[role="pill-active"] {
     font-size: {{font.size_small}};
     font-weight: 600;
 }
+
+#TopBar {
+    background-color: {{color.bg_secondary}};
+    border-bottom: 1px solid {{color.border}};
+}
+
+QLabel[role="status-pill"] {
+    border-radius: {{radius.sm}};
+    padding: 2px {{space.sm}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_secondary}};
+}
+
+QLabel[role="status-pill"][status="running"] {
+    background-color: {{color.success}};
+    color: {{color.bg_primary}};
+}
+
+QLabel[role="status-pill"][status="stopped"] {
+    background-color: {{color.warning}};
+    color: {{color.bg_primary}};
+}
+
+QLabel[role="status-pill"][status="error"] {
+    background-color: {{color.danger}};
+    color: {{color.text_primary}};
+}
+
+QLabel[role="status-pill"][status="unknown"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_muted}};
+}

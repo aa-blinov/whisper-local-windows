@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
     QStackedWidget,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -16,6 +17,7 @@ from app.gui.views.models_view import ModelsView
 from app.gui.views.placeholder import PlaceholderView
 from app.gui.views.shortcuts_view import ShortcutsView
 from app.gui.widgets.sidebar import Sidebar
+from app.gui.widgets.topbar import TopBar
 
 
 class MainWindow(QMainWindow):
@@ -29,15 +31,26 @@ class MainWindow(QMainWindow):
         central.setObjectName("Central")
         self.setCentralWidget(central)
 
-        layout = QHBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        self.sidebar = Sidebar(parent=central)
-        self.stack = QStackedWidget(central)
+        self.topbar = TopBar(parent=central)
+        root.addWidget(self.topbar)
 
-        layout.addWidget(self.sidebar)
-        layout.addWidget(self.stack, 1)
+        body = QWidget(central)
+        body.setObjectName("Body")
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+
+        self.sidebar = Sidebar(parent=body)
+        self.stack = QStackedWidget(body)
+
+        body_layout.addWidget(self.sidebar)
+        body_layout.addWidget(self.stack, 1)
+
+        root.addWidget(body, 1)
 
         self._views: Dict[str, QWidget] = {}
         self.models_view = ModelsView(parent=self.stack)
