@@ -66,3 +66,24 @@ QFrame[role="card"] {
     border: 1px solid {{color.border}};
     border-radius: {{radius.md}};
 }
+
+QFrame[role="card"][active="true"] {
+    border: 1px solid {{color.accent}};
+}
+
+QLabel[role="badge"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_secondary}};
+    border-radius: {{radius.sm}};
+    padding: 2px {{space.sm}};
+    font-size: {{font.size_small}};
+}
+
+QLabel[role="pill-active"] {
+    background-color: {{color.accent}};
+    color: {{color.text_primary}};
+    border-radius: {{radius.sm}};
+    padding: 2px {{space.sm}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+}
