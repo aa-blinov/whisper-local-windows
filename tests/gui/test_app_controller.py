@@ -109,3 +109,74 @@ def test_controller_no_ops_when_selecting_already_active(qtbot):
     window.models_view.model_selected.emit("large-v3")
 
     assert config.writes == []
+
+
+# ---- Shortcuts ↔ config -----------------------------------------------------
+
+
+def test_controller_prefills_shortcuts_view_from_config(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig(
+        {
+            "hotkey": {
+                "start_recording_hotkey": "ctrl+f2",
+                "stop_recording_hotkey": "ctrl+f3",
+            },
+            "clipboard": {"auto_paste": False},
+        }
+    )
+
+    AppController(config=config, window=window)
+
+    assert window.shortcuts_view.start_hotkey() == "ctrl+f2"
+    assert window.shortcuts_view.stop_hotkey() == "ctrl+f3"
+    assert window.shortcuts_view.auto_paste() is False
+
+
+def test_controller_persists_shortcuts_on_save(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig(
+        {
+            "hotkey": {
+                "start_recording_hotkey": "ctrl+f2",
+                "stop_recording_hotkey": "ctrl+f3",
+            },
+            "clipboard": {"auto_paste": False},
+        }
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.save_requested.emit(
+        {
+            "start_hotkey": "ctrl+alt+1",
+            "stop_hotkey": "ctrl+alt+2",
+            "auto_paste": True,
+        }
+    )
+
+    assert ("hotkey", "start_recording_hotkey", "ctrl+alt+1") in config.writes
+    assert ("hotkey", "stop_recording_hotkey", "ctrl+alt+2") in config.writes
+    assert ("clipboard", "auto_paste", True) in config.writes
+
+
+def test_controller_handles_missing_shortcut_sections(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})
+
+    AppController(config=config, window=window)
+
+    assert window.shortcuts_view.start_hotkey() == ""
+    assert window.shortcuts_view.stop_hotkey() == ""
+    assert window.shortcuts_view.auto_paste() is False

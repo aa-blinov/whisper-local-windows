@@ -25,6 +25,7 @@ class AppController(QObject):
         self._config = config
         self._window = window
         self._wire_models()
+        self._wire_shortcuts()
 
     def _wire_models(self) -> None:
         view = self._window.models_view
@@ -48,3 +49,23 @@ class AppController(QObject):
             return
         self._config.update_user_setting("whisper", "model", alias)
         self._window.models_view.set_active(alias)
+
+    def _wire_shortcuts(self) -> None:
+        view = self._window.shortcuts_view
+        start = self._config.get_setting("hotkey", "start_recording_hotkey") or ""
+        stop = self._config.get_setting("hotkey", "stop_recording_hotkey") or ""
+        auto_paste = bool(self._config.get_setting("clipboard", "auto_paste"))
+        view.set_values(start_hotkey=start, stop_hotkey=stop, auto_paste=auto_paste)
+
+        view.save_requested.connect(self._on_shortcuts_save)
+
+    def _on_shortcuts_save(self, payload: dict) -> None:
+        self._config.update_user_setting(
+            "hotkey", "start_recording_hotkey", payload["start_hotkey"]
+        )
+        self._config.update_user_setting(
+            "hotkey", "stop_recording_hotkey", payload["stop_hotkey"]
+        )
+        self._config.update_user_setting(
+            "clipboard", "auto_paste", payload["auto_paste"]
+        )
