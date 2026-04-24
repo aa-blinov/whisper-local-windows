@@ -1,0 +1,63 @@
+"""Tests for the MainWindow shell."""
+
+from PySide6.QtWidgets import QStackedWidget
+
+
+def test_main_window_instantiates(qtbot):
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert window.windowTitle() == "Lazy to Text"
+
+
+def test_main_window_has_sidebar(qtbot):
+    from app.gui.main_window import MainWindow
+    from app.gui.widgets.sidebar import Sidebar
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert isinstance(window.sidebar, Sidebar)
+
+
+def test_main_window_has_stack_with_view_per_nav_item(qtbot):
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert isinstance(window.stack, QStackedWidget)
+    assert window.stack.count() == len(window.sidebar.items())
+
+
+def test_main_window_default_view_matches_default_sidebar_key(qtbot):
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    default_key = window.sidebar.active_key()
+    assert window.stack.currentWidget() is window.get_view(default_key)
+
+
+def test_main_window_switches_view_when_sidebar_changes(qtbot):
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    window.sidebar.set_active("history")
+    assert window.stack.currentWidget() is window.get_view("history")
+
+    window.sidebar.set_active("logs")
+    assert window.stack.currentWidget() is window.get_view("logs")
+
+
+def test_main_window_get_view_raises_on_unknown_key(qtbot):
+    import pytest
+
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    with pytest.raises(KeyError):
+        window.get_view("nope")
