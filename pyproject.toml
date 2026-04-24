@@ -39,7 +39,7 @@ where = ["."]
 include = ["app*"]
 
 [tool.setuptools.package-data]
-"app" = ["assets/**/*"]
+"app" = ["assets/**/*", "gui/styles/*.qss"]
 
 [dependency-groups]
 dev = [

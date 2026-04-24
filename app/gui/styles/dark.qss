@@ -1,0 +1,68 @@
+/* Dark theme. Token placeholders are substituted at load time — see theme.py. */
+
+QWidget {
+    background-color: {{color.bg_primary}};
+    color: {{color.text_primary}};
+    font-family: "{{font.family}}";
+    font-size: {{font.size_body}};
+}
+
+QMainWindow,
+QDialog {
+    background-color: {{color.bg_primary}};
+}
+
+QLabel {
+    background-color: transparent;
+    color: {{color.text_primary}};
+}
+
+QLabel[role="title"] {
+    font-size: {{font.size_title}};
+    font-weight: 600;
+    color: {{color.text_primary}};
+}
+
+QLabel[role="heading"] {
+    font-size: {{font.size_heading}};
+    font-weight: 600;
+    color: {{color.text_primary}};
+}
+
+QLabel[role="muted"] {
+    color: {{color.text_muted}};
+    font-size: {{font.size_small}};
+}
+
+QPushButton {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_primary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    padding: {{space.sm}} {{space.md}};
+}
+
+QPushButton:hover {
+    background-color: {{color.border}};
+    border-color: {{color.accent}};
+}
+
+QPushButton:pressed {
+    background-color: {{color.bg_secondary}};
+}
+
+QPushButton[role="primary"] {
+    background-color: {{color.accent}};
+    color: {{color.text_primary}};
+    border: none;
+}
+
+QPushButton[role="primary"]:hover {
+    background-color: {{color.accent_hover}};
+}
+
+QFrame[role="card"] {
+    background-color: {{color.bg_secondary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.md}};
+}
