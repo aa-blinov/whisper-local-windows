@@ -27,14 +27,23 @@ project_root = spec_file_path.parent
 app_dir = project_root / 'app'
 assets_src = app_dir / 'assets'
 
-# Collect data files (assets)
+# Collect data files (assets + Qt stylesheets).
+#
+# theme.py / resolve_asset_path use ``Path(__file__).parent`` to locate
+# resources, so the destination paths inside the bundle have to mirror the
+# layout under ``app/`` (PyInstaller drops them into ``_internal/`` itself).
 datas = []
 for p in assets_src.rglob('*'):
     if p.is_file():
         rel = p.relative_to(app_dir)
-        # Place assets at their natural relative path (so code can refer to 'assets/..')
-        # Example: app/assets/tray_idle.png -> dist/.../assets/tray_idle.png
         datas.append((str(p), str(rel.parent)))
+
+styles_src = app_dir / 'gui' / 'styles'
+if styles_src.exists():
+    for p in styles_src.rglob('*'):
+        if p.is_file():
+            rel = p.relative_to(app_dir)
+            datas.append((str(p), str(rel.parent)))
 
 # Include top-level config.yaml next to exe so user can edit it
 config_path = project_root / 'config.yaml'

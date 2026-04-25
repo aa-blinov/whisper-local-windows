@@ -6,6 +6,7 @@ use ``{{group.key}}`` placeholders that are substituted at load time.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict
@@ -13,7 +14,21 @@ from typing import Dict
 from PySide6.QtWidgets import QApplication
 
 
-_STYLES_DIR = Path(__file__).parent / "styles"
+def _styles_dir() -> Path:
+    """Locate the directory containing per-theme .qss files.
+
+    In a PyInstaller bundle the .py modules live in the frozen PYZ archive,
+    so ``Path(__file__).parent`` does not resolve to a real folder. The
+    spec drops the bundled stylesheets under ``sys._MEIPASS / gui / styles``;
+    fall back to that location when frozen.
+    """
+    if getattr(sys, "frozen", False):
+        meipass = Path(getattr(sys, "_MEIPASS", ""))
+        return meipass / "gui" / "styles"
+    return Path(__file__).parent / "styles"
+
+
+_STYLES_DIR = _styles_dir()
 
 
 @dataclass(frozen=True)

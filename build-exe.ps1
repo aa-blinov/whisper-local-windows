@@ -52,6 +52,7 @@ if ($OneFile) {
   $pyinstallerArgs = @(
     'run',
     'pyinstaller',
+    '--noconfirm',
     '--onefile',
     '--name', 'LazyToText',
     '--icon', 'app\assets\tray_idle.ico',
@@ -68,7 +69,7 @@ if ($OneFile) {
   & $Uv @pyinstallerArgs
 } else {
   Write-Host 'Building using spec file (folder mode)...'
-  $specArgs = @('run', 'pyinstaller', 'lazy_to_text.spec')
+  $specArgs = @('run', 'pyinstaller', '--noconfirm', 'lazy_to_text.spec')
   & $Uv @specArgs
 }
 
