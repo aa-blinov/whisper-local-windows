@@ -84,15 +84,19 @@ class StateManager:
     
     def toggle_recording(self):
         was_recording = self.stop_recording(use_auto_enter=False)
-        
+
         if not was_recording:
             current_state = self.get_current_state()
             can_start = self.can_start_recording()
             self.logger.debug(f"toggle_recording: current_state={current_state}, can_start={can_start}")
-            
+
             if can_start:
                 self._start_recording()
             else:
+                # Acoustic feedback that the hotkey was actually caught even
+                # when recording cannot start (backend not ready, busy, etc.).
+                # Without this the user has no signal that the keypress arrived.
+                self.audio_feedback.play_start_sound()
                 if self.is_processing:
                     self.logger.info("Still processing previous recording...", extra={'user_message': True})
                 elif self.is_model_loading:
