@@ -5,13 +5,10 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QSizePolicy,
-    QStyle,
-    QStyleOption,
     QWidget,
 )
 
@@ -75,33 +72,42 @@ class TopBar(QWidget):
         self.setFixedHeight(52)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        layout = QHBoxLayout(self)
-        # Zero left margin so the spacer below lines up the divider
-        # exactly with the sidebar's right edge (sidebar starts at
-        # x=0). Right margin still padded for the pill cluster.
-        layout.setContentsMargins(0, 10, 20, 10)
-        layout.setSpacing(12)
+        # Outer layout has no padding so the gutter / divider extend
+        # to the very top and bottom of the topbar — the divider
+        # then lines up edge-to-edge with the sidebar's
+        # ``border-right`` below.
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
         # ---- Sidebar-aligned blank zone -------------------------------
         # Eats the same horizontal space as the sidebar so the
-        # ``paintEvent`` divider lands exactly on the sidebar's
-        # right border line. The divider itself is drawn in
-        # ``paintEvent`` so it spans the full topbar height (the
-        # layout's vertical padding doesn't crop it the way a
-        # ``QFrame`` child would).
+        # divider after it lands exactly on the sidebar's right
+        # border line.
         left_gutter = QWidget(self)
         left_gutter.setFixedWidth(_SIDEBAR_WIDTH_PX)
-        layout.addWidget(left_gutter)
+        outer.addWidget(left_gutter)
 
-        # Small gap so the resources widget breathes off the line
-        # rather than touching it pixel-for-pixel.
-        layout.addSpacing(12)
+        divider = QWidget(self)
+        divider.setObjectName("TopBarDivider")
+        divider.setFixedWidth(1)
+        # ``WA_StyledBackground`` lets QSS's ``background-color``
+        # rule actually paint — without it Qt treats the widget as
+        # unstyled-bg and the line stays invisible.
+        divider.setAttribute(Qt.WA_StyledBackground, True)
+        outer.addWidget(divider)
 
-        # Resource stats — first thing right of the divider so the
-        # ResourceWidget feels anchored to the body area's leading
-        # edge instead of competing with the right-side pill
-        # cluster for attention.
-        self._resources = ResourceWidget(self)
+        # Right-hand content lives in its own container so it can
+        # carry its own padding without cropping the divider.
+        content = QWidget(self)
+        content.setObjectName("TopBarContent")
+        layout = QHBoxLayout(content)
+        layout.setContentsMargins(20, 10, 20, 10)
+        layout.setSpacing(12)
+
+        # Resource stats — anchored to the leading edge of the
+        # content area, immediately right of the divider.
+        self._resources = ResourceWidget(content)
         layout.addWidget(self._resources)
 
         # Push the rest of the topbar (recording / model / status)
@@ -111,11 +117,11 @@ class TopBar(QWidget):
         # Slim live-input meter — visible only while a recording is
         # in flight. Sits next to the recording pill so the eye
         # associates the two.
-        self._vu_meter = VUMeter(self)
+        self._vu_meter = VUMeter(content)
         self._vu_meter.setVisible(False)
         layout.addWidget(self._vu_meter)
 
-        self._recording_pill = QLabel("", self)
+        self._recording_pill = QLabel("", content)
         self._recording_pill.setObjectName("TopBarRecordingPill")
         self._recording_pill.setProperty("role", "recording-pill")
         self._recording_pill.setProperty("state", "idle")
@@ -127,7 +133,7 @@ class TopBar(QWidget):
         # Model pill: empty / loading / active. ``loading`` shows
         # download progress + elapsed time inline so the topbar
         # doesn't double up on "Loading model…" labels.
-        self._model_pill = QLabel(_NO_MODEL_TEXT, self)
+        self._model_pill = QLabel(_NO_MODEL_TEXT, content)
         self._model_pill.setObjectName("TopBarModelPill")
         self._model_pill.setProperty("role", "model-pill")
         self._model_pill.setProperty("state", "empty")
@@ -138,12 +144,14 @@ class TopBar(QWidget):
         self._loading_progress_text = ""
         self._loading_elapsed_s = 0
 
-        self._status_pill = QLabel(_STATUS_DEFAULT_LABELS["unknown"], self)
+        self._status_pill = QLabel(_STATUS_DEFAULT_LABELS["unknown"], content)
         self._status_pill.setObjectName("TopBarStatusPill")
         self._status_pill.setProperty("role", "status-pill")
         self._status_pill.setProperty("status", "unknown")
         self._status_pill.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._status_pill)
+
+        outer.addWidget(content, 1)
 
     # ---- public API ---------------------------------------------------------
 
@@ -254,24 +262,6 @@ class TopBar(QWidget):
             self._render_model_pill()
 
     # ---- internal -----------------------------------------------------------
-
-    def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
-        # Render the QSS-defined background first so the
-        # ``#TopBar { background-color: …; border-bottom: … }`` rule
-        # still applies — Qt skips its default styled-widget paint
-        # path when ``paintEvent`` is overridden, so we have to call
-        # ``style().drawPrimitive(PE_Widget, …)`` ourselves.
-        opt = QStyleOption()
-        opt.initFrom(self)
-        painter = QPainter(self)
-        self.style().drawPrimitive(QStyle.PE_Widget, opt, painter, self)
-
-        # Vertical 1 px line at the sidebar's right edge — runs the
-        # full height of the topbar so it joins seamlessly with the
-        # sidebar's own ``border-right`` below.
-        painter.setPen(QColor("#2d3140"))
-        x = _SIDEBAR_WIDTH_PX
-        painter.drawLine(x, 0, x, self.height())
 
     def _render_model_pill(self, state_override: Optional[str] = None) -> None:
         state = state_override if state_override is not None else self._model_state
