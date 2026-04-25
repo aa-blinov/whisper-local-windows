@@ -96,6 +96,11 @@ def _build_substitutions() -> Dict[str, str]:
             result[f"font.{key}"] = f"{value}px"
         else:
             result[f"font.{key}"] = str(value)
+    # Forward-slash absolute path so QSS ``url(...)`` rules can
+    # reference bundled SVG icons (checkbox indicator etc.). QSS
+    # treats backslashes as escape characters, so always use
+    # ``as_posix``.
+    result["path.styles_dir"] = _STYLES_DIR.resolve().as_posix()
     return result
 
 

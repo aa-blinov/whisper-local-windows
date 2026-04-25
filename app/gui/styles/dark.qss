@@ -386,8 +386,36 @@ QComboBox QAbstractItemView {
 
 QCheckBox {
     background-color: transparent;
-    spacing: 8px;
+    spacing: 10px;
     color: {{color.text_primary}};
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid {{color.border}};
+    background-color: {{color.bg_elevated}};
+}
+
+QCheckBox::indicator:hover {
+    border-color: {{color.accent_hover}};
+}
+
+QCheckBox::indicator:checked {
+    background-color: {{color.accent}};
+    border-color: {{color.accent}};
+    image: url("{{path.styles_dir}}/check.svg");
+}
+
+QCheckBox::indicator:checked:hover {
+    background-color: {{color.accent_hover}};
+    border-color: {{color.accent_hover}};
+}
+
+QCheckBox::indicator:disabled {
+    border-color: {{color.border}};
+    background-color: {{color.bg_secondary}};
 }
 
 /* ---- Tables -------------------------------------------------------------- */
