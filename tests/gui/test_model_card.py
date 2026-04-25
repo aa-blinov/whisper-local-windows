@@ -142,6 +142,59 @@ def test_model_card_active_loading_swaps_pill_text(qtbot):
     assert card._active_pill.property("state") == "ready"
 
 
+def test_model_card_badges_carry_category_attribute(qtbot):
+    """Each metadata badge carries a ``cat`` property so the QSS can
+    style speed/quality/compute/lang differently — without it every
+    pill looks identical and the eye can't tell them apart."""
+    from PySide6.QtWidgets import QLabel
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+
+    badges = [
+        lbl for lbl in card.findChildren(QLabel)
+        if lbl.property("role") == "badge"
+    ]
+    cats = {lbl.property("cat") for lbl in badges}
+    assert cats == {"speed", "quality", "size", "vram", "compute", "lang"}
+
+
+def test_model_card_speed_quality_badges_carry_value_for_styling(qtbot):
+    """The QSS ``[cat='speed'][value='fast']`` selector tints fast
+    speed badges green; without the ``value`` property nothing
+    matches and the highlight never appears."""
+    from PySide6.QtWidgets import QLabel
+    from app.gui.widgets.model_card import ModelCard
+    from app.model_mapping import ModelInfo
+
+    info = ModelInfo(
+        alias="test-fast",
+        canonical="fake/canonical",
+        display_name="Test fast",
+        size_mb=1000,
+        vram_gb=4.0,
+        speed="fast",
+        quality="excellent",
+        languages="multilingual",
+        description="x",
+    )
+    card = ModelCard(info)
+    qtbot.addWidget(card)
+
+    badges = {
+        lbl.property("cat"): lbl
+        for lbl in card.findChildren(QLabel)
+        if lbl.property("role") == "badge"
+    }
+    assert badges["speed"].property("value") == "fast"
+    assert badges["quality"].property("value") == "excellent"
+    # Resource / technical badges should not carry a discrete value
+    # property — they're styled purely by category.
+    for cat in ("size", "vram", "compute", "lang"):
+        assert not badges[cat].property("value")
+
+
 def test_model_card_select_button_does_not_grab_focus(qtbot):
     """Clicking Download/Select must not put focus on the button.
 

@@ -131,16 +131,27 @@ class ModelCard(QFrame):
         # windows clipped the right side of the card (and the
         # Download button) at the scroll viewport's edge.
         badges = FlowLayout(spacing=6)
-        for text in (
-            f"speed: {info.speed}",
-            f"quality: {info.quality}",
-            f"size: {_format_size(info.size_mb)}",
-            f"vram: {info.vram_gb:.1f} GB",
-            f"compute: {_compute_label(info.compute_type)}",
-            f"lang: {info.languages}",
-        ):
-            badge = QLabel(text, self)
+        # Each badge carries a ``cat`` property (and ``value`` where
+        # the value is one of a known set) so the QSS can give the
+        # three categories distinct visual weights:
+        #   - speed / quality → tinted (green / blue) when the value
+        #     is the desirable one ("fast", "excellent")
+        #   - size / vram → solid neutral pills (current default)
+        #   - compute / lang → outlined-only, transparent bg
+        badge_specs = (
+            ("speed", info.speed, info.speed),
+            ("quality", info.quality, info.quality),
+            ("size", _format_size(info.size_mb), ""),
+            ("vram", f"{info.vram_gb:.1f} GB", ""),
+            ("compute", _compute_label(info.compute_type), ""),
+            ("lang", info.languages, ""),
+        )
+        for cat, display_value, qss_value in badge_specs:
+            badge = QLabel(f"{cat}: {display_value}", self)
             badge.setProperty("role", "badge")
+            badge.setProperty("cat", cat)
+            if qss_value:
+                badge.setProperty("value", qss_value)
             badges.addWidget(badge)
         root.addLayout(badges)
 

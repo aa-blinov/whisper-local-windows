@@ -108,6 +108,27 @@ QLabel[role="badge"] {
     font-weight: 500;
 }
 
+/* Tier 1 — semantic highlight when the value is the desirable one. */
+QLabel[role="badge"][cat="speed"][value="fast"] {
+    background-color: #1c3a28;
+    color: #86efac;
+    border: 1px solid #2c5a3e;
+}
+
+QLabel[role="badge"][cat="quality"][value="excellent"] {
+    background-color: #1d2746;
+    color: #93b5ff;
+    border: 1px solid #2d3f6c;
+}
+
+/* Tier 3 — purely informational metadata, dimmer + outlined only. */
+QLabel[role="badge"][cat="compute"],
+QLabel[role="badge"][cat="lang"] {
+    background-color: transparent;
+    color: {{color.text_secondary}};
+    border: 1px solid {{color.border}};
+}
+
 QLabel[role="pill-active"] {
     background-color: {{color.success}};
     color: {{color.bg_primary}};
