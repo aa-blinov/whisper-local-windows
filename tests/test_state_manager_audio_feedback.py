@@ -60,6 +60,42 @@ def test_toggle_starts_recording_when_able():
     sm.audio_feedback.play_start_sound.assert_called_once()
 
 
+def test_start_recording_plays_sound_before_opening_audio_recorder():
+    """Reorder: sound first, recorder second.
+
+    Opening the mic stream takes ~100 ms on Windows; if we play the sound
+    afterwards, that latency stacks on top of the winsound first-call delay.
+    Playing first means the start sound is queued before the mic open
+    pressures the audio session.
+    """
+    sm = _build_state_manager(can_start=True)
+    call_order: list[str] = []
+
+    sm.audio_feedback.play_start_sound.side_effect = (
+        lambda: call_order.append("sound")
+    )
+    sm.audio_recorder.start_recording.side_effect = lambda: (
+        call_order.append("record") or True
+    )
+
+    sm.toggle_recording()
+
+    assert call_order == ["sound", "record"], (
+        f"expected sound to play before recorder open, got {call_order!r}"
+    )
+
+
+def test_start_recording_still_plays_sound_when_recorder_fails():
+    """If start_recording() returns False, the user still got acoustic
+    feedback that the hotkey was caught (because we played first)."""
+    sm = _build_state_manager(can_start=True)
+    sm.audio_recorder.start_recording.return_value = False
+
+    sm.toggle_recording()
+
+    sm.audio_feedback.play_start_sound.assert_called_once()
+
+
 def test_toggle_does_not_play_start_sound_when_already_recording():
     """When was_recording=True, toggle stops recording — start sound is irrelevant
     here (stop sound fires from inside the transcription pipeline)."""

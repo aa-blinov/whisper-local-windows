@@ -108,13 +108,19 @@ class StateManager:
                     self.logger.info(f"Cannot record while {current_state}...", extra={'user_message': True})
 
     def _start_recording(self):
+        # Play the start sound BEFORE opening the audio recorder — opening
+        # the mic stream takes ~100 ms on Windows and stacking that delay on
+        # top of winsound's first-call latency is what made the first
+        # recording after launch silent. Playing first means the user always
+        # gets immediate acoustic confirmation, even if the recorder fails.
+        self.audio_feedback.play_start_sound()
+
         self.logger.debug("_start_recording: attempting to start audio recorder")
         success = self.audio_recorder.start_recording()
-        
+
         if success:
-            self.logger.debug("_start_recording: audio recorder started successfully, playing start sound")
+            self.logger.debug("_start_recording: audio recorder started successfully")
             self.config_manager.print_stop_instructions_based_on_config()
-            self.audio_feedback.play_start_sound()
             self.system_tray.update_state("recording")
         else:
             self.logger.debug("_start_recording: audio recorder failed to start")
