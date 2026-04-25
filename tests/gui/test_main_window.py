@@ -123,8 +123,10 @@ def test_main_window_section_title_follows_sidebar_changes(qtbot):
     window.sidebar.set_active("logs")
     assert window.topbar._section_title.text() == "Logs"
 
+    # The 'shortcuts' key is renamed to "Settings" in the sidebar's display
+    # label; the internal key stays the same so config / tests don't churn.
     window.sidebar.set_active("shortcuts")
-    assert window.topbar._section_title.text() == "Shortcuts"
+    assert window.topbar._section_title.text() == "Settings"
 
 
 def test_main_window_uses_history_view_for_history_key(qtbot):

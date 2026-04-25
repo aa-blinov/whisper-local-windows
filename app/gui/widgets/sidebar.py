@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QListWidget, QListWidgetItem, QVBoxLayout, QWidget
 NavItem = Tuple[str, str]
 _DEFAULT_ITEMS: tuple[NavItem, ...] = (
     ("models", "Models"),
-    ("shortcuts", "Shortcuts"),
+    ("shortcuts", "Settings"),
     ("history", "History"),
     ("logs", "Logs"),
 )
@@ -56,6 +56,15 @@ class Sidebar(QWidget):
         return [
             self._list.item(i).data(_KEY_ROLE) for i in range(self._list.count())
         ]
+
+    def label_for(self, key: str) -> str:
+        """Display label for a nav key (e.g. ``shortcuts`` -> ``Settings``).
+        Falls back to ``key.capitalize()`` if the key isn't in the model."""
+        for i in range(self._list.count()):
+            item = self._list.item(i)
+            if item.data(_KEY_ROLE) == key:
+                return item.text()
+        return key.capitalize()
 
     def active_key(self) -> str:
         return self._current_key
