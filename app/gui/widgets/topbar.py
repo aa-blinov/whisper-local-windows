@@ -119,7 +119,7 @@ class TopBar(QWidget):
 
     def set_active_model(self, display_name: Optional[str]) -> None:
         if display_name:
-            self._model_pill.setText(f"Model: {display_name}")
+            self._model_pill.setText(f"Current model: {display_name}")
             self._model_pill.setProperty("state", "active")
         else:
             self._model_pill.setText(_NO_MODEL_TEXT)
