@@ -201,22 +201,22 @@ class ModelCard(QFrame):
             badges.addWidget(badge)
         root.addLayout(badges)
 
-        # Inline inference settings — only shown while the card is
-        # active. Controlled by ``set_active``.
-        self._settings_panel = InferenceSettingsPanel(self)
-        self._settings_panel.setVisible(False)
-        self._settings_panel.settings_changed.connect(
-            lambda s: self.inference_settings_changed.emit(self._info.alias, s)
-        )
-        # GigaAM has no inference-time tunables; grey the panel out
-        # for that engine instead of pretending the user can change
-        # something.
-        if info.backend_kind == "gigaam":
-            self._settings_panel.set_enabled_for_engine(
-                False,
-                "GigaAM is end-to-end and accepts no inference-time tunables.",
+        # Inline inference settings — only relevant for engines that
+        # actually accept transcribe-time tunables. GigaAM is
+        # end-to-end (Russian-only, deterministic, no prompt) so it
+        # gets no panel; inserting a greyed-out one looked like a
+        # rendering bug. faster-whisper-backed cards get the full
+        # panel, hidden until the card is active.
+        self._settings_panel: Optional[InferenceSettingsPanel] = None
+        if info.backend_kind != "gigaam":
+            self._settings_panel = InferenceSettingsPanel(self)
+            self._settings_panel.setVisible(False)
+            self._settings_panel.settings_changed.connect(
+                lambda s: self.inference_settings_changed.emit(
+                    self._info.alias, s
+                )
             )
-        root.addWidget(self._settings_panel)
+            root.addWidget(self._settings_panel)
 
         footer = QHBoxLayout()
         footer.addStretch(1)
@@ -267,19 +267,24 @@ class ModelCard(QFrame):
         self._active_pill.setVisible(self._active)
         self._select_btn.setVisible(not self._active)
         self._select_btn.setEnabled(not self._active and not self._locked)
-        # Inference panel visible only on the active card to keep
-        # inactive cards compact.
-        self._settings_panel.setVisible(self._active)
+        # Inference panel visible only on the active card (and only
+        # on cards that actually have one — GigaAM doesn't).
+        if self._settings_panel is not None:
+            self._settings_panel.setVisible(self._active)
         self.style().unpolish(self)
         self.style().polish(self)
 
     def set_inference_settings(self, settings: InferenceSettings) -> None:
         """Pre-fill the inline panel from the controller (called when
         the card becomes active and the controller has loaded the
-        per-alias overrides out of config)."""
-        self._settings_panel.set_settings(settings)
+        per-alias overrides out of config). No-op on engines that
+        don't have a panel (GigaAM)."""
+        if self._settings_panel is not None:
+            self._settings_panel.set_settings(settings)
 
-    def inference_settings(self) -> InferenceSettings:
+    def inference_settings(self) -> Optional[InferenceSettings]:
+        if self._settings_panel is None:
+            return None
         return self._settings_panel.values()
 
     def set_locked(self, locked: bool) -> None:
