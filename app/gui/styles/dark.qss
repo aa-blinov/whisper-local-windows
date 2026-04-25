@@ -73,10 +73,12 @@ QFrame[role="card"][active="true"] {
 
 QLabel[role="badge"] {
     background-color: {{color.bg_elevated}};
-    color: {{color.text_secondary}};
+    color: {{color.text_primary}};
+    border: 1px solid {{color.border}};
     border-radius: {{radius.sm}};
-    padding: 2px {{space.sm}};
+    padding: {{space.xs}} {{space.md}};
     font-size: {{font.size_small}};
+    font-weight: 500;
 }
 
 QLabel[role="pill-active"] {

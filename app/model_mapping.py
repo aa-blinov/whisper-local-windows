@@ -59,6 +59,20 @@ class ModelInfo:
 
 
 MODELS: Tuple[ModelInfo, ...] = (
+    # ---- TEMPORARY: tiny preset for testing the download progress UI -------
+    # Remove this entry once verified.
+    ModelInfo(
+        alias="tiny",
+        canonical="Systran/faster-whisper-tiny",
+        display_name="Tiny (test)",
+        size_mb=75,
+        vram_gb=1.0,
+        speed="fast",
+        quality="basic",
+        languages="multilingual",
+        description="Temporary card for testing the download progress UI.",
+        compute_type="float16",
+    ),
     # ---- Distilled / turbo (faster, near-large quality) ---------------------
     ModelInfo(
         alias="turbo",
@@ -88,7 +102,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         alias="distil-large-v3",
         canonical="Systran/faster-distil-whisper-large-v3",
         display_name="Distil Large v3",
-        size_mb=1500,
+        size_mb=1510,
         vram_gb=5.0,
         speed="fast",
         quality="excellent",
@@ -101,7 +115,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         alias="large-v3",
         canonical="Systran/faster-whisper-large-v3",
         display_name="Large v3",
-        size_mb=3000,
+        size_mb=3145,
         vram_gb=10.0,
         speed="slow",
         quality="excellent",
@@ -113,7 +127,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         alias="large-v3-int8",
         canonical="Systran/faster-whisper-large-v3",
         display_name="Large v3 (int8)",
-        size_mb=3000,
+        size_mb=3145,
         vram_gb=5.0,
         speed="slow",
         quality="excellent",
@@ -126,7 +140,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         alias="large-v3-ru",
         canonical="bzikst/faster-whisper-large-v3-russian",
         display_name="Large v3 — Russian fine-tune",
-        size_mb=3000,
+        size_mb=3090,
         vram_gb=10.0,
         speed="slow",
         quality="excellent",
@@ -138,7 +152,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         alias="large-v3-ru-int8",
         canonical="bzikst/faster-whisper-large-v3-russian",
         display_name="Large v3 — Russian (int8)",
-        size_mb=3000,
+        size_mb=3090,
         vram_gb=5.0,
         speed="slow",
         quality="excellent",
