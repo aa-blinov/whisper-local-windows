@@ -15,38 +15,9 @@ class OptionalComponent:
             return lambda *args, **kwargs: None
 
 
-def beautify_hotkey(hotkey_string: str) -> str:
-    if not hotkey_string:
-        return ""
-    
-    return hotkey_string.replace('+', '+').upper()
-
 def is_installed_package():
     # Check if running from an installed package
     return 'site-packages' in __file__
-
-def get_config_path() -> str:
-    """Return path to single config.yaml (root next to exe or project root).
-
-    Rules:
-      * frozen: next to executable
-      * installed (site-packages): current working directory
-      * dev: walk up to pyproject.toml
-    """
-    if getattr(sys, 'frozen', False):
-        base = Path(sys.executable).parent
-    elif is_installed_package():
-        base = Path.cwd()
-    else:
-        current = Path(__file__).parent
-        base = None
-        for p in [current, *current.parents]:
-            if (p / 'pyproject.toml').exists():
-                base = p
-                break
-        if base is None:
-            base = current.parent.parent.parent
-    return str(base / 'config.yaml')
 
 def get_project_logs_path():
     """Return unified logs directory inside project (or next to exe when frozen).
