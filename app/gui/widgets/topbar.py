@@ -235,7 +235,7 @@ class TopBar(QWidget):
     def set_loading_progress(self, current: int, total: int) -> None:
         """Update the model-pill's loading variant with download
         progress. ``total == 0`` (unknown size) renders as e.g.
-        ``Loading: Tiny (test)  12 MB``, otherwise ``35%``.
+        ``Loading: Large v3 Turbo (int8)  12 MB``, otherwise ``35%``.
 
         No visible effect unless the model pill is in the
         ``loading`` state (i.e. ``set_recording_state('model_loading')``

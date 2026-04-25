@@ -31,7 +31,7 @@ runs in-process and downloads from Hugging Face / Sber's CDN on first use.
   panel — language, VAD filter, beam size, temperature, initial prompt —
   persisted under `model_overrides.<alias>` and pushed live into the
   running backend without a restart.
-- **9 model presets.** Whisper Tiny, Distil, Turbo (fp16/int8), Large v3
+- **9 model presets.** Whisper Distil, Turbo (fp16/int8), Large v3
   (fp16/int8), Russian fine-tunes (fp16/int8), GigaAM v3 e2e CTC + RNN-T.
   Family chips on each card colour-code the lineage.
 - **Long-form audio.** Captures over 25 s on GigaAM route through
@@ -71,7 +71,8 @@ runs in-process and downloads from Hugging Face / Sber's CDN on first use.
 ## Quick start
 
 Requires Windows 10/11, Python 3.12, and a microphone. A CUDA-capable GPU is
-optional but strongly recommended for any model larger than `tiny`.
+optional but strongly recommended — every preset in the registry now is
+either a Large-class Whisper variant or GigaAM v3.
 
 ```powershell
 git clone https://github.com/aa-blinov/lazy-to-text.git
@@ -296,8 +297,9 @@ extra — `nvidia-cublas-cu12` and `nvidia-cudnn-cu12` ride along in the
 build. From source, `uv sync` installs the same wheels. **Driver-side**,
 you still need an NVIDIA GPU with up-to-date drivers (CUDA 12 era).
 
-CPU-only is fine for `tiny` / `gigaam-v3-e2e-ctc`; `large-v*` and
-`gigaam-v3-e2e-rnnt` will be slow without a GPU.
+CPU-only just about works for `gigaam-v3-e2e-ctc`; everything else
+(`turbo*`, `large-v*`, `gigaam-v3-e2e-rnnt`) will be too slow to be
+useful without a GPU.
 
 ## GigaAM longform — pyannote VAD requirements
 

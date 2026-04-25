@@ -180,14 +180,14 @@ def test_set_recording_state_model_loading_flips_model_pill(qtbot):
     bar = TopBar()
     qtbot.addWidget(bar)
     bar.show()
-    bar.set_active_model("Tiny (test)")
+    bar.set_active_model("Large v3 Turbo (int8)")
     bar.set_recording_state("model_loading")
 
     assert not _recording_pill(bar).isVisibleTo(bar)
     model_pill = _label_by_name(bar, "TopBarModelPill")
     assert model_pill.property("state") == "loading"
     assert "loading" in model_pill.text().lower()
-    assert "Tiny (test)" in model_pill.text()
+    assert "Large v3 Turbo (int8)" in model_pill.text()
 
 
 def test_model_pill_returns_to_active_when_loading_ends(qtbot):
@@ -196,7 +196,7 @@ def test_model_pill_returns_to_active_when_loading_ends(qtbot):
     bar = TopBar()
     qtbot.addWidget(bar)
     bar.show()
-    bar.set_active_model("Tiny (test)")
+    bar.set_active_model("Large v3 Turbo (int8)")
     bar.set_recording_state("model_loading")
     bar.set_recording_state("idle")
 
@@ -236,7 +236,7 @@ def test_topbar_set_loading_elapsed_appends_seconds_when_no_progress(qtbot):
 
     bar = TopBar()
     qtbot.addWidget(bar)
-    bar.set_active_model("Tiny (test)")
+    bar.set_active_model("Large v3 Turbo (int8)")
     bar.set_recording_state("model_loading")
 
     bar.set_loading_elapsed(5)
@@ -251,7 +251,7 @@ def test_topbar_loading_progress_takes_priority_over_elapsed(qtbot):
 
     bar = TopBar()
     qtbot.addWidget(bar)
-    bar.set_active_model("Tiny (test)")
+    bar.set_active_model("Large v3 Turbo (int8)")
     bar.set_recording_state("model_loading")
 
     bar.set_loading_elapsed(7)
@@ -268,14 +268,18 @@ def test_topbar_back_to_idle_clears_elapsed_state(qtbot):
 
     bar = TopBar()
     qtbot.addWidget(bar)
-    bar.set_active_model("Tiny (test)")
+    bar.set_active_model("Large v3 Turbo (int8)")
     bar.set_recording_state("model_loading")
-    bar.set_loading_elapsed(8)
+    # Elapsed value chosen so its digit doesn't appear in the
+    # model display name — otherwise we can't tell whether the
+    # counter cleared or just happens to repeat a digit from the
+    # name. ``Large v3 Turbo (int8)`` contains 3 and 8, so 4 is safe.
+    bar.set_loading_elapsed(4)
 
     bar.set_recording_state("idle")
     bar.set_recording_state("model_loading")
     text = _label_by_name(bar, "TopBarModelPill").text()
-    assert "8" not in text
+    assert "4" not in text
 
 
 def test_topbar_vu_meter_only_visible_in_recording_state(qtbot):
