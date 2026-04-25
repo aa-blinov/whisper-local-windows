@@ -28,6 +28,10 @@ _QUALITY_VALUES = ("basic", "good", "excellent")
 # What ctranslate2 accepts for ``compute_type``. We restrict to the four
 # values that actually make sense for inference.
 _COMPUTE_VALUES = ("float32", "float16", "int8_float16", "int8")
+# Which inference backend should drive this model. ``faster_whisper`` is
+# the default CT2 path; ``gigaam`` routes through the Sber Russian-only
+# acoustic model. New engines plug in here.
+BACKEND_KINDS = ("faster_whisper", "gigaam")
 
 
 @dataclass(frozen=True)
@@ -42,6 +46,7 @@ class ModelInfo:
     languages: str
     description: str
     compute_type: str = "float16"
+    backend_kind: str = "faster_whisper"
 
     def __post_init__(self) -> None:
         if self.speed not in _SPEED_VALUES:
@@ -55,6 +60,10 @@ class ModelInfo:
         if self.compute_type not in _COMPUTE_VALUES:
             raise ValueError(
                 f"compute_type must be one of {_COMPUTE_VALUES}, got {self.compute_type!r}"
+            )
+        if self.backend_kind not in BACKEND_KINDS:
+            raise ValueError(
+                f"backend_kind must be one of {BACKEND_KINDS}, got {self.backend_kind!r}"
             )
 
 
@@ -160,6 +169,34 @@ MODELS: Tuple[ModelInfo, ...] = (
         description="Quantized Russian fine-tune. Best Russian quality on a 6 GB GPU.",
         compute_type="int8_float16",
     ),
+    # ---- GigaAM (Sber, Russian-only) ---------------------------------------
+    # GigaAM has its own engine; ``backend_kind`` switches the routing
+    # facade to ``gigaam.load_model`` instead of ``faster_whisper``.
+    # ``canonical`` here is the GigaAM model id, not a HF repo path.
+    ModelInfo(
+        alias="gigaam-v2-ctc",
+        canonical="v2_ctc",
+        display_name="GigaAM v2 CTC",
+        size_mb=240,
+        vram_gb=2.0,
+        speed="fast",
+        quality="excellent",
+        languages="Russian (only)",
+        description="Sber GigaAM v2 with CTC decoder — fast Russian transcription, smaller than Whisper.",
+        backend_kind="gigaam",
+    ),
+    ModelInfo(
+        alias="gigaam-v2-rnnt",
+        canonical="v2_rnnt",
+        display_name="GigaAM v2 RNN-T",
+        size_mb=270,
+        vram_gb=2.5,
+        speed="medium",
+        quality="excellent",
+        languages="Russian (only)",
+        description="Sber GigaAM v2 with RNN-T decoder — best Russian quality, slightly slower than CTC.",
+        backend_kind="gigaam",
+    ),
 )
 
 
@@ -191,3 +228,5 @@ def canonical_for(name: str) -> str:
 
 def alias_for(canonical: str) -> str:
     return MODEL_TO_ALIAS.get(canonical, canonical)
+
+

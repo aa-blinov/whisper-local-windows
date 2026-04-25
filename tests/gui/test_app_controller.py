@@ -24,15 +24,16 @@ class FakeConfig:
 
 @pytest.fixture(autouse=True)
 def _assume_cached(monkeypatch):
-    """The controller now consults ``is_model_cached`` before restoring
-    the persisted active card so a fresh install / cleared cache doesn't
-    silently kick off a multi-gigabyte download. The bulk of the existing
-    tests assume the persisted model is on disk; default the mock to True
-    here and let the dedicated uncached-model test override it.
+    """The controller now consults ``is_cached_for_info`` before
+    restoring the persisted active card so a fresh install / cleared
+    cache doesn't silently kick off a multi-gigabyte download. The
+    bulk of the existing tests assume the persisted model is on disk;
+    default the mock to True here and let the dedicated uncached-
+    model test override it.
     """
     monkeypatch.setattr(
-        "app.gui.controllers.app_controller.is_model_cached",
-        lambda canonical: True,
+        "app.gui.controllers.app_controller.is_cached_for_info",
+        lambda info: True,
     )
 
 
@@ -105,8 +106,8 @@ def test_controller_skips_active_when_persisted_model_is_not_cached(
     from app.gui.main_window import MainWindow
 
     monkeypatch.setattr(
-        "app.gui.controllers.app_controller.is_model_cached",
-        lambda canonical: False,
+        "app.gui.controllers.app_controller.is_cached_for_info",
+        lambda info: False,
     )
 
     window = MainWindow()

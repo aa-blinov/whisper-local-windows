@@ -15,11 +15,10 @@ from typing import Tuple
 from app.audio_feedback import AudioFeedback
 from app.audio_recorder import AudioRecorder
 from app.backends.base import TranscriptionBackend
-from app.backends.faster_whisper_backend import FasterWhisperBackend
+from app.backends.routed_backend import RoutedBackend
 from app.clipboard_manager import ClipboardManager
 from app.config_manager import ConfigManager
 from app.hotkey_listener import HotkeyListener
-from app.model_mapping import canonical_for
 from app.state_manager import StateManager
 
 
@@ -44,10 +43,11 @@ def build_recording_stack(
     hotkey_cfg = config_manager.get_hotkey_config()
 
     # Resolve the model name. Accept either an alias from the registry
-    # (e.g. ``large-v3``) or a full Hugging Face id; faster-whisper handles
-    # both via huggingface_hub.
+    # (e.g. ``large-v3`` or ``gigaam-v2-ctc``) or a full Hugging Face id;
+    # ``RoutedBackend`` decides which engine to instantiate based on the
+    # alias' ``backend_kind`` and falls back to faster-whisper for bare
+    # repo paths.
     raw_model = whisper_cfg.get("model") or "large-v3"
-    canonical = canonical_for(raw_model)
 
     audio_feedback = AudioFeedback(
         enabled=bool(feedback_cfg.get("enabled", True)),
@@ -69,8 +69,8 @@ def build_recording_stack(
         preserve_clipboard=bool(clipboard_cfg.get("preserve_clipboard", False)),
     )
 
-    backend: TranscriptionBackend = FasterWhisperBackend(
-        model=canonical,
+    backend: TranscriptionBackend = RoutedBackend(
+        model=raw_model,
         device=str(whisper_cfg.get("device", "auto")),
         compute_type=str(whisper_cfg.get("compute_type", "float16")),
         language=whisper_cfg.get("language") or None,
@@ -98,8 +98,9 @@ def build_recording_stack(
     )
 
     log.info(
-        "Recording stack built: model=%s device=%s compute_type=%s",
-        canonical,
+        "Recording stack built: model=%s kind=%s device=%s compute_type=%s",
+        backend.current_model(),
+        backend.current_kind(),
         whisper_cfg.get("device", "auto"),
         whisper_cfg.get("compute_type", "float16"),
     )

@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from app.gui.widgets.flow_layout import FlowLayout
 from app.model_mapping import ModelInfo
-from app.utils import is_model_cached
+from app.utils import is_cached_for_info
 
 
 def _format_size(size_mb: int) -> str:
@@ -220,7 +220,7 @@ class ModelCard(QFrame):
     def refresh_cache_state(self) -> None:
         """Recompute whether the underlying model is downloaded and update
         the action button label (``Download`` vs ``Select``)."""
-        cached = is_model_cached(self._info.canonical)
+        cached = is_cached_for_info(self._info)
         self._select_btn.setText("Select" if cached else "Download")
 
     def set_loading(self, loading: bool) -> None:

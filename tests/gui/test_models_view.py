@@ -170,8 +170,8 @@ def test_models_view_refresh_cache_state_propagates_to_all_cards(qtbot, monkeypa
     cache_status = {"cached": False}
     monkeypatch.setattr(
         model_card_module,
-        "is_model_cached",
-        lambda c: cache_status["cached"],
+        "is_cached_for_info",
+        lambda info: cache_status["cached"],
     )
 
     view = ModelsView()

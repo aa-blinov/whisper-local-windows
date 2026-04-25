@@ -27,6 +27,9 @@ dependencies = [
     "faster-whisper>=1.2.1",
     "nvidia-cublas-cu12>=12.9.2.10",
     "nvidia-cudnn-cu12>=9.21.1.3",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+    "gigaam @ git+https://github.com/salute-developers/GigaAM",
 ]
 
 [project.scripts]

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication
 from app.gui.controllers.backend_status_poller import BackendStatusPoller
 from app.gui.main_window import MainWindow
 from app.model_mapping import alias_for, canonical_for, get_model
-from app.utils import is_model_cached
+from app.utils import is_cached_for_info
 
 
 log = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ class AppController(QObject):
                 # nothing loaded — and the Select/Download button stays
                 # hidden, leaving the user with no way to trigger the
                 # download. Force a deliberate click in that case.
-                if is_model_cached(info.canonical):
+                if is_cached_for_info(info):
                     view.set_active(alias)
                     active_info = info
                 else:

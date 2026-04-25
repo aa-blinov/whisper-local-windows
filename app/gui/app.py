@@ -13,7 +13,7 @@ from app.gui.controllers.app_controller import AppController
 from app.gui.log_bridge import QtLogBridge
 from app.gui.main_window import MainWindow
 from app.gui.theme import apply_theme
-from app.utils import is_model_cached, resolve_asset_path
+from app.utils import is_cached_for_info, is_model_cached, resolve_asset_path
 
 
 def _load_app_icon() -> QIcon:
@@ -274,8 +274,14 @@ def main() -> int:
         # "Loading model…" with no idea that 1.5 GB are coming over
         # the wire. Force a deliberate click on a Download button in
         # that case so progress is visible and consensual.
+        from app.model_mapping import alias_for, get_model
+
         canonical = backend.current_model()
-        if is_model_cached(canonical):
+        try:
+            cached = is_cached_for_info(get_model(alias_for(canonical)))
+        except KeyError:
+            cached = is_model_cached(canonical)
+        if cached:
             backend.load()
         else:
             logging.getLogger(__name__).info(

@@ -107,6 +107,32 @@ def is_model_cached(canonical: str) -> bool:
     return False
 
 
+def is_gigaam_cached(model_name: str) -> bool:
+    """Return True if GigaAM has the given model checkpoint on disk.
+
+    GigaAM downloads to ``~/.cache/gigaam/<model_name>.ckpt`` (NOT the
+    HF hub layout) — every weights file lives next to the others as a
+    single ``.ckpt``. Checks the file is present and non-empty.
+    """
+    if not model_name:
+        return False
+    cache_dir = Path.home() / ".cache" / "gigaam"
+    candidate = cache_dir / f"{model_name}.ckpt"
+    try:
+        return candidate.is_file() and candidate.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def is_cached_for_info(info) -> bool:
+    """Dispatch the cache check by ``info.backend_kind`` so the UI can
+    ask one question regardless of which engine backs a model."""
+    kind = getattr(info, "backend_kind", "faster_whisper")
+    if kind == "gigaam":
+        return is_gigaam_cached(getattr(info, "canonical", ""))
+    return is_model_cached(getattr(info, "canonical", ""))
+
+
 def resolve_asset_path(relative_path: str) -> str:
     
     if not relative_path or os.path.isabs(relative_path):

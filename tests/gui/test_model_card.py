@@ -355,7 +355,7 @@ def test_model_card_button_says_download_when_not_cached(qtbot, monkeypatch):
     import app.gui.widgets.model_card as model_card_module
     from app.gui.widgets.model_card import ModelCard
 
-    monkeypatch.setattr(model_card_module, "is_model_cached", lambda c: False)
+    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: False)
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
@@ -371,7 +371,7 @@ def test_model_card_button_says_select_when_cached(qtbot, monkeypatch):
     import app.gui.widgets.model_card as model_card_module
     from app.gui.widgets.model_card import ModelCard
 
-    monkeypatch.setattr(model_card_module, "is_model_cached", lambda c: True)
+    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
@@ -391,8 +391,8 @@ def test_model_card_refresh_cache_state_picks_up_new_state(qtbot, monkeypatch):
     cache_status = {"cached": False}
     monkeypatch.setattr(
         model_card_module,
-        "is_model_cached",
-        lambda c: cache_status["cached"],
+        "is_cached_for_info",
+        lambda info: cache_status["cached"],
     )
 
     card = ModelCard(_make_info())
