@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.widgets.flow_layout import FlowLayout
 from app.model_mapping import ModelInfo
 from app.utils import is_model_cached
 
@@ -82,7 +83,11 @@ class ModelCard(QFrame):
         self.setProperty("role", "card")
         self.setProperty("active", False)
         self.setFrameShape(QFrame.NoFrame)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # Variable vertical size — badges wrap onto a second line on
+        # narrow windows, so the card has to grow to fit them.
+        sp = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        sp.setHeightForWidth(True)
+        self.setSizePolicy(sp)
 
         # Soft drop shadow makes the card "float" off the dark surface
         # — Qt QSS has no box-shadow so this is the only way to add
@@ -121,8 +126,11 @@ class ModelCard(QFrame):
         description.setWordWrap(True)
         root.addWidget(description)
 
-        badges = QHBoxLayout()
-        badges.setSpacing(6)
+        # FlowLayout wraps badges to a new line when the card is too
+        # narrow to fit them all in one row — without this, narrow
+        # windows clipped the right side of the card (and the
+        # Download button) at the scroll viewport's edge.
+        badges = FlowLayout(spacing=6)
         for text in (
             f"speed: {info.speed}",
             f"quality: {info.quality}",
@@ -134,7 +142,6 @@ class ModelCard(QFrame):
             badge = QLabel(text, self)
             badge.setProperty("role", "badge")
             badges.addWidget(badge)
-        badges.addStretch(1)
         root.addLayout(badges)
 
         footer = QHBoxLayout()
@@ -159,6 +166,17 @@ class ModelCard(QFrame):
         # Initial Download/Select label based on whether the canonical is
         # already cached on disk. Refreshable via ``refresh_cache_state``.
         self.refresh_cache_state()
+
+    def hasHeightForWidth(self) -> bool:  # type: ignore[override]
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # type: ignore[override]
+        layout = self.layout()
+        if layout is None:
+            return -1
+        margins = self.contentsMargins()
+        inner = width - margins.left() - margins.right()
+        return layout.heightForWidth(inner) + margins.top() + margins.bottom()
 
     def alias(self) -> str:
         return self._info.alias
