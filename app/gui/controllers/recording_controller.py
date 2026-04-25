@@ -73,6 +73,27 @@ class RecordingController(QObject):
     def request_model_change(self, new_model_size: str) -> bool:
         return self._state_manager.request_model_change(new_model_size)
 
+    def list_input_devices(self) -> list:
+        recorder = getattr(self._state_manager, "audio_recorder", None)
+        if recorder is None or not hasattr(recorder, "list_input_devices"):
+            return []
+        try:
+            return recorder.list_input_devices()
+        except Exception:
+            return []
+
+    def current_input_device(self):
+        recorder = getattr(self._state_manager, "audio_recorder", None)
+        return getattr(recorder, "device", None) if recorder is not None else None
+
+    def set_input_device(self, raw):
+        """Switch the recorder's input device. Accepts ``None`` (system
+        default), an int index, or a substring of the device name."""
+        recorder = getattr(self._state_manager, "audio_recorder", None)
+        if recorder is None or not hasattr(recorder, "set_device"):
+            return None
+        return recorder.set_device(raw)
+
     def shutdown(self) -> None:
         if self._shutdown_done:
             return

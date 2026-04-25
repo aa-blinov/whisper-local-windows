@@ -115,6 +115,15 @@ class AppController(QObject):
         auto_paste = bool(self._config.get_setting("clipboard", "auto_paste"))
         view.set_values(start_hotkey=start, stop_hotkey=stop, auto_paste=auto_paste)
 
+        # Populate the microphone dropdown if a recording stack is wired in.
+        if self._recording is not None and hasattr(self._recording, "list_input_devices"):
+            try:
+                devices = self._recording.list_input_devices()
+                current = self._recording.current_input_device()
+            except Exception:
+                devices, current = [], None
+            view.set_devices(devices, current)
+
         view.save_requested.connect(self._on_shortcuts_save)
         view.reset_requested.connect(self._on_shortcuts_reset)
 
@@ -128,6 +137,13 @@ class AppController(QObject):
         self._config.update_user_setting(
             "clipboard", "auto_paste", payload["auto_paste"]
         )
+        if "device" in payload:
+            self._config.update_user_setting("audio", "device", payload["device"])
+            if self._recording is not None and hasattr(self._recording, "set_input_device"):
+                try:
+                    self._recording.set_input_device(payload["device"])
+                except Exception as exc:
+                    log.warning("Failed to switch input device: %s", exc)
 
     def _on_shortcuts_reset(self) -> None:
         from app.config_manager import DEFAULT_CONFIG

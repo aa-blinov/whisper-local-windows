@@ -40,6 +40,24 @@ class AudioRecorder:
         if self.recording_thread:
             self.recording_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
 
+    @staticmethod
+    def list_input_devices() -> list:
+        """Return ``[(index, name), ...]`` for every input-capable device."""
+        out = []
+        try:
+            for idx, info in enumerate(sd.query_devices()):
+                if info.get("max_input_channels", 0) > 0:
+                    out.append((idx, info.get("name", "<unnamed>")))
+        except Exception:
+            pass
+        return out
+
+    def set_device(self, raw: Optional[Union[int, str]]) -> Optional[int]:
+        """Switch the input device used for the next recording. Returns the
+        resolved index (or ``None`` for system default)."""
+        self.device = self._resolve_device(raw)
+        return self.device
+
     def _resolve_device(self, raw: Optional[Union[int, str]]) -> Optional[int]:
         if raw is None or raw == "":
             return None

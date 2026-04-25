@@ -1,17 +1,19 @@
-"""Shortcuts view — global hotkeys and auto-paste toggle.
+"""Shortcuts view — global hotkeys, microphone, and auto-paste toggle.
 
 Edits persist immediately when a field commits (editingFinished on a
-QLineEdit, toggled on the QCheckBox); there is no Save button. A Reset
-button asks the controller to restore default values.
+QLineEdit, currentIndexChanged on the QComboBox, toggled on the
+QCheckBox); there is no Save button. A Reset button asks the controller
+to restore default values.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -40,7 +42,7 @@ class ShortcutsView(QWidget):
         root.setSpacing(10)
 
         hint = QLabel(
-            "Global hotkeys and paste behaviour. Changes save automatically.",
+            "Microphone, global hotkeys, paste behaviour. Changes save automatically.",
             self,
         )
         hint.setProperty("role", "muted")
@@ -51,6 +53,13 @@ class ShortcutsView(QWidget):
         form = QFormLayout(card)
         form.setContentsMargins(16, 14, 16, 14)
         form.setSpacing(10)
+
+        self._device_combo = QComboBox(card)
+        self._device_combo.setObjectName("MicrophoneCombo")
+        # Populated later via set_devices(); placeholder until then.
+        self._device_combo.addItem("System default", None)
+        self._device_combo.currentIndexChanged.connect(self._on_device_changed)
+        form.addRow("Microphone", self._device_combo)
 
         self._start_edit = QLineEdit(card)
         self._start_edit.setObjectName("StartHotkeyEdit")
@@ -98,6 +107,29 @@ class ShortcutsView(QWidget):
         finally:
             self._suspend_emit = False
 
+    def set_devices(
+        self,
+        devices: List[Tuple[int, str]],
+        current: Optional[int] = None,
+    ) -> None:
+        """Populate the microphone dropdown. ``devices`` is a list of
+        ``(index, name)`` tuples. ``current`` is the index to preselect, or
+        ``None`` for system default."""
+        self._suspend_emit = True
+        try:
+            self._device_combo.clear()
+            self._device_combo.addItem("System default", None)
+            for idx, name in devices:
+                self._device_combo.addItem(f"[{idx}] {name}", idx)
+
+            if current is not None:
+                for i in range(self._device_combo.count()):
+                    if self._device_combo.itemData(i) == current:
+                        self._device_combo.setCurrentIndex(i)
+                        break
+        finally:
+            self._suspend_emit = False
+
     def start_hotkey(self) -> str:
         return self._start_edit.text().strip()
 
@@ -107,11 +139,15 @@ class ShortcutsView(QWidget):
     def auto_paste(self) -> bool:
         return self._auto_paste_cb.isChecked()
 
+    def device_index(self) -> Optional[int]:
+        return self._device_combo.currentData()
+
     def values(self) -> Dict[str, Any]:
         return {
             "start_hotkey": self.start_hotkey(),
             "stop_hotkey": self.stop_hotkey(),
             "auto_paste": self.auto_paste(),
+            "device": self.device_index(),
         }
 
     # ---- internal -----------------------------------------------------------
@@ -122,4 +158,7 @@ class ShortcutsView(QWidget):
         self.save_requested.emit(self.values())
 
     def _on_auto_paste_toggled(self, _checked: bool) -> None:
+        self._emit_save()
+
+    def _on_device_changed(self, _idx: int) -> None:
         self._emit_save()
