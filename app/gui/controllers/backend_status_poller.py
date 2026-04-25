@@ -24,15 +24,15 @@ _StatusFetcher = Callable[[], str]
 def _map_status(raw: str) -> Tuple[str, str]:
     """Translate ``TranscriptionBackend.status()`` values into TopBar vocabulary.
 
-    The backend exposes ``stopped | loading | ready | error``; the topbar
-    pill speaks ``running | stopped | error | unknown``. Loading is
-    rendered as a ``stopped`` pill with a hint label so the user can see
-    "Loading model…" without it looking like a green-light "ready".
+    With the in-process backend, the recording-state pill on the left of
+    the TopBar already covers every "everything is fine" / "loading model"
+    case. To avoid the same yellow "Loading model…" message rendering
+    twice, we map ``ready`` and ``loading`` to ``hidden`` so the right-
+    hand status pill only appears when there's something actionable
+    (error / stopped) for the user to see.
     """
-    if raw == "ready":
-        return "running", "Model ready"
-    if raw == "loading":
-        return "stopped", "Loading model\u2026"
+    if raw in ("ready", "loading"):
+        return "hidden", ""
     if raw == "error":
         return "error", "Backend error"
     if raw == "stopped":

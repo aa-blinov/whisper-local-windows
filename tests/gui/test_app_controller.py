@@ -403,12 +403,15 @@ def test_controller_drives_topbar_status_from_fetcher(qtbot):
     AppController(
         config=config,
         window=window,
-        backend_status_fetcher=lambda: "ready",
+        backend_status_fetcher=lambda: "error",
     )
 
     # Polling is async (worker thread), so wait for the topbar to update.
+    # ``ready`` and ``loading`` map to ``hidden`` to avoid duplicating the
+    # left-side recording-state pill, so we use ``error`` here as a status
+    # the topbar surfaces visibly.
     qtbot.waitUntil(
-        lambda: window.topbar._status_pill.property("status") == "running",
+        lambda: window.topbar._status_pill.property("status") == "error",
         timeout=2000,
     )
 

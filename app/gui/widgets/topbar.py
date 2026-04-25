@@ -13,12 +13,13 @@ from PySide6.QtWidgets import (
 )
 
 
-_STATUS_VALUES = ("running", "stopped", "error", "unknown")
+_STATUS_VALUES = ("running", "stopped", "error", "unknown", "hidden")
 _STATUS_DEFAULT_LABELS = {
     "running": "Backend running",
     "stopped": "Backend stopped",
     "error": "Backend error",
     "unknown": "Status unknown",
+    "hidden": "",
 }
 _NO_MODEL_TEXT = "No model"
 
@@ -92,6 +93,10 @@ class TopBar(QWidget):
             raise ValueError(
                 f"status must be one of {_STATUS_VALUES}, got {status!r}"
             )
+        if status == "hidden":
+            self._status_pill.setVisible(False)
+            return
+        self._status_pill.setVisible(True)
         self._status_pill.setProperty("status", status)
         self._status_pill.setText(label or _STATUS_DEFAULT_LABELS[status])
         self._status_pill.style().unpolish(self._status_pill)

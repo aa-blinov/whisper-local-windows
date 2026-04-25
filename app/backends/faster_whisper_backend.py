@@ -29,40 +29,98 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 
-def _register_cuda_dll_dirs() -> None:
-    """Add ``nvidia-*`` wheel ``bin`` directories to the Windows DLL search.
+_cuda_dlls_registered = False
 
-    ``ctranslate2`` (the engine behind faster-whisper) loads
-    ``cublas64_12.dll`` / ``cudnn64_9.dll`` at inference time. The Python
-    ``nvidia-cublas-cu12`` and ``nvidia-cudnn-cu12`` wheels ship those DLLs
-    inside ``site-packages/nvidia/<pkg>/bin``, but Python does not put that
-    directory on ``%PATH%`` automatically. Register each present
-    sub-package's ``bin`` folder via ``os.add_dll_directory`` so the
-    runtime resolution succeeds without a system-wide CUDA install.
-    Idempotent — safe to call multiple times.
+
+def _register_cuda_dll_dirs() -> None:
+    """Make CUDA DLLs from ``nvidia-*-cu12`` wheels resolvable on Windows.
+
+    ``ctranslate2`` lazy-loads ``cublas64_12.dll`` / ``cudnn64_9.dll`` etc.
+    via a plain ``LoadLibrary`` call, which does NOT search directories
+    added via ``os.add_dll_directory`` (that flag is only honoured by
+    ``LoadLibraryEx`` with ``LOAD_LIBRARY_SEARCH_USER_DIRS``). To cover
+    all cases we do three things for each ``nvidia/<pkg>/bin`` directory:
+
+    1. ``os.add_dll_directory`` — covers anything using LoadLibraryEx
+    2. Prepend to ``PATH`` — covers the legacy LoadLibrary search order
+    3. Pre-load the DLLs into the process via ``ctypes.WinDLL`` from the
+       absolute path so subsequent ``LoadLibrary("cublas64_12.dll")``
+       calls return the already-loaded module handle.
+
+    Idempotent.
     """
-    if sys.platform != "win32":
+    global _cuda_dlls_registered
+    if _cuda_dlls_registered or sys.platform != "win32":
         return
     try:
         import nvidia  # type: ignore
     except ImportError:
         return
-    # ``nvidia`` is a PEP 420 namespace package — ``__file__`` is None,
-    # ``__path__`` lists every site-packages directory that contributes
-    # ``nvidia/<sub>/`` (typically just one).
+    # ``nvidia`` is a PEP 420 namespace package — ``__path__`` lists the
+    # site-packages directories that contribute ``nvidia/<sub>/``.
     roots = list(getattr(nvidia, "__path__", []) or [])
     if not roots and getattr(nvidia, "__file__", None):
         roots = [os.path.dirname(nvidia.__file__)]
+
+    bin_dirs: list[str] = []
     for nvidia_root in roots:
         if not os.path.isdir(nvidia_root):
             continue
         for sub in os.listdir(nvidia_root):
             bin_dir = os.path.join(nvidia_root, sub, "bin")
             if os.path.isdir(bin_dir):
+                bin_dirs.append(bin_dir)
+
+    if not bin_dirs:
+        return
+
+    # 1) AddDllDirectory for LoadLibraryEx-style loads.
+    for bin_dir in bin_dirs:
+        try:
+            os.add_dll_directory(bin_dir)
+        except (FileNotFoundError, OSError) as exc:
+            log.debug("add_dll_directory(%s) failed: %s", bin_dir, exc)
+
+    # 2) Prepend to PATH for legacy LoadLibrary resolution.
+    existing = os.environ.get("PATH", "")
+    new_path = os.pathsep.join(bin_dirs + ([existing] if existing else []))
+    os.environ["PATH"] = new_path
+
+    # 3) Eagerly load the runtime DLLs that ctranslate2 will need so
+    # subsequent ``LoadLibrary("cublas64_12.dll")`` calls find the already-
+    # loaded module by name. Order matters — cuBLAS depends on cublasLt,
+    # cuDNN on the cuDNN sub-libs.
+    try:
+        import ctypes
+    except ImportError:
+        ctypes = None  # type: ignore[assignment]
+
+    if ctypes is not None:
+        candidates = [
+            "cublasLt64_12.dll",
+            "cublas64_12.dll",
+            "cudnn64_9.dll",
+            "cudnn_ops64_9.dll",
+            "cudnn_cnn64_9.dll",
+            "cudnn_engines_precompiled64_9.dll",
+            "cudnn_engines_runtime_compiled64_9.dll",
+            "cudnn_heuristic64_9.dll",
+            "cudnn_graph64_9.dll",
+            "cudnn_adv64_9.dll",
+        ]
+        for bin_dir in bin_dirs:
+            for name in candidates:
+                full = os.path.join(bin_dir, name)
+                if not os.path.isfile(full):
+                    continue
                 try:
-                    os.add_dll_directory(bin_dir)
-                except (FileNotFoundError, OSError) as exc:
-                    log.debug("Skipping CUDA dll dir %s: %s", bin_dir, exc)
+                    ctypes.WinDLL(full)
+                    log.debug("Preloaded %s", full)
+                except OSError as exc:
+                    log.debug("Preload %s failed: %s", full, exc)
+
+    _cuda_dlls_registered = True
+    log.info("Registered CUDA DLL directories: %s", bin_dirs)
 
 
 class FasterWhisperBackend:
