@@ -79,6 +79,34 @@ def get_project_models_path() -> str:
     return str(models_dir)
 
 
+def is_model_cached(canonical: str) -> bool:
+    """Return True if the given Hugging Face model id has at least one
+    snapshot present in the local hub cache.
+
+    Honours ``HF_HOME`` (which we set to ``<project>/models``); falls back
+    to the user's ``~/.cache/huggingface`` if HF_HOME is not configured.
+    Doesn't validate the snapshot's contents — just checks for the
+    presence of a non-empty directory under ``snapshots/``.
+    """
+    if not canonical:
+        return False
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        hub_root = Path(hf_home) / "hub"
+    else:
+        hub_root = Path.home() / ".cache" / "huggingface" / "hub"
+    repo_dir = hub_root / f"models--{canonical.replace('/', '--')}"
+    if not repo_dir.is_dir():
+        return False
+    snapshots = repo_dir / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    for snap in snapshots.iterdir():
+        if snap.is_dir() and any(snap.iterdir()):
+            return True
+    return False
+
+
 def resolve_asset_path(relative_path: str) -> str:
     
     if not relative_path or os.path.isabs(relative_path):

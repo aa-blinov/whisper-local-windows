@@ -156,6 +156,64 @@ def test_model_card_inactive_card_ignores_loading(qtbot):
     assert not card._active_pill.isVisibleTo(card)
 
 
+def test_model_card_button_says_download_when_not_cached(qtbot, monkeypatch):
+    """Uncached models advertise the action as 'Download' so the user knows
+    the click will fetch weights from the network."""
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr(model_card_module, "is_model_cached", lambda c: False)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+
+    select_btn = next(
+        b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
+    )
+    assert select_btn.text() == "Download"
+
+
+def test_model_card_button_says_select_when_cached(qtbot, monkeypatch):
+    """Once weights are on disk, the action button switches to 'Select'."""
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr(model_card_module, "is_model_cached", lambda c: True)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+
+    select_btn = next(
+        b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
+    )
+    assert select_btn.text() == "Select"
+
+
+def test_model_card_refresh_cache_state_picks_up_new_state(qtbot, monkeypatch):
+    """After a download finishes, calling refresh_cache_state should flip
+    the button label without needing to rebuild the card."""
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    cache_status = {"cached": False}
+    monkeypatch.setattr(
+        model_card_module,
+        "is_model_cached",
+        lambda c: cache_status["cached"],
+    )
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    select_btn = next(
+        b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
+    )
+    assert select_btn.text() == "Download"
+
+    cache_status["cached"] = True
+    card.refresh_cache_state()
+    assert select_btn.text() == "Select"
+
+
 def test_model_card_emits_select_signal_with_alias(qtbot):
     from app.gui.widgets.model_card import ModelCard
 

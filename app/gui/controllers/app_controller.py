@@ -222,6 +222,14 @@ class AppController(QObject):
         # Reflect the model-loading state on the active card's pill so it
         # doesn't say "Active" while the topbar shows "Loading model…".
         self._window.models_view.set_loading(state == "model_loading")
+        # When the backend transitions back to idle, a download (if any)
+        # has finished — refresh per-card cache state so the button on
+        # the previously-undownloaded model switches to "Select".
+        if state == "idle":
+            try:
+                self._window.models_view.refresh_cache_state()
+            except Exception:  # pragma: no cover — defensive
+                pass
         if self._tray is not None:
             self._tray.set_state(state)
 

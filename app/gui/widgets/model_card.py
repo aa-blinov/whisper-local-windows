@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.model_mapping import ModelInfo
+from app.utils import is_model_cached
 
 
 def _format_size(size_mb: int) -> str:
@@ -104,6 +105,10 @@ class ModelCard(QFrame):
         footer.addWidget(self._select_btn)
         root.addLayout(footer)
 
+        # Initial Download/Select label based on whether the canonical is
+        # already cached on disk. Refreshable via ``refresh_cache_state``.
+        self.refresh_cache_state()
+
     def alias(self) -> str:
         return self._info.alias
 
@@ -131,6 +136,12 @@ class ModelCard(QFrame):
 
     def is_loading(self) -> bool:
         return self._loading
+
+    def refresh_cache_state(self) -> None:
+        """Recompute whether the underlying model is downloaded and update
+        the action button label (``Download`` vs ``Select``)."""
+        cached = is_model_cached(self._info.canonical)
+        self._select_btn.setText("Select" if cached else "Download")
 
     def set_loading(self, loading: bool) -> None:
         """Reflect backend load state on the active pill — swap 'Active' for
