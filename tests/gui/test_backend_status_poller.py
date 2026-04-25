@@ -4,7 +4,7 @@
 def test_tick_emits_initial_status(qtbot):
     from app.gui.controllers.backend_status_poller import BackendStatusPoller
 
-    poller = BackendStatusPoller(fetcher=lambda: "running")
+    poller = BackendStatusPoller(fetcher=lambda: "ready")
     with qtbot.waitSignal(poller.status_changed, timeout=1000) as blocker:
         poller.tick()
     canonical, _label = blocker.args
@@ -14,7 +14,7 @@ def test_tick_emits_initial_status(qtbot):
 def test_tick_dedupes_unchanged_status(qtbot):
     from app.gui.controllers.backend_status_poller import BackendStatusPoller
 
-    poller = BackendStatusPoller(fetcher=lambda: "running")
+    poller = BackendStatusPoller(fetcher=lambda: "ready")
     emissions: list[tuple[str, str]] = []
     poller.status_changed.connect(lambda s, l: emissions.append((s, l)))
 
@@ -33,7 +33,7 @@ def test_tick_dedupes_unchanged_status(qtbot):
 def test_tick_emits_when_status_changes(qtbot):
     from app.gui.controllers.backend_status_poller import BackendStatusPoller
 
-    states = iter(["running", "running", "stopped"])
+    states = iter(["ready", "ready", "stopped"])
     poller = BackendStatusPoller(fetcher=lambda: next(states))
     emissions: list[str] = []
     poller.status_changed.connect(lambda s, _l: emissions.append(s))
@@ -59,7 +59,7 @@ def test_tick_runs_fetcher_off_main_thread(qtbot):
 
     def probe() -> str:
         seen_thread.append(threading.current_thread())
-        return "running"
+        return "ready"
 
     poller = BackendStatusPoller(fetcher=probe)
     with qtbot.waitSignal(poller.status_changed, timeout=1000):
@@ -77,19 +77,16 @@ def test_slow_fetcher_does_not_block_ui_thread(qtbot):
 
     def slow_fetcher() -> str:
         time.sleep(0.4)
-        return "running"
+        return "ready"
 
     poller = BackendStatusPoller(fetcher=slow_fetcher)
     poller.tick()
 
-    # While the fetcher is sleeping, the UI thread should still process events.
     start = time.monotonic()
     qtbot.wait(50)
     elapsed = time.monotonic() - start
-    # 50 ms wait must not balloon (would happen if tick blocked the thread)
     assert elapsed < 0.2
 
-    # Drain the eventual signal so the poller cleans up.
     qtbot.waitSignal(poller.status_changed, timeout=1500).wait()
 
 
@@ -104,7 +101,7 @@ def test_overlapping_ticks_do_not_pile_up(qtbot):
     def slow_fetcher() -> str:
         call_count["n"] += 1
         time.sleep(0.2)
-        return "running"
+        return "ready"
 
     poller = BackendStatusPoller(fetcher=slow_fetcher)
     poller.tick()
@@ -117,19 +114,19 @@ def test_overlapping_ticks_do_not_pile_up(qtbot):
     assert call_count["n"] == 1
 
 
-def test_map_docker_not_found_becomes_stopped(qtbot):
+def test_map_loading_renders_as_stopped_with_loading_label(qtbot):
     from app.gui.controllers.backend_status_poller import BackendStatusPoller
 
-    poller = BackendStatusPoller(fetcher=lambda: "not_found")
+    poller = BackendStatusPoller(fetcher=lambda: "loading")
     with qtbot.waitSignal(poller.status_changed, timeout=1000) as blocker:
         poller.tick()
 
     canonical, label = blocker.args
     assert canonical == "stopped"
-    assert "not found" in label.lower() or "container" in label.lower()
+    assert "loading" in label.lower()
 
 
-def test_map_docker_error_becomes_error(qtbot):
+def test_map_backend_error_becomes_error(qtbot):
     from app.gui.controllers.backend_status_poller import BackendStatusPoller
 
     poller = BackendStatusPoller(fetcher=lambda: "error")
@@ -140,11 +137,23 @@ def test_map_docker_error_becomes_error(qtbot):
     assert canonical == "error"
 
 
+def test_map_stopped_renders_as_stopped(qtbot):
+    from app.gui.controllers.backend_status_poller import BackendStatusPoller
+
+    poller = BackendStatusPoller(fetcher=lambda: "stopped")
+    with qtbot.waitSignal(poller.status_changed, timeout=1000) as blocker:
+        poller.tick()
+
+    canonical, label = blocker.args
+    assert canonical == "stopped"
+    assert "not loaded" in label.lower() or "model" in label.lower()
+
+
 def test_fetcher_exception_surfaces_as_error(qtbot):
     from app.gui.controllers.backend_status_poller import BackendStatusPoller
 
     def boom() -> str:
-        raise RuntimeError("docker crashed")
+        raise RuntimeError("backend crashed")
 
     poller = BackendStatusPoller(fetcher=boom)
     with qtbot.waitSignal(poller.status_changed, timeout=1000) as blocker:
@@ -152,13 +161,13 @@ def test_fetcher_exception_surfaces_as_error(qtbot):
 
     canonical, label = blocker.args
     assert canonical == "error"
-    assert "docker crashed" in label or "error" in label.lower()
+    assert "backend crashed" in label or "error" in label.lower()
 
 
 def test_start_kicks_off_immediate_tick(qtbot):
     from app.gui.controllers.backend_status_poller import BackendStatusPoller
 
-    poller = BackendStatusPoller(fetcher=lambda: "running", interval_ms=10000)
+    poller = BackendStatusPoller(fetcher=lambda: "ready", interval_ms=10000)
     try:
         with qtbot.waitSignal(poller.status_changed, timeout=1000) as blocker:
             poller.start()

@@ -54,6 +54,10 @@ class FasterWhisperBackend:
         with self._lock:
             return self._model_name
 
+    def current_language(self) -> Optional[str]:
+        with self._lock:
+            return self._language
+
     def status(self) -> str:
         with self._lock:
             return self._status

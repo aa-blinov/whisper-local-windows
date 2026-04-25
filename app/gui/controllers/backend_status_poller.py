@@ -22,15 +22,21 @@ _StatusFetcher = Callable[[], str]
 
 
 def _map_status(raw: str) -> Tuple[str, str]:
-    """Translate DockerBackendManager status strings into TopBar vocabulary."""
-    if raw == "running":
-        return "running", "Backend running"
-    if raw == "stopped":
-        return "stopped", "Backend stopped"
-    if raw == "not_found":
-        return "stopped", "Container not found"
+    """Translate ``TranscriptionBackend.status()`` values into TopBar vocabulary.
+
+    The backend exposes ``stopped | loading | ready | error``; the topbar
+    pill speaks ``running | stopped | error | unknown``. Loading is
+    rendered as a ``stopped`` pill with a hint label so the user can see
+    "Loading model…" without it looking like a green-light "ready".
+    """
+    if raw == "ready":
+        return "running", "Model ready"
+    if raw == "loading":
+        return "stopped", "Loading model\u2026"
     if raw == "error":
-        return "error", "Docker unavailable"
+        return "error", "Backend error"
+    if raw == "stopped":
+        return "stopped", "Model not loaded"
     return "unknown", f"Status: {raw}"
 
 

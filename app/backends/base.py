@@ -47,6 +47,12 @@ class TranscriptionBackend(Protocol):
         """Name / identifier of the model currently configured (not necessarily loaded)."""
         ...
 
+    def current_language(self) -> Optional[str]:
+        """Language code the backend will request from the model (or ``None``
+        for auto-detect). Used by the recording pipeline when stamping
+        history entries."""
+        ...
+
     def transcribe(
         self, audio: np.ndarray, sample_rate: int = 16000
     ) -> Optional[str]:

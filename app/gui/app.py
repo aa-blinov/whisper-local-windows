@@ -160,7 +160,6 @@ def main() -> int:
     import logging
 
     from app.config_manager import ConfigManager
-    from app.docker_backend_manager import DockerBackendManager
     from app.gui.controllers.recording_controller import RecordingController
     from app.gui.recording_factory import build_recording_stack
     from app.gui.widgets.tray_icon import AppTrayIcon
@@ -214,14 +213,14 @@ def main() -> int:
     qt_app._instance_mutex = instance_handle  # type: ignore[attr-defined]
 
     config = ConfigManager()
-    docker = DockerBackendManager()
 
     state_manager = None
     hotkey_listener = None
+    backend = None
     recording_controller = None
     try:
-        state_manager, hotkey_listener = build_recording_stack(
-            config_manager=config, docker_backend_manager=docker,
+        state_manager, hotkey_listener, backend = build_recording_stack(
+            config_manager=config,
         )
     except Exception as exc:
         logging.getLogger(__name__).warning(
@@ -235,7 +234,14 @@ def main() -> int:
             hotkey_listener=hotkey_listener,
         )
 
+    if backend is not None:
+        # Kick off background model load right away so the UI status pill
+        # transitions from "Loading model…" to "Model ready" without waiting
+        # for the user's first keypress.
+        backend.load()
+
     history = state_manager.history_manager if state_manager is not None else None
+    backend_status_fetcher = backend.status if backend is not None else None
 
     # qt_app already exists from the single-instance gate above.
     tray: Optional[AppTrayIcon] = None
@@ -249,7 +255,7 @@ def main() -> int:
     app, window = build_application(
         config=config,
         history=history,
-        backend_status_fetcher=docker.status,
+        backend_status_fetcher=backend_status_fetcher,
         recording=recording_controller,
         tray=tray,
         install_logs=True,
@@ -269,6 +275,8 @@ def main() -> int:
     finally:
         if recording_controller is not None:
             recording_controller.shutdown()
+        if backend is not None:
+            backend.shutdown()
         if tray is not None:
             tray.setVisible(False)
 

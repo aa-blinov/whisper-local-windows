@@ -403,7 +403,7 @@ def test_controller_drives_topbar_status_from_fetcher(qtbot):
     AppController(
         config=config,
         window=window,
-        backend_status_fetcher=lambda: "running",
+        backend_status_fetcher=lambda: "ready",
     )
 
     # Polling is async (worker thread), so wait for the topbar to update.
