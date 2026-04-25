@@ -81,21 +81,12 @@ class TopBar(QWidget):
         outer.setSpacing(0)
 
         # ---- Sidebar-aligned gutter -----------------------------------
-        # Eats the same horizontal space as the sidebar AND carries
-        # the divider line on its right edge. Using ``border-right``
-        # in QSS instead of a separate 1 px widget guarantees the
-        # line spans the full height of the gutter, regardless of
-        # whatever size-policy guesswork Qt would otherwise apply
-        # to a bare-QWidget child.
+        # Eats the same horizontal space as the sidebar so the
+        # topbar's content cluster lines up with the body content
+        # below. No visible divider — purely structural padding.
         left_gutter = QWidget(self)
         left_gutter.setObjectName("TopBarGutter")
-        # +1 so the inner content still starts at exactly the
-        # sidebar-aligned x coordinate after the 1 px border.
-        left_gutter.setFixedWidth(_SIDEBAR_WIDTH_PX + 1)
-        left_gutter.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        # ``WA_StyledBackground`` is mandatory for QSS borders /
-        # backgrounds to paint on a bare QWidget.
-        left_gutter.setAttribute(Qt.WA_StyledBackground, True)
+        left_gutter.setFixedWidth(_SIDEBAR_WIDTH_PX)
         outer.addWidget(left_gutter)
 
         # Right-hand content lives in its own container so it can

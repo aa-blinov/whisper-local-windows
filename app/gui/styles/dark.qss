@@ -323,14 +323,11 @@ QLabel[role="toast-body"] {
     border-bottom: 1px solid {{color.border}};
 }
 
-/* Empty zone above the sidebar — its right border continues the
-   sidebar's own ``border-right`` line up through the topbar so
-   the two segments form a single uninterrupted vertical rule.
-   Requires ``WA_StyledBackground`` on the widget for QSS borders
-   to render. */
+/* Empty zone above the sidebar — same horizontal footprint, no
+   visible border. Just keeps the topbar's content aligned to the
+   sidebar's right edge. */
 #TopBarGutter {
     background-color: transparent;
-    border-right: 1px solid {{color.border}};
 }
 
 QLabel[role="model-pill"] {
