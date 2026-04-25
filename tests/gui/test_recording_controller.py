@@ -22,8 +22,10 @@ class FakeStateManager:
         if self.history_update_callback is not None:
             self.history_update_callback()
 
-    def request_model_change(self, new_model_size: str) -> bool:
-        self.model_change_requests.append(new_model_size)
+    def request_model_change(
+        self, new_model_size: str, compute_type=None,
+    ) -> bool:
+        self.model_change_requests.append((new_model_size, compute_type))
         return True
 
     def shutdown(self) -> None:
@@ -148,8 +150,12 @@ def test_request_model_change_proxies_to_state_manager(qtbot):
     rc = RecordingController(state_manager=sm, poll_interval_ms=10)
 
     rc.request_model_change("Systran/faster-whisper-tiny")
+    rc.request_model_change("Systran/faster-whisper-large-v3", "int8_float16")
 
-    assert sm.model_change_requests == ["Systran/faster-whisper-tiny"]
+    assert sm.model_change_requests == [
+        ("Systran/faster-whisper-tiny", None),
+        ("Systran/faster-whisper-large-v3", "int8_float16"),
+    ]
     rc.shutdown()
 
 

@@ -24,6 +24,16 @@ def _format_size(size_mb: int) -> str:
     return f"{size_mb} MB"
 
 
+def _compute_label(compute_type: str) -> str:
+    """Pretty short label for the ``compute_type`` badge."""
+    return {
+        "float32": "fp32",
+        "float16": "fp16",
+        "int8_float16": "int8 + fp16",
+        "int8": "int8",
+    }.get(compute_type, compute_type)
+
+
 class ModelCard(QFrame):
     select_requested = Signal(str)
 
@@ -74,6 +84,7 @@ class ModelCard(QFrame):
             f"quality: {info.quality}",
             f"size: {_format_size(info.size_mb)}",
             f"vram: {info.vram_gb:.1f} GB",
+            f"compute: {_compute_label(info.compute_type)}",
             f"lang: {info.languages}",
         ):
             badge = QLabel(text, self)

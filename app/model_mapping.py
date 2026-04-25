@@ -2,15 +2,19 @@
 
 Single source of truth mapping user-facing aliases to canonical Hugging Face
 model IDs, together with rich metadata used by the UI (size, VRAM, speed,
-quality tier, language support, description).
+quality tier, language support, description, recommended ``compute_type``).
 
 Public API:
-- ``ModelInfo``: metadata for a single model
-- ``MODELS``: ordered tuple of all supported models
+- ``ModelInfo``: metadata for a single model preset
+- ``MODELS``: ordered tuple of all supported presets
 - ``aliases()``: list of aliases in display order
 - ``get_model(alias)``: ``ModelInfo`` lookup, ``KeyError`` if unknown
 - ``ALIAS_TO_MODEL`` / ``MODEL_TO_ALIAS``: backward-compatible mappings
 - ``canonical_for(x)`` / ``alias_for(x)``: string helpers
+
+Several aliases can share the same canonical Hugging Face id and only
+differ by ``compute_type`` (``float16`` vs ``int8_float16``) — that's how
+"quantized" cards are exposed to the user without re-uploading weights.
 """
 
 from __future__ import annotations
@@ -21,6 +25,9 @@ from typing import List, Tuple
 
 _SPEED_VALUES = ("fast", "medium", "slow")
 _QUALITY_VALUES = ("basic", "good", "excellent")
+# What ctranslate2 accepts for ``compute_type``. We restrict to the four
+# values that actually make sense for inference.
+_COMPUTE_VALUES = ("float32", "float16", "int8_float16", "int8")
 
 
 @dataclass(frozen=True)
@@ -34,6 +41,7 @@ class ModelInfo:
     quality: str
     languages: str
     description: str
+    compute_type: str = "float16"
 
     def __post_init__(self) -> None:
         if self.speed not in _SPEED_VALUES:
@@ -44,9 +52,14 @@ class ModelInfo:
             raise ValueError(
                 f"quality must be one of {_QUALITY_VALUES}, got {self.quality!r}"
             )
+        if self.compute_type not in _COMPUTE_VALUES:
+            raise ValueError(
+                f"compute_type must be one of {_COMPUTE_VALUES}, got {self.compute_type!r}"
+            )
 
 
 MODELS: Tuple[ModelInfo, ...] = (
+    # ---- Lightweight presets (fp16) -----------------------------------------
     ModelInfo(
         alias="tiny",
         canonical="Systran/faster-whisper-tiny",
@@ -57,6 +70,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         quality="basic",
         languages="multilingual",
         description="Smallest model. Fast and light, good for quick drafts.",
+        compute_type="float16",
     ),
     ModelInfo(
         alias="base",
@@ -68,6 +82,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         quality="basic",
         languages="multilingual",
         description="Lightweight general-purpose model with decent accuracy.",
+        compute_type="float16",
     ),
     ModelInfo(
         alias="small",
@@ -79,6 +94,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         quality="good",
         languages="multilingual",
         description="Balanced speed and quality for everyday transcription.",
+        compute_type="float16",
     ),
     ModelInfo(
         alias="medium",
@@ -90,7 +106,46 @@ MODELS: Tuple[ModelInfo, ...] = (
         quality="good",
         languages="multilingual",
         description="Higher accuracy, still reasonable on modern GPUs.",
+        compute_type="float16",
     ),
+    # ---- Distilled / turbo (faster, near-large quality) ---------------------
+    ModelInfo(
+        alias="turbo",
+        canonical="deepdml/faster-whisper-large-v3-turbo-ct2",
+        display_name="Large v3 Turbo",
+        size_mb=1620,
+        vram_gb=6.0,
+        speed="fast",
+        quality="excellent",
+        languages="multilingual",
+        description="Distilled large-v3 — much faster than the full model with similar quality.",
+        compute_type="float16",
+    ),
+    ModelInfo(
+        alias="turbo-int8",
+        canonical="deepdml/faster-whisper-large-v3-turbo-ct2",
+        display_name="Large v3 Turbo (int8)",
+        size_mb=1620,
+        vram_gb=3.5,
+        speed="fast",
+        quality="excellent",
+        languages="multilingual",
+        description="Quantized turbo — half the VRAM, slight quality dip. Great on 4–6 GB GPUs.",
+        compute_type="int8_float16",
+    ),
+    ModelInfo(
+        alias="distil-large-v3",
+        canonical="Systran/faster-distil-whisper-large-v3",
+        display_name="Distil Large v3",
+        size_mb=1500,
+        vram_gb=5.0,
+        speed="fast",
+        quality="excellent",
+        languages="multilingual",
+        description="6× faster than large-v3, ~1% WER drop. English-leaning.",
+        compute_type="float16",
+    ),
+    # ---- Full large-v3 ------------------------------------------------------
     ModelInfo(
         alias="large-v2",
         canonical="Systran/faster-whisper-large-v2",
@@ -100,7 +155,8 @@ MODELS: Tuple[ModelInfo, ...] = (
         speed="slow",
         quality="excellent",
         languages="multilingual",
-        description="Large multilingual model with excellent quality.",
+        description="Older large-v2. Use only if v3 mis-recognises something specific to your domain.",
+        compute_type="float16",
     ),
     ModelInfo(
         alias="large-v3",
@@ -112,6 +168,44 @@ MODELS: Tuple[ModelInfo, ...] = (
         quality="excellent",
         languages="multilingual",
         description="Latest large model. Best overall quality.",
+        compute_type="float16",
+    ),
+    ModelInfo(
+        alias="large-v3-int8",
+        canonical="Systran/faster-whisper-large-v3",
+        display_name="Large v3 (int8)",
+        size_mb=3000,
+        vram_gb=5.0,
+        speed="slow",
+        quality="excellent",
+        languages="multilingual",
+        description="Quantized large-v3 — same accuracy on most prompts, half the VRAM.",
+        compute_type="int8_float16",
+    ),
+    # ---- Russian fine-tunes -------------------------------------------------
+    ModelInfo(
+        alias="large-v3-ru",
+        canonical="bzikst/faster-whisper-large-v3-russian",
+        display_name="Large v3 — Russian fine-tune",
+        size_mb=3000,
+        vram_gb=10.0,
+        speed="slow",
+        quality="excellent",
+        languages="Russian (fine-tuned)",
+        description="large-v3 fine-tuned on Common Voice RU — WER 6.39 vs 9.84.",
+        compute_type="float16",
+    ),
+    ModelInfo(
+        alias="large-v3-ru-int8",
+        canonical="bzikst/faster-whisper-large-v3-russian",
+        display_name="Large v3 — Russian (int8)",
+        size_mb=3000,
+        vram_gb=5.0,
+        speed="slow",
+        quality="excellent",
+        languages="Russian (fine-tuned)",
+        description="Quantized Russian fine-tune. Best Russian quality on a 6 GB GPU.",
+        compute_type="int8_float16",
     ),
 )
 
@@ -129,6 +223,8 @@ def get_model(alias: str) -> ModelInfo:
     return _BY_ALIAS[alias]
 
 
+# ``ALIAS_TO_MODEL`` maps alias → canonical. ``MODEL_TO_ALIAS`` is the
+# reverse — first alias wins when several presets share a canonical id.
 ALIAS_TO_MODEL = {m.alias: m.canonical for m in MODELS}
 
 MODEL_TO_ALIAS: dict[str, str] = {}

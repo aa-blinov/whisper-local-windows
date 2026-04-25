@@ -70,8 +70,16 @@ class RecordingController(QObject):
     def current_state(self) -> Optional[str]:
         return self._last_state
 
-    def request_model_change(self, new_model_size: str) -> bool:
-        return self._state_manager.request_model_change(new_model_size)
+    def request_model_change(
+        self,
+        new_model_size: str,
+        compute_type: Optional[str] = None,
+    ) -> bool:
+        """Switch the active backend model. ``compute_type`` is forwarded to
+        the state manager; ``None`` keeps the current setting."""
+        return self._state_manager.request_model_change(
+            new_model_size, compute_type=compute_type
+        )
 
     def list_input_devices(self) -> list:
         recorder = getattr(self._state_manager, "audio_recorder", None)

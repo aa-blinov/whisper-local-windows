@@ -216,14 +216,19 @@ class StateManager:
             with self._state_lock:
                 self.is_processing = False
                 self.logger.debug(f"[Pipeline] is_processing set False; model_loading={self.is_model_loading}")
-                
-                pending_model = self._pending_model_change                    
-            
-            # Execute pending model change outside of lock to avoid deadlock
-            if 'pending_model' in locals() and pending_model:
+                pending = self._pending_model_change
+
+            # Execute pending model change outside of lock to avoid deadlock.
+            # Backward compat: ``pending`` is either ``(name, compute_type)``
+            # tuple, a bare model name string (older callers), or None.
+            if pending:
+                if isinstance(pending, tuple):
+                    pending_model, pending_compute = pending
+                else:
+                    pending_model, pending_compute = pending, None
                 self.logger.info(f"Executing pending model change to: {pending_model}")
                 self.logger.info(f"Processing complete, now switching to {pending_model} model...", extra={'user_message': True})
-                self._execute_model_change(pending_model)
+                self._execute_model_change(pending_model, pending_compute)
                 self._pending_model_change = None
             else:
                 self.system_tray.update_state("idle")
@@ -318,31 +323,37 @@ class StateManager:
             pass
         return "idle"
     
-    def request_model_change(self, new_model_size: str) -> bool:
+    def request_model_change(
+        self,
+        new_model_size: str,
+        compute_type: Optional[str] = None,
+    ) -> bool:
         current_state = self.get_current_state()
-        
-        if new_model_size == self.backend.current_model():
+
+        same_model = new_model_size == self.backend.current_model()
+        same_compute = compute_type is None
+        if same_model and same_compute:
             return True
-        
+
         if current_state == "model_loading":
             self.logger.info("Model already loading, please wait...", extra={'user_message': True})
             return False
-        
+
         if current_state == "recording":
             self.logger.info(f"Cancelling recording to switch to {new_model_size} model...", extra={'user_message': True})
             self.cancel_active_recording()
-            self._execute_model_change(new_model_size)
+            self._execute_model_change(new_model_size, compute_type)
             return True
-        
+
         if current_state == "processing":
             self.logger.info(f"Queueing model change to {new_model_size} until transcription completes...", extra={'user_message': True})
-            self._pending_model_change = new_model_size
+            self._pending_model_change = (new_model_size, compute_type)
             return True
-        
+
         if current_state == "idle":
-            self._execute_model_change(new_model_size)
+            self._execute_model_change(new_model_size, compute_type)
             return True
-        
+
         self.logger.warning(f"Unexpected state for model change: {current_state}")
         return False
     
@@ -350,13 +361,17 @@ class StateManager:
         self.config_manager.update_user_setting('clipboard', 'auto_paste', value)
         self.clipboard_manager.update_auto_paste(value)
 
-    def _execute_model_change(self, new_model_size: str):
+    def _execute_model_change(
+        self,
+        new_model_size: str,
+        compute_type: Optional[str] = None,
+    ):
         self.set_model_loading(True)
         self.logger.info(
             f"Switching to {new_model_size} model...", extra={'user_message': True}
         )
         try:
-            self.backend.change_model(new_model_size)
+            self.backend.change_model(new_model_size, compute_type=compute_type)
         except Exception as e:
             self.logger.error(f"Failed to initiate model change: {e}")
             self.logger.error(

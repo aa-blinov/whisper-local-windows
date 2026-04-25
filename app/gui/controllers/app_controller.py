@@ -93,15 +93,25 @@ class AppController(QObject):
     def _on_model_selected(self, alias: str) -> None:
         if self._window.models_view.active_alias() == alias:
             return
-        self._config.update_user_setting("whisper", "model", alias)
-        self._window.models_view.set_active(alias)
+
+        info = None
         try:
-            self._sync_topbar_model(get_model(alias))
+            info = get_model(alias)
         except KeyError:
-            self._sync_topbar_model(None)
+            pass
+
+        self._config.update_user_setting("whisper", "model", alias)
+        if info is not None:
+            self._config.update_user_setting(
+                "whisper", "compute_type", info.compute_type
+            )
+        self._window.models_view.set_active(alias)
+        self._sync_topbar_model(info)
         if self._recording is not None:
+            canonical = info.canonical if info else canonical_for(alias)
+            compute_type = info.compute_type if info else None
             try:
-                self._recording.request_model_change(canonical_for(alias))
+                self._recording.request_model_change(canonical, compute_type)
             except Exception as exc:  # pragma: no cover — defensive
                 log.warning("request_model_change raised: %s", exc)
 

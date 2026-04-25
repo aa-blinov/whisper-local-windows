@@ -180,13 +180,26 @@ class FasterWhisperBackend:
             self._load_thread = thread
         thread.start()
 
-    def change_model(self, model: str) -> None:
+    def change_model(
+        self,
+        model: str,
+        compute_type: Optional[str] = None,
+    ) -> None:
+        """Switch to a different model and/or compute_type.
+
+        Passing ``compute_type=None`` keeps the current setting; otherwise a
+        change in either field triggers a reload.
+        """
         with self._lock:
             if self._shutdown:
                 return
-            if model == self._model_name and self._status == "ready":
+            same_model = model == self._model_name
+            same_compute = compute_type is None or compute_type == self._compute_type
+            if same_model and same_compute and self._status == "ready":
                 return
             self._model_name = model
+            if compute_type is not None:
+                self._compute_type = compute_type
             self._model = None
             self._status = "stopped"
         self.load()

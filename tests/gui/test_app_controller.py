@@ -448,8 +448,8 @@ class FakeRecordingController:
         self.model_change_requests: list[str] = []
         self._model_change_returns = model_change_returns
 
-    def request_model_change(self, canonical: str) -> bool:
-        self.model_change_requests.append(canonical)
+    def request_model_change(self, canonical: str, compute_type=None) -> bool:
+        self.model_change_requests.append((canonical, compute_type))
         return self._model_change_returns
 
 
@@ -506,9 +506,11 @@ def test_controller_routes_model_select_through_recording_when_present(qtbot):
 
     # config still updated for persistence
     assert ("whisper", "model", "tiny") in config.writes
-    # AND recording stack was asked to actually switch
+    # compute_type written too — the registry tells us each card's preference
+    assert ("whisper", "compute_type", "float16") in config.writes
+    # AND recording stack was asked to actually switch (with compute_type)
     assert rec.model_change_requests == [
-        "Systran/faster-whisper-tiny",
+        ("Systran/faster-whisper-tiny", "float16"),
     ]
 
 
