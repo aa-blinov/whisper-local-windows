@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional, Protocol
 
-from PySide6.QtCore import QObject, QTimer
+import threading
+
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication
 
 # QApplication is imported above for the clipboard helper; reuse it for
@@ -45,6 +47,11 @@ class _TrayLike(Protocol):
 
 
 class AppController(QObject):
+    # Worker threads emit these to push results back onto the main
+    # Qt thread (auto-queued thanks to the cross-thread connection).
+    _mic_test_completed = Signal(float, float)
+    _mic_test_failed = Signal(str)
+
     def __init__(
         self,
         config: _ConfigLike,
@@ -68,6 +75,10 @@ class AppController(QObject):
         self._loading_timer = QTimer(self)
         self._loading_timer.setInterval(1000)
         self._loading_timer.timeout.connect(self._on_loading_tick)
+        # Mic test worker bookkeeping.
+        self._mic_test_in_progress = False
+        self._mic_test_completed.connect(self._on_mic_test_completed)
+        self._mic_test_failed.connect(self._on_mic_test_failed)
         self._wire_models()
         self._wire_shortcuts()
         self._wire_history()
@@ -164,6 +175,7 @@ class AppController(QObject):
 
         view.save_requested.connect(self._on_shortcuts_save)
         view.reset_requested.connect(self._on_shortcuts_reset)
+        view.test_mic_requested.connect(self._on_test_mic_requested)
 
     def _on_shortcuts_save(self, payload: dict) -> None:
         self._config.update_user_setting(
@@ -182,6 +194,67 @@ class AppController(QObject):
                     self._recording.set_input_device(payload["device"])
                 except Exception as exc:
                     log.warning("Failed to switch input device: %s", exc)
+
+    def _on_test_mic_requested(self) -> None:
+        if self._mic_test_in_progress:
+            return
+        if self._recording is None:
+            self._window.shortcuts_view.show_mic_test_error(
+                "no recording stack"
+            )
+            return
+        # Don't poke the device while transcription is running — both
+        # would try to open the same input simultaneously.
+        try:
+            current = self._recording.current_state()
+        except Exception:
+            current = None
+        if current and current != "idle":
+            self._window.shortcuts_view.show_mic_test_error(
+                "wait until current operation finishes"
+            )
+            return
+        recorder = self._resolve_audio_recorder()
+        if recorder is None:
+            self._window.shortcuts_view.show_mic_test_error(
+                "audio recorder unavailable"
+            )
+            return
+
+        self._mic_test_in_progress = True
+        self._window.shortcuts_view.show_mic_test_running()
+
+        def worker():
+            try:
+                result = recorder.test_input_level(3.0)
+            except Exception as exc:  # pragma: no cover — surfaces in UI
+                self._mic_test_failed.emit(str(exc))
+                return
+            self._mic_test_completed.emit(
+                float(result.get("peak", 0.0)),
+                float(result.get("rms", 0.0)),
+            )
+
+        threading.Thread(
+            target=worker, daemon=True, name="mic-test"
+        ).start()
+
+    def _on_mic_test_completed(self, peak: float, rms: float) -> None:
+        self._mic_test_in_progress = False
+        self._window.shortcuts_view.show_mic_test_result(peak, rms)
+
+    def _on_mic_test_failed(self, reason: str) -> None:
+        self._mic_test_in_progress = False
+        self._window.shortcuts_view.show_mic_test_error(reason)
+
+    def _resolve_audio_recorder(self):
+        """The state_manager owns the AudioRecorder; reach for it
+        through whichever recording-controller protocol the controller
+        was given."""
+        sm = getattr(self._recording, "state_manager", None)
+        if sm is None:
+            return None
+        return getattr(sm, "audio_recorder", None)
 
     def _on_shortcuts_reset(self) -> None:
         from app.config_manager import DEFAULT_CONFIG

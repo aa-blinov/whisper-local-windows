@@ -502,10 +502,38 @@ def test_controller_without_backend_fetcher_leaves_status_unknown(qtbot):
 # ---- Recording controller wiring -------------------------------------------
 
 
+class FakeAudioRecorder:
+    def __init__(self, peak: float = 0.4, rms: float = 0.15) -> None:
+        self._peak = peak
+        self._rms = rms
+        self.test_calls = 0
+        self.raise_on_test: Optional[Exception] = None
+
+    def test_input_level(self, duration_s: float = 3.0) -> dict:
+        self.test_calls += 1
+        if self.raise_on_test is not None:
+            raise self.raise_on_test
+        return {
+            "peak": self._peak,
+            "rms": self._rms,
+            "duration_s": duration_s,
+        }
+
+
+class FakeStateManager:
+    def __init__(self, audio_recorder: Optional[FakeAudioRecorder] = None) -> None:
+        self.audio_recorder = audio_recorder
+
+
 class FakeRecordingController:
     """Stand-in exposing the surface AppController consumes."""
 
-    def __init__(self, model_change_returns: bool = True) -> None:
+    def __init__(
+        self,
+        model_change_returns: bool = True,
+        state_manager: Optional[FakeStateManager] = None,
+        current_state_value: str = "idle",
+    ) -> None:
         from PySide6.QtCore import QObject, Signal
 
         class _Bus(QObject):
@@ -517,10 +545,15 @@ class FakeRecordingController:
         self.history_updated = self._bus.history_updated
         self.model_change_requests: list[str] = []
         self._model_change_returns = model_change_returns
+        self.state_manager = state_manager
+        self._current_state = current_state_value
 
     def request_model_change(self, canonical: str, compute_type=None) -> bool:
         self.model_change_requests.append((canonical, compute_type))
         return self._model_change_returns
+
+    def current_state(self) -> str:
+        return self._current_state
 
 
 def test_controller_updates_topbar_recording_pill_on_state_change(qtbot):
@@ -767,3 +800,71 @@ def test_controller_without_tray_does_not_enable_close_to_tray(qtbot):
 
     AppController(config=config, window=window)
     assert window._close_to_tray is False
+
+
+def test_controller_runs_mic_test_and_reports_result(qtbot):
+    """Clicking 'Test microphone' should kick off a background capture
+    and land the result back on the Settings view via Qt signals."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    recorder = FakeAudioRecorder(peak=0.42, rms=0.18)
+    rec = FakeRecordingController(state_manager=FakeStateManager(recorder))
+
+    AppController(config=config, window=window, recording=rec)
+
+    window.shortcuts_view.test_mic_requested.emit()
+
+    qtbot.waitUntil(
+        lambda: "0.42" in window.shortcuts_view._test_mic_label.text(),
+        timeout=2000,
+    )
+    assert recorder.test_calls == 1
+    assert window.shortcuts_view._test_mic_btn.isEnabled()
+
+
+def test_controller_mic_test_blocked_during_recording(qtbot):
+    """Don't try to grab the input while a recording is in flight —
+    both would race for the device."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    recorder = FakeAudioRecorder()
+    rec = FakeRecordingController(
+        state_manager=FakeStateManager(recorder),
+        current_state_value="recording",
+    )
+
+    AppController(config=config, window=window, recording=rec)
+
+    window.shortcuts_view.test_mic_requested.emit()
+    # No worker thread should have run; label should report a refusal.
+    assert recorder.test_calls == 0
+    text = window.shortcuts_view._test_mic_label.text()
+    assert text  # any non-empty error message
+
+
+def test_controller_mic_test_surfaces_recorder_errors(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    recorder = FakeAudioRecorder()
+    recorder.raise_on_test = RuntimeError("device busy")
+    rec = FakeRecordingController(state_manager=FakeStateManager(recorder))
+
+    AppController(config=config, window=window, recording=rec)
+
+    window.shortcuts_view.test_mic_requested.emit()
+    qtbot.waitUntil(
+        lambda: "device busy" in window.shortcuts_view._test_mic_label.text(),
+        timeout=2000,
+    )

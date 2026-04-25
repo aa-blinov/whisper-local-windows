@@ -82,6 +82,50 @@ class AudioRecorder:
         self.device = self._resolve_device(raw)
         return self.device
 
+    def test_input_level(self, duration_s: float = 3.0) -> dict:
+        """Synchronous mic check — record from the currently-selected
+        device for ``duration_s`` seconds and report peak / RMS amplitude.
+
+        Captures at the device's native sample rate (so WASAPI doesn't
+        complain about 16 kHz like it does for the real recording
+        path), then we just need amplitude statistics — resampling is
+        unnecessary.
+
+        Returns ``{"peak": float, "rms": float, "duration_s": float}``.
+        Both amplitudes are normalised to the [0, 1] range. Raises any
+        underlying ``sounddevice`` error so the caller can surface a
+        readable message.
+        """
+        device_idx = self.device
+        if device_idx is not None:
+            try:
+                info = sd.query_devices(device_idx)
+                rate = int(info.get("default_samplerate", self.sample_rate))
+            except Exception:
+                rate = self.sample_rate
+        else:
+            rate = self.sample_rate
+
+        samples = max(1, int(duration_s * rate))
+        audio = sd.rec(
+            samples,
+            samplerate=rate,
+            channels=self.channels,
+            device=device_idx,
+            dtype=self.STREAM_DTYPE,
+        )
+        sd.wait()
+        flat = np.asarray(audio).flatten()
+        if flat.size == 0:
+            return {"peak": 0.0, "rms": 0.0, "duration_s": float(duration_s)}
+        peak = float(np.abs(flat).max())
+        rms = float(np.sqrt(np.mean(flat ** 2)))
+        return {
+            "peak": peak,
+            "rms": rms,
+            "duration_s": float(duration_s),
+        }
+
     def _resolve_device(self, raw: Optional[Union[int, str]]) -> Optional[int]:
         if raw is None or raw == "":
             return None

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 class ShortcutsView(QWidget):
     save_requested = Signal(dict)
     reset_requested = Signal()
+    test_mic_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -67,6 +68,20 @@ class ShortcutsView(QWidget):
         self._device_combo.addItem("System default", None)
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
         form.addRow("Microphone", self._device_combo)
+
+        # Quick verifier: capture ~3 s, report peak/RMS so the user
+        # knows the chosen device is actually picking up sound.
+        mic_test_row = QHBoxLayout()
+        mic_test_row.setSpacing(8)
+        self._test_mic_btn = QPushButton("Test microphone", card)
+        self._test_mic_btn.setObjectName("TestMicrophoneButton")
+        self._test_mic_btn.clicked.connect(self.test_mic_requested.emit)
+        mic_test_row.addWidget(self._test_mic_btn)
+        self._test_mic_label = QLabel("", card)
+        self._test_mic_label.setObjectName("MicrophoneTestResult")
+        self._test_mic_label.setProperty("role", "muted")
+        mic_test_row.addWidget(self._test_mic_label, 1)
+        form.addRow("", mic_test_row)
 
         self._start_edit = QLineEdit(card)
         self._start_edit.setObjectName("StartHotkeyEdit")
@@ -169,3 +184,43 @@ class ShortcutsView(QWidget):
 
     def _on_device_changed(self, _idx: int) -> None:
         self._emit_save()
+
+    # ---- mic test feedback --------------------------------------------------
+
+    def show_mic_test_running(self) -> None:
+        self._test_mic_btn.setEnabled(False)
+        self._test_mic_label.setText("Listening… speak now (3 s)")
+        self._test_mic_label.setProperty("role", "muted")
+        self._test_mic_label.style().unpolish(self._test_mic_label)
+        self._test_mic_label.style().polish(self._test_mic_label)
+
+    def show_mic_test_result(self, peak: float, rms: float) -> None:
+        self._test_mic_btn.setEnabled(True)
+        if peak < 0.01:
+            text = (
+                f"Silence detected (peak {peak:.3f}). "
+                "Check the device or speak louder."
+            )
+            role = "test-result-bad"
+        elif peak < 0.08:
+            text = (
+                f"Quiet input (peak {peak:.3f}, rms {rms:.3f}). "
+                "Audible but on the low side."
+            )
+            role = "test-result-warn"
+        else:
+            text = (
+                f"Looks good — peak {peak:.3f}, rms {rms:.3f}."
+            )
+            role = "test-result-good"
+        self._test_mic_label.setText(text)
+        self._test_mic_label.setProperty("role", role)
+        self._test_mic_label.style().unpolish(self._test_mic_label)
+        self._test_mic_label.style().polish(self._test_mic_label)
+
+    def show_mic_test_error(self, reason: str) -> None:
+        self._test_mic_btn.setEnabled(True)
+        self._test_mic_label.setText(f"Test failed: {reason}")
+        self._test_mic_label.setProperty("role", "test-result-bad")
+        self._test_mic_label.style().unpolish(self._test_mic_label)
+        self._test_mic_label.style().polish(self._test_mic_label)

@@ -34,6 +34,24 @@ QLabel[role="muted"] {
     font-size: {{font.size_small}};
 }
 
+QLabel[role="test-result-good"] {
+    color: {{color.success}};
+    font-size: {{font.size_small}};
+    font-weight: 500;
+}
+
+QLabel[role="test-result-warn"] {
+    color: {{color.warning}};
+    font-size: {{font.size_small}};
+    font-weight: 500;
+}
+
+QLabel[role="test-result-bad"] {
+    color: {{color.danger}};
+    font-size: {{font.size_small}};
+    font-weight: 500;
+}
+
 /* ---- Buttons ------------------------------------------------------------- */
 
 QPushButton {
