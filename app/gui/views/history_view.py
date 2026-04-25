@@ -13,10 +13,13 @@ from PySide6.QtCore import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
+    QDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QTableView,
     QVBoxLayout,
@@ -55,10 +58,17 @@ class HistoryTableModel(QAbstractTableModel):
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
-        if not index.isValid() or role != Qt.DisplayRole:
+        if not index.isValid():
             return None
         entry = self._entries[index.row()]
         col = index.column()
+        # Tooltip on the Text column carries the full transcription so
+        # the user can hover-peek long entries without opening the
+        # detail dialog. Other columns delegate to the default tooltip.
+        if role == Qt.ToolTipRole and col == 1:
+            return getattr(entry, "text", "")
+        if role != Qt.DisplayRole:
+            return None
         if col == 0:
             return getattr(entry, "datetime_str", "")
         if col == 1:
@@ -83,6 +93,65 @@ class HistoryTableModel(QAbstractTableModel):
         if row < 0 or row >= len(self._entries):
             raise IndexError(row)
         return self._entries[row]
+
+
+class HistoryDetailDialog(QDialog):
+    """Modal dialog showing the full transcription text + metadata.
+
+    The history table ellipsises long entries in the Text column, so
+    this dialog is what the user opens (via double-click) when they
+    actually want to read or copy the whole transcript.
+    """
+
+    def __init__(self, entry: Any, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("HistoryDetailDialog")
+        self.setWindowTitle("Transcription details")
+        self.setModal(True)
+        self.resize(720, 520)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        # ---- meta strip ----------------------------------------------------
+        meta = QHBoxLayout()
+        meta.setSpacing(8)
+        for caption, value in (
+            ("Time", str(getattr(entry, "datetime_str", ""))),
+            ("Model", str(getattr(entry, "model", ""))),
+            ("Language", str(getattr(entry, "language", ""))),
+            ("Duration", f"{float(getattr(entry, 'duration', 0.0)):.1f}s"),
+        ):
+            chip = QLabel(f"{caption}: {value}", self)
+            chip.setProperty("role", "badge")
+            meta.addWidget(chip)
+        meta.addStretch(1)
+        layout.addLayout(meta)
+
+        # ---- full text body ------------------------------------------------
+        self._text = QPlainTextEdit(self)
+        self._text.setObjectName("DetailText")
+        self._text.setReadOnly(True)
+        self._text.setPlainText(str(getattr(entry, "text", "")))
+        layout.addWidget(self._text, 1)
+
+        # ---- footer buttons ------------------------------------------------
+        buttons = QHBoxLayout()
+        copy_btn = QPushButton("Copy text", self)
+        copy_btn.setObjectName("DetailCopyButton")
+        copy_btn.setProperty("role", "primary")
+        copy_btn.clicked.connect(self._on_copy_clicked)
+        buttons.addWidget(copy_btn)
+        buttons.addStretch(1)
+        close_btn = QPushButton("Close", self)
+        close_btn.setObjectName("DetailCloseButton")
+        close_btn.clicked.connect(self.accept)
+        buttons.addWidget(close_btn)
+        layout.addLayout(buttons)
+
+    def _on_copy_clicked(self) -> None:
+        QApplication.clipboard().setText(self._text.toPlainText())
 
 
 class HistoryView(QWidget):
@@ -157,6 +226,9 @@ class HistoryView(QWidget):
         self._proxy.modelReset.connect(self._refresh_count)
         self._proxy.layoutChanged.connect(self._refresh_count)
 
+        # Double-click on any row opens the full-text detail dialog.
+        self._table.doubleClicked.connect(self._on_row_double_clicked)
+
     # ---- public API ---------------------------------------------------------
 
     def set_entries(self, entries: Sequence[Any]) -> None:
@@ -182,3 +254,20 @@ class HistoryView(QWidget):
         text = getattr(entry, "text", "")
         if text:
             self.copy_requested.emit(text)
+
+    def _on_row_double_clicked(self, proxy_index) -> None:
+        if not proxy_index.isValid():
+            return
+        source_index = self._proxy.mapToSource(proxy_index)
+        try:
+            entry = self._source_model.entry_at(source_index.row())
+        except IndexError:
+            return
+        self._open_detail_for_entry(entry)
+
+    def _open_detail_for_entry(self, entry: Any) -> None:
+        """Pop the detail dialog for the given entry. Extracted so
+        tests can monkeypatch the dialog opening without bringing up
+        a real modal window."""
+        dialog = HistoryDetailDialog(entry, self)
+        dialog.exec()
