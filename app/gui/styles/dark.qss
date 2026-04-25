@@ -88,6 +88,11 @@ QLabel[role="pill-active"] {
     font-weight: 600;
 }
 
+QLabel[role="pill-active"][state="loading"] {
+    background-color: {{color.warning}};
+    color: {{color.bg_primary}};
+}
+
 #TopBar {
     background-color: {{color.bg_secondary}};
     border-bottom: 1px solid {{color.border}};

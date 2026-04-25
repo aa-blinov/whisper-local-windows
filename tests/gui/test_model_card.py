@@ -111,6 +111,51 @@ def test_model_card_hides_select_button_when_active(qtbot):
     assert not select_btn.isVisible() or not select_btn.isEnabled()
 
 
+def test_model_card_default_loading_state_is_off(qtbot):
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    assert card.is_loading() is False
+
+
+def test_model_card_active_loading_swaps_pill_text(qtbot):
+    """While loading, the Active pill must say 'Loading…' so it stops
+    contradicting the topbar status pill."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.set_active(True)
+
+    # Default: pill says Active
+    assert card._active_pill.text() == "Active"
+
+    card.set_loading(True)
+    assert card.is_loading() is True
+    assert "loading" in card._active_pill.text().lower()
+    assert card._active_pill.property("state") == "loading"
+
+    card.set_loading(False)
+    assert card.is_loading() is False
+    assert card._active_pill.text() == "Active"
+    assert card._active_pill.property("state") == "ready"
+
+
+def test_model_card_inactive_card_ignores_loading(qtbot):
+    """Loading should only affect the currently-active card's pill, not
+    the inactive ones."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    # No set_active(True) — card is inactive.
+
+    card.set_loading(True)
+    # Inactive cards: pill is hidden, no visible text changes needed.
+    assert not card._active_pill.isVisibleTo(card)
+
+
 def test_model_card_emits_select_signal_with_alias(qtbot):
     from app.gui.widgets.model_card import ModelCard
 

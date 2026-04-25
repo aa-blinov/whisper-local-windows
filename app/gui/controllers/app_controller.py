@@ -179,6 +179,9 @@ class AppController(QObject):
     def _on_recording_state_changed(self, state: str) -> None:
         # Block destructive interactions while not idle.
         self._window.models_view.set_locked(state != "idle")
+        # Reflect the model-loading state on the active card's pill so it
+        # doesn't say "Active" while the topbar shows "Loading model…".
+        self._window.models_view.set_loading(state == "model_loading")
         if self._tray is not None:
             self._tray.set_state(state)
 

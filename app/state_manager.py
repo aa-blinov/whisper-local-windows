@@ -289,12 +289,18 @@ class StateManager:
         with self._state_lock:
             if self.is_model_loading:
                 return "model_loading"
-            elif self.is_processing:
+            if self.is_processing:
                 return "processing"
-            elif self.audio_recorder.get_recording_status():
+            if self.audio_recorder.get_recording_status():
                 return "recording"
-            else:
-                return "idle"
+        # Idle path: surface a backend-driven model load too (initial startup
+        # download, or any reload triggered outside ``_execute_model_change``).
+        try:
+            if self.backend.status() == "loading":
+                return "model_loading"
+        except Exception:
+            pass
+        return "idle"
     
     def request_model_change(self, new_model_size: str) -> bool:
         current_state = self.get_current_state()

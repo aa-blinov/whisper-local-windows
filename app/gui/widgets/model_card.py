@@ -32,6 +32,7 @@ class ModelCard(QFrame):
         self._info = info
         self._active = False
         self._locked = False
+        self._loading = False
 
         self.setObjectName("ModelCard")
         self.setProperty("role", "card")
@@ -54,6 +55,7 @@ class ModelCard(QFrame):
 
         self._active_pill = QLabel("Active", self)
         self._active_pill.setProperty("role", "pill-active")
+        self._active_pill.setProperty("state", "ready")
         self._active_pill.setAlignment(Qt.AlignCenter)
         self._active_pill.setVisible(False)
         header.addWidget(self._active_pill)
@@ -115,3 +117,19 @@ class ModelCard(QFrame):
         # locking disables the button.
         if not self._active:
             self._select_btn.setEnabled(not self._locked)
+
+    def is_loading(self) -> bool:
+        return self._loading
+
+    def set_loading(self, loading: bool) -> None:
+        """Reflect backend load state on the active pill — swap 'Active' for
+        'Loading…' with a different colour while the model is loading."""
+        self._loading = bool(loading)
+        if self._loading:
+            self._active_pill.setText("Loading\u2026")
+            self._active_pill.setProperty("state", "loading")
+        else:
+            self._active_pill.setText("Active")
+            self._active_pill.setProperty("state", "ready")
+        self._active_pill.style().unpolish(self._active_pill)
+        self._active_pill.style().polish(self._active_pill)

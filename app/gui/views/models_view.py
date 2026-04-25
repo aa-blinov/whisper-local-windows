@@ -84,3 +84,9 @@ class ModelsView(QWidget):
         self._locked = bool(locked)
         for card in self._cards.values():
             card.set_locked(self._locked)
+
+    def set_loading(self, loading: bool) -> None:
+        """Mark the currently active card as loading — its pill swaps from
+        'Active' to 'Loading…' until the backend reports ready."""
+        for card in self._cards.values():
+            card.set_loading(loading)
