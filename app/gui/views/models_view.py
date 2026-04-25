@@ -2,20 +2,28 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from app.gui.widgets.flow_layout import FlowLayout
 from app.gui.widgets.model_card import ModelCard
 from app.inference_settings import InferenceSettings
-from app.model_mapping import MODELS, ModelInfo
+from app.model_mapping import FAMILIES, MODELS, ModelInfo
+
+
+_FILTER_ALL = "All"
 
 
 class ModelsView(QWidget):
@@ -37,15 +45,44 @@ class ModelsView(QWidget):
         root.setContentsMargins(28, 22, 28, 22)
         root.setSpacing(14)
 
-        # Section title lives in the TopBar; a hint here is enough context.
-        hint = QLabel(
-            "Pick a model. Quality scales with size; speed is the opposite.",
-            self,
-        )
-        hint.setProperty("role", "muted")
-        root.addWidget(hint)
+        # ---- Search + filter chips toolbar -----------------------------
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(10)
 
-        scroll = QScrollArea(self)
+        self._search_edit = QLineEdit(self)
+        self._search_edit.setObjectName("ModelsSearchEdit")
+        self._search_edit.setPlaceholderText(
+            "Search models by name, alias, language…"
+        )
+        self._search_edit.setClearButtonEnabled(True)
+        self._search_edit.textChanged.connect(self._on_search_changed)
+        toolbar.addWidget(self._search_edit, 1)
+
+        root.addLayout(toolbar)
+
+        chip_row = FlowLayout(spacing=6)
+        # ``All`` plus every registered family — chip strings line up
+        # 1:1 with the family chips on the cards themselves so the
+        # mental model is "click the same colour to filter to it".
+        self._family_chips: Dict[str, QPushButton] = {}
+        for label in (_FILTER_ALL, *FAMILIES):
+            chip = QPushButton(label, self)
+            chip.setObjectName("ModelsFilterChip")
+            chip.setProperty("role", "filter-chip")
+            chip.setCheckable(True)
+            chip.setChecked(label == _FILTER_ALL)
+            chip.setFocusPolicy(Qt.NoFocus)
+            chip.clicked.connect(
+                lambda _checked=False, lbl=label: self._on_family_chip_clicked(lbl)
+            )
+            chip_row.addWidget(chip)
+            self._family_chips[label] = chip
+        root.addLayout(chip_row)
+
+        # ---- Cards (stacked behind a "no matches" empty state) ----------
+        self._stack = QStackedWidget(self)
+
+        scroll = QScrollArea(self._stack)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -74,10 +111,39 @@ class ModelsView(QWidget):
 
         cards_layout.addStretch(1)
         scroll.setWidget(content)
-        root.addWidget(scroll, 1)
+        self._stack.addWidget(scroll)
+
+        # Empty-state placeholder — same look as the History view's
+        # "no entries yet" panel.
+        empty = QWidget(self._stack)
+        empty.setObjectName("ModelsEmptyState")
+        empty_layout = QVBoxLayout(empty)
+        empty_layout.setContentsMargins(40, 60, 40, 60)
+        empty_layout.setSpacing(8)
+        empty_layout.addStretch(1)
+        title = QLabel("No models match your filters", empty)
+        title.setProperty("role", "empty-title")
+        title.setAlignment(Qt.AlignCenter)
+        empty_layout.addWidget(title)
+        hint = QLabel(
+            "Clear the search box or pick a different family chip.",
+            empty,
+        )
+        hint.setProperty("role", "empty-hint")
+        hint.setAlignment(Qt.AlignCenter)
+        empty_layout.addWidget(hint)
+        empty_layout.addStretch(2)
+        self._empty_state = empty
+        self._stack.addWidget(empty)
+        self._scroll = scroll
+
+        root.addWidget(self._stack, 1)
 
         self._active_alias: Optional[str] = None
         self._locked = False
+        self._search_query: str = ""
+        self._family_filter: str = _FILTER_ALL
+        self._apply_filter()
 
     def active_alias(self) -> Optional[str]:
         return self._active_alias
@@ -133,3 +199,67 @@ class ModelsView(QWidget):
         button from "Download" to "Select"."""
         for card in self._cards.values():
             card.refresh_cache_state()
+
+    # ---- Filter / search ---------------------------------------------------
+
+    def visible_aliases(self) -> List[str]:
+        """Aliases of the cards currently visible after the filter +
+        search has been applied. Used in tests.
+
+        ``isHidden`` is the canonical "did anyone call ``setVisible
+        (False)``" check — ``isVisible`` only returns True once a
+        top-level ancestor has been shown, which trips up tests that
+        never call ``view.show()``.
+        """
+        return [
+            alias
+            for alias, card in self._cards.items()
+            if not card.isHidden()
+        ]
+
+    def _on_search_changed(self, text: str) -> None:
+        self._search_query = text.lower().strip()
+        self._apply_filter()
+
+    def _on_family_chip_clicked(self, label: str) -> None:
+        # Single-select toggle group: one chip stays checked at a
+        # time. Clicking the active chip again is a no-op (kept
+        # checked) so the user always has a defined filter.
+        for chip_label, chip in self._family_chips.items():
+            chip.setChecked(chip_label == label)
+        self._family_filter = label
+        self._apply_filter()
+
+    def _card_matches(self, info: ModelInfo) -> bool:
+        if (
+            self._family_filter != _FILTER_ALL
+            and info.family != self._family_filter
+        ):
+            return False
+        if not self._search_query:
+            return True
+        haystack = " ".join(
+            (
+                info.alias,
+                info.canonical,
+                info.display_name,
+                info.description,
+                info.languages,
+                info.family,
+            )
+        ).lower()
+        return self._search_query in haystack
+
+    def _apply_filter(self) -> None:
+        any_visible = False
+        for alias, card in self._cards.items():
+            visible = self._card_matches(card.info())
+            card.setVisible(visible)
+            any_visible = any_visible or visible
+        # Stack swaps between the scroll viewport and the empty-state
+        # placeholder so the user gets a clear "nothing matches"
+        # message instead of an empty grey rectangle.
+        if any_visible:
+            self._stack.setCurrentWidget(self._scroll)
+        else:
+            self._stack.setCurrentWidget(self._empty_state)

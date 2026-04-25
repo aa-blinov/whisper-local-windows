@@ -228,3 +228,94 @@ def test_models_view_uses_pixel_scroll_step(qtbot):
     scroll = view.findChild(QScrollArea)
     assert scroll is not None
     assert scroll.verticalScrollBar().singleStep() <= 20
+
+
+def test_models_view_search_filters_by_substring(qtbot):
+    """Typing in the search box should hide cards whose
+    metadata doesn't contain the query (case-insensitive)."""
+    from PySide6.QtWidgets import QLineEdit
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    search = view.findChild(QLineEdit, "ModelsSearchEdit")
+    search.setText("turbo")
+
+    aliases = set(view.visible_aliases())
+    assert "turbo" in aliases
+    assert "turbo-int8" in aliases
+    assert "large-v3" not in aliases
+    assert "gigaam-v3-e2e-rnnt" not in aliases
+
+
+def test_models_view_search_matches_canonical_and_language(qtbot):
+    """The haystack covers alias, canonical, display name,
+    description, language, family — so 'russian' or 'bzikst'
+    both narrow to the RU fine-tunes."""
+    from PySide6.QtWidgets import QLineEdit
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    search = view.findChild(QLineEdit, "ModelsSearchEdit")
+    search.setText("russian")
+
+    aliases = set(view.visible_aliases())
+    assert "large-v3-ru" in aliases
+    assert "large-v3-ru-int8" in aliases
+    # GigaAM also says "Russian (only)" so it surfaces here too.
+    assert "gigaam-v3-e2e-rnnt" in aliases
+    # English-only cards filtered out.
+    assert "distil-large-v3" not in aliases
+
+
+def test_models_view_family_chip_filters_by_family(qtbot):
+    """Clicking the GIGAAM chip should leave only GigaAM cards visible."""
+    from PySide6.QtWidgets import QPushButton
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    chip = next(
+        b for b in view.findChildren(QPushButton)
+        if b.objectName() == "ModelsFilterChip" and b.text() == "GigaAM"
+    )
+    chip.click()
+
+    aliases = set(view.visible_aliases())
+    assert all(a.startswith("gigaam") for a in aliases)
+    assert aliases  # at least one model survived
+
+
+def test_models_view_no_match_shows_empty_state(qtbot):
+    """A search that matches nothing should swap the scroll for the
+    empty-state placeholder."""
+    from PySide6.QtWidgets import QLineEdit
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    search = view.findChild(QLineEdit, "ModelsSearchEdit")
+    search.setText("definitely-no-such-model")
+
+    assert view.visible_aliases() == []
+    assert view._stack.currentWidget() is view._empty_state
+
+
+def test_models_view_clearing_search_restores_all_cards(qtbot):
+    from PySide6.QtWidgets import QLineEdit
+    from app.gui.views.models_view import ModelsView
+    from app.model_mapping import MODELS
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    search = view.findChild(QLineEdit, "ModelsSearchEdit")
+    search.setText("turbo")
+    search.setText("")
+
+    assert set(view.visible_aliases()) == {m.alias for m in MODELS}

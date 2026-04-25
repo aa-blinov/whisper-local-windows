@@ -146,6 +146,31 @@ QLabel[role="badge"] {
     font-weight: 500;
 }
 
+/* ---- Filter chips in the Models toolbar -------------------------------- */
+
+QPushButton[role="filter-chip"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_secondary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    padding: 4px 12px;
+    font-size: {{font.size_small}};
+    font-weight: 500;
+    min-height: 18px;
+}
+
+QPushButton[role="filter-chip"]:hover {
+    background-color: {{color.bg_hover}};
+    color: {{color.text_primary}};
+    border-color: {{color.accent_hover}};
+}
+
+QPushButton[role="filter-chip"]:checked {
+    background-color: {{color.accent}};
+    color: {{color.text_primary}};
+    border-color: {{color.accent}};
+}
+
 /* ---- Inference settings panel inside an active card -------------------- */
 
 QFrame[role="inference-panel"] {
