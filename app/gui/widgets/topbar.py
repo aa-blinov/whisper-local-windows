@@ -22,6 +22,13 @@ _STATUS_DEFAULT_LABELS = {
 }
 _NO_MODEL_TEXT = "No model"
 
+_RECORDING_STATES = ("idle", "recording", "processing", "model_loading")
+_RECORDING_LABELS = {
+    "recording": "● Recording",
+    "processing": "Processing…",
+    "model_loading": "Loading model…",
+}
+
 
 class TopBar(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -40,6 +47,14 @@ class TopBar(QWidget):
         layout.addWidget(self._title)
 
         layout.addStretch(1)
+
+        self._recording_pill = QLabel("", self)
+        self._recording_pill.setObjectName("TopBarRecordingPill")
+        self._recording_pill.setProperty("role", "recording-pill")
+        self._recording_pill.setProperty("state", "idle")
+        self._recording_pill.setAlignment(Qt.AlignCenter)
+        self._recording_pill.setVisible(False)
+        layout.addWidget(self._recording_pill)
 
         self._model_pill = QLabel(_NO_MODEL_TEXT, self)
         self._model_pill.setObjectName("TopBarModelPill")
@@ -75,3 +90,18 @@ class TopBar(QWidget):
         self._status_pill.setText(label or _STATUS_DEFAULT_LABELS[status])
         self._status_pill.style().unpolish(self._status_pill)
         self._status_pill.style().polish(self._status_pill)
+
+    def set_recording_state(self, state: str) -> None:
+        if state not in _RECORDING_STATES:
+            raise ValueError(
+                f"state must be one of {_RECORDING_STATES}, got {state!r}"
+            )
+        if state == "idle":
+            self._recording_pill.setVisible(False)
+            self._recording_pill.setProperty("state", "idle")
+        else:
+            self._recording_pill.setText(_RECORDING_LABELS[state])
+            self._recording_pill.setProperty("state", state)
+            self._recording_pill.setVisible(True)
+        self._recording_pill.style().unpolish(self._recording_pill)
+        self._recording_pill.style().polish(self._recording_pill)

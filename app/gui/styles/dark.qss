@@ -121,3 +121,27 @@ QLabel[role="status-pill"][status="unknown"] {
     background-color: {{color.bg_elevated}};
     color: {{color.text_muted}};
 }
+
+QLabel[role="recording-pill"] {
+    border-radius: {{radius.sm}};
+    padding: 2px {{space.sm}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_secondary}};
+}
+
+QLabel[role="recording-pill"][state="recording"] {
+    background-color: {{color.danger}};
+    color: {{color.text_primary}};
+}
+
+QLabel[role="recording-pill"][state="processing"] {
+    background-color: {{color.accent}};
+    color: {{color.text_primary}};
+}
+
+QLabel[role="recording-pill"][state="model_loading"] {
+    background-color: {{color.warning}};
+    color: {{color.bg_primary}};
+}

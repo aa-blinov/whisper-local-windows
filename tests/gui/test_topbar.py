@@ -98,3 +98,88 @@ def test_set_backend_status_rejects_unknown_value(qtbot):
 
     with pytest.raises(ValueError):
         bar.set_backend_status("nuclear")
+
+
+# ---- Recording state indicator ---------------------------------------------
+
+
+def _recording_pill(bar) -> QLabel:
+    return _label_by_name(bar, "TopBarRecordingPill")
+
+
+def test_recording_pill_exists_and_hidden_by_default(qtbot):
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    pill = _recording_pill(bar)
+    assert pill is not None
+    assert not pill.isVisibleTo(bar)
+
+
+def test_set_recording_state_idle_keeps_pill_hidden(qtbot):
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.set_recording_state("idle")
+    assert not _recording_pill(bar).isVisibleTo(bar)
+
+
+def test_set_recording_state_recording_shows_pill(qtbot):
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.show()
+    bar.set_recording_state("recording")
+    pill = _recording_pill(bar)
+    assert pill.isVisibleTo(bar)
+    assert pill.property("state") == "recording"
+    assert "recording" in pill.text().lower()
+
+
+def test_set_recording_state_processing_shows_pill(qtbot):
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.show()
+    bar.set_recording_state("processing")
+    pill = _recording_pill(bar)
+    assert pill.isVisibleTo(bar)
+    assert pill.property("state") == "processing"
+    assert "processing" in pill.text().lower()
+
+
+def test_set_recording_state_model_loading_shows_pill(qtbot):
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.show()
+    bar.set_recording_state("model_loading")
+    pill = _recording_pill(bar)
+    assert pill.isVisibleTo(bar)
+    assert pill.property("state") == "model_loading"
+    assert "model" in pill.text().lower()
+
+
+def test_set_recording_state_back_to_idle_hides_pill(qtbot):
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.show()
+    bar.set_recording_state("recording")
+    bar.set_recording_state("idle")
+    assert not _recording_pill(bar).isVisibleTo(bar)
+
+
+def test_set_recording_state_rejects_unknown(qtbot):
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    with pytest.raises(ValueError):
+        bar.set_recording_state("snoozing")
