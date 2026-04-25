@@ -140,7 +140,7 @@ def build_application(
         # handler before this function runs so the recording stack's INFO
         # messages aren't lost. Here we just attach the UI bridge.
         bridge = QtLogBridge(parent=window)
-        bridge.line_received.connect(window.logs_view.append_line)
+        bridge.record_received.connect(window.logs_view.append_record)
         bridge.install()
     if config is not None:
         AppController(
