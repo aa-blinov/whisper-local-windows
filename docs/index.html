@@ -32,7 +32,7 @@
       <h1 class="hero__title">Press a hotkey, speak, paste.</h1>
       <p class="hero__sub">
         Lazy to Text records audio on a global keyboard shortcut, transcribes it locally
-        through a Whisper model running in a Docker container, and pastes the result
+        through a Whisper model running in-process via faster-whisper, and pastes the result
         into whatever window has focus. No cloud round-trip, no subscription, no telemetry.
       </p>
       <div class="hero__ctas">
@@ -169,13 +169,13 @@
     <div class="container">
       <h2 class="section__title">Install</h2>
       <p class="section__lede">
-        Requires Windows 10/11, Docker Desktop, Python 3.12, and a microphone.
+        Requires Windows 10/11, Python 3.12, and a microphone. A CUDA-capable
+        GPU is optional but recommended for the larger models.
       </p>
       <pre class="code"><code>git clone https://github.com/aa-blinov/lazy-to-text.git
 cd lazy-to-text
 
 uv sync                       # creates the venv from uv.lock
-docker compose up -d          # local Wyoming faster-whisper backend
 uv run lazy-to-text-ui        # launch the app</code></pre>
       <p class="section__note">
         Press <kbd>Ctrl</kbd>+<kbd>F2</kbd> anywhere, speak, press
@@ -189,7 +189,7 @@ uv run lazy-to-text-ui        # launch the app</code></pre>
           <ul>
             <li>Windows 10 or 11 (64-bit)</li>
             <li>Microphone (built-in or USB)</li>
-            <li>Docker Desktop ≥ 4.x with WSL2</li>
+            <li>Optional: NVIDIA GPU + CUDA 12 / cuDNN 9 for fast inference</li>
             <li>Python 3.12 (only when building from source)</li>
           </ul>
         </div>

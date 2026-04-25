@@ -4,7 +4,7 @@ Press a global hotkey, speak, paste. Local Whisper-based speech-to-text for Wind
 
 [![Python](https://img.shields.io/badge/python-3.12+-blue)](https://www.python.org/)
 [![Qt](https://img.shields.io/badge/UI-PySide6-41cd52)](https://doc.qt.io/qtforpython-6/)
-[![Docker](https://img.shields.io/badge/backend-Docker-2496ed)](https://www.docker.com/)
+[![faster-whisper](https://img.shields.io/badge/backend-faster--whisper-orange)](https://github.com/SYSTRAN/faster-whisper)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ![Hero](docs/screenshots/hero.png)
@@ -14,19 +14,21 @@ Press a global hotkey, speak, paste. Local Whisper-based speech-to-text for Wind
 ## What it is
 
 A Windows desktop application that records microphone audio on a global hotkey,
-transcribes it through a local [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
-container, and pastes the resulting text into the focused window.
+transcribes it locally via the [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+Python library (CTranslate2 under the hood), and pastes the resulting text
+into the focused window.
 
-The audio never leaves the machine: transcription happens entirely against a
-locally-running Wyoming-protocol service (`linuxserver/faster-whisper:gpu`).
-Cloud APIs are not involved.
+The audio never leaves the machine. No Docker, no Wyoming protocol, no cloud
+APIs — the model runs in-process and downloads from Hugging Face on first use.
 
 ## Features
 
 - Global hotkey activation (`Ctrl+F2` / `Ctrl+F3` by default).
 - Auto-paste into the foreground window after transcription.
 - 6 model presets (`tiny` → `large-v3`) with size / VRAM / speed / quality
-  metadata; switch from the UI, the running container reloads automatically.
+  metadata; switching swaps the in-process model on the fly.
+- Accepts any CTranslate2-converted Whisper model from Hugging Face — point
+  ``whisper.model`` at the HF id and it works (e.g. ``bzikst/faster-whisper-large-v3-russian``).
 - Searchable transcription history persisted to JSON.
 - Settings auto-save on edit; "Reset to defaults" button.
 - Live application log stream inside the UI.
@@ -37,24 +39,21 @@ Cloud APIs are not involved.
 
 ## Quick start
 
-Requires Windows 10/11, Python 3.12, Docker Desktop, and a microphone.
+Requires Windows 10/11, Python 3.12, and a microphone. A CUDA-capable GPU is
+optional but strongly recommended for the larger models.
 
 ```powershell
 git clone https://github.com/aa-blinov/lazy-to-text.git
 cd lazy-to-text
 
-# uv handles the venv and the lock-file pinned dependencies
-uv sync
-
-# bring up the local Wyoming faster-whisper backend
-docker compose up -d
-
-# launch the app
-uv run lazy-to-text-ui
+uv sync                      # creates the venv from uv.lock
+uv run lazy-to-text-ui       # launch the app
 ```
 
-Press `Ctrl+F2`, speak, press `Ctrl+F3` — the transcript is pasted into
-whatever has focus when you stop recording.
+The first launch downloads the configured model from Hugging Face (≈3 GB for
+``large-v3``) into ``~/.cache/huggingface/hub`` — subsequent launches use the
+local cache. Press `Ctrl+F2`, speak, press `Ctrl+F3` — the transcript is
+pasted into whatever has focus when you stop recording.
 
 ## Screenshots
 
@@ -85,12 +84,14 @@ file is the source of truth.
 
 ```yaml
 whisper:
-  backend_mode: local            # local | external
-  model: large-v3                # alias from app/model_mapping.py
+  model: large-v3                # alias from app/model_mapping.py, or any
+                                 # CTranslate2-converted Whisper model on
+                                 # Hugging Face (e.g.
+                                 # bzikst/faster-whisper-large-v3-russian)
+  device: auto                   # auto | cpu | cuda
+  compute_type: float16          # float16 | int8_float16 | int8 | float32
+  language: ru                   # ISO code, or omit/null for auto-detect
   beam_size: 5
-  language: ru                   # or "auto"
-  local_url: http://localhost:10300
-  external_url: http://remote-host:10300
 
 hotkey:
   start_recording_hotkey: ctrl+f2
@@ -125,41 +126,43 @@ and auto-paste fields without touching the rest of the file.
 ## Architecture
 
 ```
-                                        ┌─────────────────────────────┐
-                                        │  Qt UI (app/gui)            │
-                                        │  views, widgets, controllers│
-                                        └─────────────┬───────────────┘
-                                                      │
-                                       Qt signals     │
-                                                      ▼
-┌─────────────┐    callbacks    ┌──────────────────────────────────┐
-│ Hotkey      ├────────────────▶│  StateManager  (app/)            │
-│ Listener    │                 │  recording / processing / model  │
-└─────────────┘                 │  loading state machine            │
-                                 └─────┬───────────────┬─────────────┘
-                                       │               │
-                            audio_data │               │ transcribe(audio)
-                                       ▼               ▼
-                          ┌──────────────────┐ ┌──────────────────────┐
-                          │ AudioRecorder    │ │ WhisperEngine        │
-                          │ sounddevice +    │ │ Wyoming TCP client   │
-                          │ daemon thread    │ │ (asyncio.run wrap)   │
-                          └──────────────────┘ └────────┬─────────────┘
-                                                        │
-                                                        ▼
-                                             ┌─────────────────────┐
-                                             │ Docker container    │
-                                             │ linuxserver/        │
-                                             │ faster-whisper:gpu  │
-                                             └─────────────────────┘
+                                ┌─────────────────────────────┐
+                                │  Qt UI (app/gui)            │
+                                │  views, widgets, controllers│
+                                └─────────────┬───────────────┘
+                                              │
+                                Qt signals    │
+                                              ▼
+┌─────────────┐    callbacks   ┌──────────────────────────────┐
+│ Hotkey      ├───────────────▶│  StateManager  (app/)        │
+│ Listener    │                │  recording / processing /    │
+└─────────────┘                │  model_loading state machine │
+                                └─────┬───────────────┬─────────┘
+                                      │               │
+                           audio_data │               │ transcribe(audio)
+                                      ▼               ▼
+                         ┌──────────────────┐  ┌──────────────────────┐
+                         │ AudioRecorder    │  │ TranscriptionBackend │
+                         │ sounddevice +    │  │   (Protocol)         │
+                         │ daemon thread    │  └─────────┬────────────┘
+                         └──────────────────┘            │
+                                                         ▼
+                                            ┌────────────────────────┐
+                                            │ FasterWhisperBackend   │
+                                            │ in-process via         │
+                                            │ faster_whisper +       │
+                                            │ ctranslate2 (CPU/GPU)  │
+                                            └────────────────────────┘
 ```
 
-The Qt layer (`app/gui/`) holds every UI concern. The domain layer
-(`app/state_manager.py`, `app/audio_recorder.py`, `app/whisper_engine.py`,
-`app/clipboard_manager.py`) is what `RecordingController` wires Qt signals
-into. Backend lifecycle (start / stop, status polling) is delegated to
-`app/docker_backend_manager.py`, polled off the UI thread by
-`BackendStatusPoller`.
+The Qt layer (``app/gui/``) holds every UI concern. The domain layer
+(``app/state_manager.py``, ``app/audio_recorder.py``,
+``app/clipboard_manager.py``) is what ``RecordingController`` wires Qt
+signals into. The speech-to-text engine sits behind the
+``TranscriptionBackend`` protocol in ``app/backends/`` so swapping in
+GigaAM, distilled Whisper variants, or a cloud API is a drop-in change.
+``BackendStatusPoller`` polls ``backend.status()`` off the UI thread and
+feeds the result into the TopBar pill.
 
 ## Building a standalone executable
 
@@ -221,19 +224,19 @@ are deleted along with the install folder. Your transcription history
 (`logs\transcription_history.json`) goes with them — back it up first if
 you want to keep it.
 
-## Running the Docker backend
+## GPU support
 
-The app talks to a local `linuxserver/faster-whisper:gpu` container over
-TCP at `localhost:10300`. Start it once from the repository root:
+By default the backend uses ``device: auto`` and ``compute_type: float16``
+so faster-whisper picks the GPU when CTranslate2 finds a CUDA-capable card
+and falls back to CPU otherwise. For a CUDA setup you need:
 
-```powershell
-docker compose up -d
-```
+- An NVIDIA GPU with up-to-date drivers (CUDA 12 era).
+- ``cuBLAS`` and ``cuDNN`` libraries on ``PATH`` — the simplest way is
+  to install [CUDA Toolkit 12.x](https://developer.nvidia.com/cuda-downloads)
+  and [cuDNN 9.x](https://developer.nvidia.com/cudnn).
 
-The container restarts automatically with Docker Desktop on subsequent
-boots if "Start Docker Desktop on login" is enabled in Docker Desktop
-settings. The first run downloads the configured model (~3 GB for
-`large-v3`).
+CPU-only is fine for ``tiny`` / ``base`` / ``small``; ``medium`` and
+``large-v*`` will be slow without a GPU.
 
 ## Development
 
@@ -252,7 +255,8 @@ GUI tests can run headless via `QT_QPA_PLATFORM=offscreen`.
 - [ ] Live audio level meter while recording
 - [ ] System tray notification when transcription completes
 - [ ] Light theme + custom QSS
-- [ ] Optional cloud backends (OpenAI, Groq) behind the same UI
+- [ ] GigaAM-v3 backend (Sber's Russian-specialised Conformer)
+- [ ] Optional cloud backends (OpenAI, Groq) behind the same `TranscriptionBackend`
 - [ ] Distil / turbo model presets in the registry
 - [ ] Auto-detect language toggle in the Models tab
 
@@ -260,16 +264,15 @@ GUI tests can run headless via `QT_QPA_PLATFORM=offscreen`.
 
 - Python 3.12
 - PySide6 (Qt 6.11) for the UI
-- Wyoming protocol for backend RPC
-- faster-whisper running inside `linuxserver/faster-whisper:gpu`
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) + CTranslate2 for in-process inference
 - `sounddevice` for audio capture, `pyautogui` + `pyperclip` for paste,
   `global-hotkeys` + `pywin32` for Windows-native hotkey registration
 
 ## Acknowledgements
 
-- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) and the
-  [Wyoming protocol](https://github.com/rhasspy/wyoming).
-- The `linuxserver/faster-whisper` container image.
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (SYSTRAN) and
+  [CTranslate2](https://github.com/OpenNMT/CTranslate2) under the hood.
+- [OpenAI Whisper](https://github.com/openai/whisper) — the underlying model.
 - UI direction borrowed from [Spokenly](https://spokenly.app/) (macOS).
 
 ## License
