@@ -28,15 +28,11 @@ class LogsView(QWidget):
         self._max_lines = max(1, int(max_lines))
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 24, 24, 24)
-        root.setSpacing(12)
+        root.setContentsMargins(24, 18, 24, 18)
+        root.setSpacing(10)
 
         header = QHBoxLayout()
         header.setSpacing(8)
-
-        title = QLabel("Logs", self)
-        title.setProperty("role", "title")
-        header.addWidget(title)
         header.addStretch(1)
 
         self._clear_btn = QPushButton("Clear", self)

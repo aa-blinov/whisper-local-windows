@@ -36,12 +36,8 @@ class ShortcutsView(QWidget):
         self._suspend_emit = False
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 24, 24, 24)
-        root.setSpacing(12)
-
-        title = QLabel("Shortcuts", self)
-        title.setProperty("role", "title")
-        root.addWidget(title)
+        root.setContentsMargins(24, 18, 24, 18)
+        root.setSpacing(10)
 
         hint = QLabel(
             "Global hotkeys and paste behaviour. Changes save automatically.",

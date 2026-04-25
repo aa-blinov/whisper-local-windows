@@ -95,15 +95,8 @@ class HistoryView(QWidget):
         self.setObjectName("HistoryView")
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 24, 24, 24)
-        root.setSpacing(12)
-
-        header = QHBoxLayout()
-        title = QLabel("History", self)
-        title.setProperty("role", "title")
-        header.addWidget(title)
-        header.addStretch(1)
-        root.addLayout(header)
+        root.setContentsMargins(24, 18, 24, 18)
+        root.setSpacing(10)
 
         controls = QHBoxLayout()
         self._search = QLineEdit(self)

@@ -30,13 +30,10 @@ class ModelsView(QWidget):
         resolved: Sequence[ModelInfo] = tuple(models) if models is not None else MODELS
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 24, 24, 24)
-        root.setSpacing(12)
+        root.setContentsMargins(24, 18, 24, 18)
+        root.setSpacing(10)
 
-        title = QLabel("Models", self)
-        title.setProperty("role", "title")
-        root.addWidget(title)
-
+        # Section title lives in the TopBar; a hint here is enough context.
         hint = QLabel(
             "Pick a model. Quality scales with size; speed is the opposite.",
             self,
