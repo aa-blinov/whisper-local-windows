@@ -11,6 +11,7 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
+# Qt is imported above for the alignment flags used by the empty state.
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QStackedWidget,
     QTableView,
     QVBoxLayout,
     QWidget,
@@ -197,7 +199,12 @@ class HistoryView(QWidget):
         self._proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self._proxy.setFilterKeyColumn(1)  # Text column
 
-        self._table = QTableView(self)
+        # Stack the table behind an empty-state placeholder; the
+        # controller swaps which one is showing when the entry count
+        # crosses zero.
+        self._stack = QStackedWidget(self)
+
+        self._table = QTableView(self._stack)
         self._table.setObjectName("HistoryTable")
         self._table.setModel(self._proxy)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -211,7 +218,33 @@ class HistoryView(QWidget):
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self._table.horizontalHeader().setStretchLastSection(False)
-        root.addWidget(self._table, 1)
+        self._stack.addWidget(self._table)
+
+        empty = QWidget(self._stack)
+        empty.setObjectName("HistoryEmptyState")
+        empty_layout = QVBoxLayout(empty)
+        empty_layout.setContentsMargins(40, 60, 40, 60)
+        empty_layout.setSpacing(8)
+        empty_layout.addStretch(1)
+        title = QLabel("No transcriptions yet", empty)
+        title.setProperty("role", "empty-title")
+        title.setAlignment(Qt.AlignCenter)
+        empty_layout.addWidget(title)
+        hint = QLabel(
+            "Press the Start hotkey (Ctrl+F2 by default) and speak — "
+            "transcriptions will land here.",
+            empty,
+        )
+        hint.setProperty("role", "empty-hint")
+        hint.setAlignment(Qt.AlignCenter)
+        hint.setWordWrap(True)
+        empty_layout.addWidget(hint)
+        empty_layout.addStretch(2)
+        self._empty_state = empty
+        self._stack.addWidget(empty)
+
+        root.addWidget(self._stack, 1)
+        self._update_empty_state()
 
         footer = QHBoxLayout()
         self._count_label = QLabel("0 entries", self)
@@ -234,6 +267,7 @@ class HistoryView(QWidget):
     def set_entries(self, entries: Sequence[Any]) -> None:
         self._source_model.set_entries(entries)
         self._refresh_count()
+        self._update_empty_state()
 
     # ---- internal -----------------------------------------------------------
 
@@ -244,6 +278,12 @@ class HistoryView(QWidget):
     def _refresh_count(self, *_args) -> None:
         count = self._proxy.rowCount()
         self._count_label.setText(f"{count} entries")
+
+    def _update_empty_state(self) -> None:
+        if self._source_model.rowCount() == 0:
+            self._stack.setCurrentWidget(self._empty_state)
+        else:
+            self._stack.setCurrentWidget(self._table)
 
     def _on_copy_clicked(self) -> None:
         rows = self._table.selectionModel().selectedRows()

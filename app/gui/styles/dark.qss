@@ -34,6 +34,25 @@ QLabel[role="muted"] {
     font-size: {{font.size_small}};
 }
 
+QLabel[role="section-header"] {
+    color: {{color.accent_hover}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+    text-transform: uppercase;
+    padding-top: {{space.sm}};
+}
+
+QLabel[role="empty-title"] {
+    color: {{color.text_primary}};
+    font-size: {{font.size_heading}};
+    font-weight: 600;
+}
+
+QLabel[role="empty-hint"] {
+    color: {{color.text_muted}};
+    font-size: {{font.size_body}};
+}
+
 QLabel[role="test-result-good"] {
     color: {{color.success}};
     font-size: {{font.size_small}};

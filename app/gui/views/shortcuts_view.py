@@ -55,6 +55,14 @@ class ShortcutsView(QWidget):
         form.setContentsMargins(16, 14, 16, 14)
         form.setSpacing(10)
 
+        # Section headers turn a flat 5-row form into three logically
+        # grouped chunks ("Audio input", "Hotkeys", "Clipboard") so
+        # the eye finds the relevant control faster. Cosmetic only —
+        # ``QFormLayout.addRow(QWidget)`` adds a span row.
+        audio_header = QLabel("Audio input", card)
+        audio_header.setProperty("role", "section-header")
+        form.addRow(audio_header)
+
         self._device_combo = QComboBox(card)
         self._device_combo.setObjectName("MicrophoneCombo")
         # Long device names ("Микрофон (Razer BlackShark V2 Pro 2.4 …)") need
@@ -83,6 +91,10 @@ class ShortcutsView(QWidget):
         mic_test_row.addWidget(self._test_mic_label, 1)
         form.addRow("", mic_test_row)
 
+        hotkeys_header = QLabel("Hotkeys", card)
+        hotkeys_header.setProperty("role", "section-header")
+        form.addRow(hotkeys_header)
+
         self._start_edit = QLineEdit(card)
         self._start_edit.setObjectName("StartHotkeyEdit")
         self._start_edit.setPlaceholderText("e.g. ctrl+f2")
@@ -94,6 +106,10 @@ class ShortcutsView(QWidget):
         self._stop_edit.setPlaceholderText("e.g. ctrl+f3")
         self._stop_edit.editingFinished.connect(self._emit_save)
         form.addRow("Stop recording", self._stop_edit)
+
+        clipboard_header = QLabel("Clipboard", card)
+        clipboard_header.setProperty("role", "section-header")
+        form.addRow(clipboard_header)
 
         self._auto_paste_cb = QCheckBox("Auto-paste transcription", card)
         self._auto_paste_cb.setObjectName("AutoPasteCheckbox")

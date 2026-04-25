@@ -313,3 +313,23 @@ def test_history_view_uses_pixel_scroll_mode(qtbot):
     view = HistoryView()
     qtbot.addWidget(view)
     assert view._table.verticalScrollMode() == QAbstractItemView.ScrollPerPixel
+
+
+def test_history_view_shows_empty_state_when_no_entries(qtbot):
+    """A blank table is unfriendly — surface a 'press the hotkey'
+    placeholder when there's nothing to show."""
+    from app.gui.views.history_view import HistoryView
+
+    view = HistoryView()
+    qtbot.addWidget(view)
+    view.set_entries([])
+    assert view._stack.currentWidget() is view._empty_state
+
+
+def test_history_view_swaps_to_table_when_entries_arrive(qtbot):
+    from app.gui.views.history_view import HistoryView
+
+    view = HistoryView()
+    qtbot.addWidget(view)
+    view.set_entries(_make_entries(2))
+    assert view._stack.currentWidget() is view._table

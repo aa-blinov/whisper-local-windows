@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -93,6 +93,19 @@ class MainWindow(QMainWindow):
         self.toast = Toast(parent=central)
         central.installEventFilter(self)
 
+        # Ctrl+1..4 jump straight to the matching tab — same order as
+        # the sidebar.
+        self._shortcuts: list[QShortcut] = []
+        nav_keys = list(self.sidebar.items())
+        for index, key in enumerate(nav_keys[:9]):
+            sc = QShortcut(
+                QKeySequence(f"Ctrl+{index + 1}"),
+                self,
+            )
+            sc.setContext(Qt.ApplicationShortcut)
+            sc.activated.connect(lambda k=key: self._activate_nav(k))
+            self._shortcuts.append(sc)
+
     def get_view(self, key: str) -> QWidget:
         if key not in self._views:
             raise KeyError(key)
@@ -122,6 +135,14 @@ class MainWindow(QMainWindow):
         if key in self._views:
             self.stack.setCurrentWidget(self._views[key])
             self.topbar.set_section_title(self.sidebar.label_for(key))
+
+    def _activate_nav(self, key: str) -> None:
+        """Switch to the named tab — used by the Ctrl+N keyboard
+        shortcuts."""
+        try:
+            self.sidebar.set_active(key)
+        except ValueError:
+            pass
 
     def eventFilter(self, watched, event):  # noqa: N802 (Qt naming)
         # Re-anchor the toast on resize so it sticks to the top-right

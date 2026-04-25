@@ -15,13 +15,25 @@ from PySide6.QtWidgets import (
 
 
 NavItem = Tuple[str, str]
+# Item-row display strings — a leading Unicode glyph (rendered by
+# Segoe UI Symbol / Segoe UI Emoji on Windows) gives the eye a
+# categorical anchor without bundling SVG icons. The plain label is
+# preserved separately so ``label_for`` can return it without the
+# decoration for places like the topbar section title.
 _DEFAULT_ITEMS: tuple[NavItem, ...] = (
     ("models", "Models"),
     ("shortcuts", "Settings"),
     ("history", "History"),
     ("logs", "Logs"),
 )
+_KEY_ICONS: dict[str, str] = {
+    "models": "◆",
+    "shortcuts": "⚙",
+    "history": "⏱",
+    "logs": "≡",
+}
 _KEY_ROLE = Qt.UserRole + 1
+_LABEL_ROLE = Qt.UserRole + 2
 
 
 class Sidebar(QWidget):
@@ -52,8 +64,11 @@ class Sidebar(QWidget):
 
         resolved = tuple(items) if items is not None else _DEFAULT_ITEMS
         for key, label in resolved:
-            entry = QListWidgetItem(label)
+            icon = _KEY_ICONS.get(key, "")
+            display = f"{icon}  {label}" if icon else label
+            entry = QListWidgetItem(display)
             entry.setData(_KEY_ROLE, key)
+            entry.setData(_LABEL_ROLE, label)
             self._list.addItem(entry)
 
         self._current_key = resolved[0][0] if resolved else ""
@@ -68,12 +83,13 @@ class Sidebar(QWidget):
         ]
 
     def label_for(self, key: str) -> str:
-        """Display label for a nav key (e.g. ``shortcuts`` -> ``Settings``).
-        Falls back to ``key.capitalize()`` if the key isn't in the model."""
+        """Plain display label for a nav key (e.g. ``shortcuts`` ->
+        ``Settings``) — strips the icon prefix used in the list row.
+        Falls back to ``key.capitalize()`` if the key isn't known."""
         for i in range(self._list.count()):
             item = self._list.item(i)
             if item.data(_KEY_ROLE) == key:
-                return item.text()
+                return item.data(_LABEL_ROLE) or item.text()
         return key.capitalize()
 
     def active_key(self) -> str:
