@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="Lazy to Text — local Whisper-based speech-to-text for Windows with global hotkeys and a Qt UI." />
+<meta name="theme-color" content="#161616" />
+<title>Lazy to Text — local speech-to-text for Windows</title>
+<link rel="icon" type="image/png" href="../app/assets/tray_idle.png" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="container topbar__inner">
+    <a class="brand" href="#top">Lazy to Text</a>
+    <nav class="nav">
+      <a href="#why">Why</a>
+      <a href="#features">Features</a>
+      <a href="#screenshots">Screenshots</a>
+      <a href="#install">Install</a>
+      <a href="#roadmap">Roadmap</a>
+      <a class="nav__cta" href="https://github.com/aa-blinov/whisper-local-windows" target="_blank" rel="noopener">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="container hero__inner">
+      <span class="hero__pill">Windows · MIT · Local-first</span>
+      <h1 class="hero__title">Press a hotkey, speak, paste.</h1>
+      <p class="hero__sub">
+        Lazy to Text records audio on a global keyboard shortcut, transcribes it locally
+        through a Whisper model running in a Docker container, and pastes the result
+        into whatever window has focus. No cloud round-trip, no subscription, no telemetry.
+      </p>
+      <div class="hero__ctas">
+        <a class="button button--primary" href="https://github.com/aa-blinov/whisper-local-windows" target="_blank" rel="noopener">View on GitHub</a>
+        <a class="button" href="#install">Install in 30 seconds</a>
+      </div>
+      <figure class="hero__shot">
+        <img src="screenshots/hero.png" alt="The Models tab of Lazy to Text showing six Whisper model cards." loading="lazy" />
+      </figure>
+    </div>
+  </section>
+
+  <section id="why" class="section section--alt">
+    <div class="container">
+      <h2 class="section__title">Why local</h2>
+      <div class="grid grid--3">
+        <article class="card">
+          <h3 class="card__title">Audio stays on your machine</h3>
+          <p class="card__body">
+            Recording, encoding, and Wyoming-protocol RPC all run against
+            <code>localhost:10300</code>. The internet is never involved.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Works offline</h3>
+          <p class="card__body">
+            After the first model download the app does not need a network
+            connection — useful for trains, planes, and locked-down enterprise
+            laptops.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">No usage limits</h3>
+          <p class="card__body">
+            One-time setup, then transcribe as much as you want. No API keys,
+            quotas, or per-minute billing.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="features" class="section">
+    <div class="container">
+      <h2 class="section__title">Features</h2>
+      <div class="grid grid--3">
+        <article class="card">
+          <h3 class="card__title">Global hotkey</h3>
+          <p class="card__body">
+            <kbd>Ctrl</kbd>+<kbd>F2</kbd> starts recording, <kbd>Ctrl</kbd>+<kbd>F3</kbd>
+            stops and transcribes. Both are remappable in the Shortcuts tab.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Auto-paste</h3>
+          <p class="card__body">
+            The transcribed text drops into the foreground window via simulated
+            keystrokes. Toggle off if you want clipboard-only behaviour.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Six model presets</h3>
+          <p class="card__body">
+            Tiny through Large v3, with size, VRAM, speed, and quality metadata
+            shown on each card. Switching the active model reloads the running
+            container automatically.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Searchable history</h3>
+          <p class="card__body">
+            Every transcription is persisted to <code>logs/transcription_history.json</code>,
+            displayed in a filterable table, and exportable to text.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Hide to tray</h3>
+          <p class="card__body">
+            The close button minimises to the system tray instead of quitting.
+            Right-click the tray icon for Show / Quit; left-click restores the window.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Single-instance guard</h3>
+          <p class="card__body">
+            A named-mutex check prevents a second copy from registering the
+            same global hotkeys. The duplicate launch shows a branded warning
+            and exits cleanly.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Live application logs</h3>
+          <p class="card__body">
+            The Logs tab streams the same log records the file logger writes,
+            so you can see what the recording pipeline is doing in real time.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Settings auto-save</h3>
+          <p class="card__body">
+            Hotkey edits commit on focus loss, the auto-paste toggle commits
+            instantly. A "Reset to defaults" button restores stock values.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="screenshots" class="section section--alt">
+    <div class="container">
+      <h2 class="section__title">Screenshots</h2>
+      <div class="grid grid--2 grid--shots">
+        <figure class="shot">
+          <img src="screenshots/models.png" alt="Models tab with six model cards." loading="lazy" />
+          <figcaption>Models — pick from tiny to large-v3 with full metadata.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="screenshots/shortcuts.png" alt="Shortcuts tab with two hotkey fields and an auto-paste toggle." loading="lazy" />
+          <figcaption>Shortcuts — auto-saving fields, no Save button.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="screenshots/history.png" alt="History tab with five sample transcriptions in a searchable table." loading="lazy" />
+          <figcaption>History — searchable table backed by HistoryManager.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="screenshots/logs.png" alt="Logs tab showing application log lines." loading="lazy" />
+          <figcaption>Logs — the file logger streamed into the UI.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" class="section">
+    <div class="container">
+      <h2 class="section__title">Install</h2>
+      <p class="section__lede">
+        Requires Windows 10/11, Docker Desktop, Python 3.12, and a microphone.
+      </p>
+      <pre class="code"><code>git clone https://github.com/aa-blinov/whisper-local-windows.git
+cd whisper-local-windows
+
+uv sync                       # creates the venv from uv.lock
+docker compose up -d          # local Wyoming faster-whisper backend
+uv run lazy-to-text-ui        # launch the app</code></pre>
+      <p class="section__note">
+        Press <kbd>Ctrl</kbd>+<kbd>F2</kbd> anywhere, speak, press
+        <kbd>Ctrl</kbd>+<kbd>F3</kbd>. The transcript is pasted into the focused
+        window. The first run downloads the selected model
+        (≈3 GB for <code>large-v3</code>).
+      </p>
+      <div class="reqs">
+        <div class="reqs__col">
+          <h4>System</h4>
+          <ul>
+            <li>Windows 10 or 11 (64-bit)</li>
+            <li>Microphone (built-in or USB)</li>
+            <li>Docker Desktop ≥ 4.x with WSL2</li>
+            <li>Python 3.12 (only when building from source)</li>
+          </ul>
+        </div>
+        <div class="reqs__col">
+          <h4>VRAM by model</h4>
+          <ul>
+            <li>tiny / base — 1 GB</li>
+            <li>small — 2 GB</li>
+            <li>medium — 5 GB</li>
+            <li>large-v2 / large-v3 — 10 GB</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="roadmap" class="section section--alt">
+    <div class="container">
+      <h2 class="section__title">Roadmap</h2>
+      <ul class="roadmap">
+        <li>Live audio level meter while recording.</li>
+        <li>System tray notification when a transcription completes.</li>
+        <li>Light theme + custom QSS.</li>
+        <li>Optional cloud backends (OpenAI, Groq) behind the same UI.</li>
+        <li>Distil / turbo presets in the model registry.</li>
+        <li>Auto-detect language toggle in the Models tab.</li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="container footer__inner">
+    <span>© 2025 Alexander Blinov · <a href="https://github.com/aa-blinov/whisper-local-windows/blob/prod/LICENSE">MIT</a></span>
+    <span><a href="https://github.com/aa-blinov/whisper-local-windows" target="_blank" rel="noopener">github.com/aa-blinov/whisper-local-windows</a></span>
+  </div>
+</footer>
+</body>
+</html>
