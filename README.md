@@ -169,9 +169,71 @@ into. Backend lifecycle (start / stop, status polling) is delegated to
 .\build-exe.ps1 -Clean     # remove dist/ and build/ first
 ```
 
-Output: `dist\LazyToText\LazyToText.exe` (or `dist\LazyToText.exe` for
-`-OneFile`). The build script delegates to `pyinstaller` via `uv run`; a
-fresh `uv sync` runs first unless `-SkipSync` is passed.
+Output: `dist\LazyToText\LazyToText.exe` (folder mode, ~144 MB, 264 files,
+fastest startup) or `dist\LazyToText.exe` (`-OneFile`, ~120 MB, slower
+startup because assets unpack on each run). The build script delegates to
+`pyinstaller` via `uv run`; a fresh `uv sync` runs first unless
+`-SkipSync` is passed.
+
+## Installing locally
+
+After a folder build, install per-user (no admin required) into
+`%LOCALAPPDATA%\Programs\LazyToText` and add a Start Menu shortcut. Run
+from PowerShell, in the repository root:
+
+```powershell
+$dest = "$env:LOCALAPPDATA\Programs\LazyToText"
+New-Item -ItemType Directory -Force -Path $dest | Out-Null
+robocopy "dist\LazyToText" $dest /MIR /NFL /NDL /NJH /NJS /NP
+
+$start = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Lazy to Text.lnk"
+$wsh   = New-Object -ComObject WScript.Shell
+$lnk   = $wsh.CreateShortcut($start)
+$lnk.TargetPath       = "$dest\LazyToText.exe"
+$lnk.WorkingDirectory = $dest
+$lnk.IconLocation     = "$dest\LazyToText.exe"
+$lnk.Description      = "Local Whisper speech-to-text for Windows"
+$lnk.Save()
+```
+
+After this, `Win` + typing "Lazy to Text" launches it from the Start
+menu. You can then right-click the taskbar icon → **Pin to taskbar** for
+single-click access.
+
+To launch automatically at login, copy the shortcut into the user's
+Startup folder:
+
+```powershell
+Copy-Item $start "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Lazy to Text.lnk"
+```
+
+To uninstall:
+
+```powershell
+Get-Process LazyToText -ErrorAction SilentlyContinue | Stop-Process -Force
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\LazyToText"
+Remove-Item -Force "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Lazy to Text.lnk" -ErrorAction SilentlyContinue
+Remove-Item -Force "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Lazy to Text.lnk" -ErrorAction SilentlyContinue
+```
+
+The `config.yaml` and `logs\` folder live next to the executable; they
+are deleted along with the install folder. Your transcription history
+(`logs\transcription_history.json`) goes with them — back it up first if
+you want to keep it.
+
+## Running the Docker backend
+
+The app talks to a local `linuxserver/faster-whisper:gpu` container over
+TCP at `localhost:10300`. Start it once from the repository root:
+
+```powershell
+docker compose up -d
+```
+
+The container restarts automatically with Docker Desktop on subsequent
+boots if "Start Docker Desktop on login" is enabled in Docker Desktop
+settings. The first run downloads the configured model (~3 GB for
+`large-v3`).
 
 ## Development
 
