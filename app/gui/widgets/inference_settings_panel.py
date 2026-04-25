@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFocusEvent
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -19,11 +20,29 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QLabel,
-    QLineEdit,
+    QPlainTextEdit,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
+
+
+class _MultilinePromptEdit(QPlainTextEdit):
+    """``QPlainTextEdit`` that mimics ``QLineEdit.editingFinished``.
+
+    Whisper's ``initial_prompt`` is a free-form string — sometimes
+    just a comma-list of names, sometimes a paragraph of context.
+    A single-line field punishes the latter, so use a 3-row text
+    area and emit ``editing_finished`` when focus leaves so the
+    controller can persist the change without reacting on every
+    keystroke.
+    """
+
+    editing_finished = Signal()
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802
+        super().focusOutEvent(event)
+        self.editing_finished.emit()
 
 from app.inference_settings import InferenceSettings
 
@@ -122,14 +141,26 @@ class InferenceSettingsPanel(QFrame):
         self._temperature.valueChanged.connect(self._on_changed)
         grid.addWidget(self._temperature, 1, 3)
 
-        # Row 2: Initial prompt — full width
-        grid.addWidget(QLabel("Initial prompt", self), 2, 0)
-        self._prompt = QLineEdit(self)
+        # Row 2: Initial prompt — full-width multiline so structured
+        # context (term lists, names, paragraph descriptions) doesn't
+        # fight a single-line field.
+        prompt_label = QLabel("Initial prompt", self)
+        # Top-align the label so it sits flush with the first line of
+        # the multiline edit instead of vertically centring against
+        # its 3-row height.
+        prompt_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        grid.addWidget(prompt_label, 2, 0)
+        self._prompt = _MultilinePromptEdit(self)
         self._prompt.setObjectName("InitialPromptEdit")
         self._prompt.setPlaceholderText(
-            "Custom vocabulary / context (optional)"
+            "Names / terms / context Whisper should recognise — "
+            "e.g. \"Anthropic, Claude, ctranslate2. Speakers: Алексей.\""
         )
-        self._prompt.editingFinished.connect(self._on_changed)
+        # Keep the widget compact — three visible lines is plenty for
+        # a few sentences without dominating the card.
+        font_height = self._prompt.fontMetrics().lineSpacing()
+        self._prompt.setFixedHeight(int(font_height * 3 + 16))
+        self._prompt.editing_finished.connect(self._on_changed)
         grid.addWidget(self._prompt, 2, 1, 1, 3)
 
         outer.addLayout(grid)
@@ -153,7 +184,7 @@ class InferenceSettingsPanel(QFrame):
             self._vad.setChecked(bool(settings.vad_filter))
             self._beam.setValue(int(settings.beam_size))
             self._temperature.setValue(float(settings.temperature))
-            self._prompt.setText(settings.initial_prompt or "")
+            self._prompt.setPlainText(settings.initial_prompt or "")
         finally:
             self._suspend_emit = False
 
@@ -178,7 +209,7 @@ class InferenceSettingsPanel(QFrame):
         return InferenceSettings(
             language=self._language.currentData(),
             vad_filter=self._vad.isChecked(),
-            initial_prompt=(self._prompt.text().strip() or None),
+            initial_prompt=(self._prompt.toPlainText().strip() or None),
             beam_size=int(self._beam.value()),
             temperature=float(self._temperature.value()),
         )
