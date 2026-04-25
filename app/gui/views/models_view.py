@@ -91,6 +91,13 @@ class ModelsView(QWidget):
         for card in self._cards.values():
             card.set_loading(loading)
 
+    def set_loading_progress(self, current: int, total: int) -> None:
+        """Forward backend download progress to every card. Each card
+        ignores the update unless it's currently in the loading state,
+        so only the active-and-loading card actually repaints."""
+        for card in self._cards.values():
+            card.set_loading_progress(current, total)
+
     def refresh_cache_state(self) -> None:
         """Re-check the on-disk cache for every card. Called after a model
         finishes downloading so the freshly-downloaded card switches its

@@ -142,6 +142,70 @@ def test_model_card_active_loading_swaps_pill_text(qtbot):
     assert card._active_pill.property("state") == "ready"
 
 
+def test_model_card_loading_progress_updates_pill_text(qtbot):
+    """While loading, the active pill should show download progress as a
+    percentage so the user can see the model fetch advancing."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.set_active(True)
+    card.set_loading(True)
+
+    # Default loading pill before any progress
+    assert card._active_pill.text() == "Loading\u2026"
+
+    card.set_loading_progress(50, 100)
+    assert "50%" in card._active_pill.text()
+
+    card.set_loading_progress(35, 100)
+    assert "35%" in card._active_pill.text()
+
+
+def test_model_card_loading_progress_falls_back_to_size(qtbot):
+    """When the total file size is unknown (Hugging Face streaming bars
+    sometimes have total=0), fall back to a byte counter so the user
+    still sees movement instead of a stuck 'Loading…'."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.set_active(True)
+    card.set_loading(True)
+
+    card.set_loading_progress(2_500_000, 0)
+    text = card._active_pill.text()
+    assert "MB" in text or "KB" in text or "GB" in text
+
+
+def test_model_card_loading_progress_ignored_when_not_loading(qtbot):
+    """Stale progress events arriving after the model finished must not
+    repaint the green Active pill with download bytes."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.set_active(True)
+    # Not in loading state.
+
+    card.set_loading_progress(50, 100)
+    assert card._active_pill.text() == "Active"
+
+
+def test_model_card_set_loading_false_resets_pill_text(qtbot):
+    """Returning to ready state must wipe any leftover progress text."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.set_active(True)
+    card.set_loading(True)
+    card.set_loading_progress(50, 100)
+
+    card.set_loading(False)
+    assert card._active_pill.text() == "Active"
+
+
 def test_model_card_inactive_card_ignores_loading(qtbot):
     """Loading should only affect the currently-active card's pill, not
     the inactive ones."""

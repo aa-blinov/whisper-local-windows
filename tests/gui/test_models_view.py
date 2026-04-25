@@ -121,6 +121,26 @@ def test_set_locked_disables_all_select_buttons(qtbot):
         assert not select_btn.isEnabled()
 
 
+def test_models_view_set_loading_progress_propagates_to_active_card(qtbot):
+    """Download progress events arriving from the backend should bubble
+    down to whichever card is currently flagged as loading, so the
+    user sees percentage advance on the model they just clicked."""
+    from app.gui.views.models_view import ModelsView
+    from app.gui.widgets.model_card import ModelCard
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+    view.set_active("turbo")
+    view.set_loading(True)
+
+    view.set_loading_progress(50, 100)
+
+    cards = {c.alias(): c for c in view.findChildren(ModelCard)}
+    assert "50%" in cards["turbo"]._active_pill.text()
+    # Inactive cards' pills are hidden — text doesn't matter to the
+    # user, but we don't want to crash trying to update them either.
+
+
 def test_models_view_refresh_cache_state_propagates_to_all_cards(qtbot, monkeypatch):
     """When the cache state for any model changes (e.g. a download just
     finished), the view's refresh_cache_state must update every card so

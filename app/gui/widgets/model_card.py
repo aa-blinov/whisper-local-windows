@@ -25,6 +25,32 @@ def _format_size(size_mb: int) -> str:
     return f"{size_mb} MB"
 
 
+def _format_bytes(num_bytes: int) -> str:
+    """Compact byte counter used inside the loading pill."""
+    if num_bytes <= 0:
+        return ""
+    value = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024:
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{value:.1f} TB"
+
+
+def _format_loading_progress(current: int, total: int) -> str:
+    """Pill label for the active card while a model is downloading.
+
+    Returns an empty string when neither bytes nor totals are known —
+    the caller falls back to the default 'Loading…' marker.
+    """
+    if total > 0 and current >= 0:
+        pct = int(min(99, max(0, current * 100 // total)))
+        return f"Loading {pct}%"
+    if current > 0:
+        return f"Loading {_format_bytes(current)}"
+    return ""
+
+
 def _compute_label(compute_type: str) -> str:
     """Pretty short label for the ``compute_type`` badge."""
     return {
@@ -155,3 +181,14 @@ class ModelCard(QFrame):
             self._active_pill.setProperty("state", "ready")
         self._active_pill.style().unpolish(self._active_pill)
         self._active_pill.style().polish(self._active_pill)
+
+    def set_loading_progress(self, current: int, total: int) -> None:
+        """Update the active pill with download progress while the card
+        is in the loading state. Ignored when the card isn't loading so
+        stale events arriving after the model finishes can't repaint
+        the green Active pill with stale byte counts."""
+        if not self._loading:
+            return
+        text = _format_loading_progress(int(current), int(total))
+        if text:
+            self._active_pill.setText(text)

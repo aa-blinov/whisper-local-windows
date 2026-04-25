@@ -211,8 +211,16 @@ class AppController(QObject):
                 pass
 
     def _on_download_progress(self, current: int, total: int, _desc: str) -> None:
+        # Mirror progress in two places: the small pill in the topbar
+        # and the larger pill on the active model card. The card is
+        # where the user just clicked, so it's the most discoverable
+        # spot to surface byte-by-byte feedback.
         try:
             self._window.topbar.set_loading_progress(int(current), int(total))
+        except Exception:  # pragma: no cover — defensive
+            pass
+        try:
+            self._window.models_view.set_loading_progress(int(current), int(total))
         except Exception:  # pragma: no cover — defensive
             pass
 
