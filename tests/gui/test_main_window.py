@@ -103,32 +103,6 @@ def test_main_window_has_topbar(qtbot):
     assert window.topbar.parent() is not None
 
 
-def test_main_window_section_title_matches_default_sidebar_key(qtbot):
-    from app.gui.main_window import MainWindow
-
-    window = MainWindow()
-    qtbot.addWidget(window)
-    assert window.topbar._section_title.text() == "Models"
-
-
-def test_main_window_section_title_follows_sidebar_changes(qtbot):
-    from app.gui.main_window import MainWindow
-
-    window = MainWindow()
-    qtbot.addWidget(window)
-
-    window.sidebar.set_active("history")
-    assert window.topbar._section_title.text() == "History"
-
-    window.sidebar.set_active("logs")
-    assert window.topbar._section_title.text() == "Logs"
-
-    # The 'shortcuts' key is renamed to "Settings" in the sidebar's display
-    # label; the internal key stays the same so config / tests don't churn.
-    window.sidebar.set_active("shortcuts")
-    assert window.topbar._section_title.text() == "Settings"
-
-
 def test_main_window_uses_history_view_for_history_key(qtbot):
     from app.gui.main_window import MainWindow
     from app.gui.views.history_view import HistoryView

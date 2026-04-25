@@ -64,14 +64,10 @@ class TopBar(QWidget):
         layout.setContentsMargins(16, 6, 16, 6)
         layout.setSpacing(12)
 
-        # Left: contextual section title (driven by sidebar selection).
-        # The OS window title bar already shows the app name, so we use this
-        # area for "where am I" navigation context instead.
-        self._section_title = QLabel("", self)
-        self._section_title.setObjectName("TopBarSectionTitle")
-        self._section_title.setProperty("role", "section-title")
-        layout.addWidget(self._section_title)
-
+        # The sidebar already highlights the active section name and
+        # the OS title bar shows "Lazy to Text", so the topbar's left
+        # area stays empty — duplicating the label was just visual
+        # noise.
         layout.addStretch(1)
 
         # Slim live-input meter — visible only while a recording is in
@@ -106,9 +102,6 @@ class TopBar(QWidget):
         layout.addWidget(self._status_pill)
 
     # ---- public API ---------------------------------------------------------
-
-    def set_section_title(self, text: str) -> None:
-        self._section_title.setText(text)
 
     def _compose_label(self, state: str) -> str:
         base = _RECORDING_LABELS.get(state, "")

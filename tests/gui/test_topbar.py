@@ -29,24 +29,14 @@ def test_topbar_does_not_duplicate_window_title(qtbot):
     assert _label_by_name(bar, "TopBarTitle") is None
 
 
-def test_topbar_has_section_title_label(qtbot):
+def test_topbar_no_longer_duplicates_section_label(qtbot):
+    """The sidebar already highlights the active section; repeating
+    its name in the topbar was just visual noise."""
     from app.gui.widgets.topbar import TopBar
 
     bar = TopBar()
     qtbot.addWidget(bar)
-    assert _label_by_name(bar, "TopBarSectionTitle") is not None
-
-
-def test_set_section_title_updates_label(qtbot):
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-    bar.set_section_title("Models")
-    assert _label_by_name(bar, "TopBarSectionTitle").text() == "Models"
-
-    bar.set_section_title("History")
-    assert _label_by_name(bar, "TopBarSectionTitle").text() == "History"
+    assert _label_by_name(bar, "TopBarSectionTitle") is None
 
 
 def test_topbar_default_model_pill_text_when_no_model(qtbot):

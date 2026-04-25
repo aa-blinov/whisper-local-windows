@@ -207,13 +207,6 @@ QLabel[role="toast-body"] {
     border-bottom: 1px solid {{color.border}};
 }
 
-QLabel[role="section-title"] {
-    font-size: {{font.size_heading}};
-    font-weight: 600;
-    color: {{color.text_primary}};
-    background-color: transparent;
-}
-
 QLabel[role="status-pill"] {
     border-radius: {{radius.sm}};
     padding: 4px {{space.md}};
