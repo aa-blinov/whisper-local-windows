@@ -500,6 +500,25 @@ QComboBox:focus {
     border-color: {{color.accent}};
 }
 
+/* Replace the native ``::drop-down`` rendering — Qt's default
+   sub-control draws its own background on top of our rounded
+   border, so the chevron looks like it's sitting in a square
+   chip glued to the right edge. Make the area transparent and
+   substitute a bundled chevron SVG. */
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 24px;
+    border: none;
+    background: transparent;
+}
+
+QComboBox::down-arrow {
+    image: url("{{path.styles_dir}}/icons/chevron-down.svg");
+    width: 12px;
+    height: 12px;
+}
+
 QComboBox QAbstractItemView {
     background-color: {{color.bg_secondary}};
     border: 1px solid {{color.border}};
