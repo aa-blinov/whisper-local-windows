@@ -105,7 +105,7 @@
         <article class="card">
           <h3 class="card__title">9 model presets, 5 families</h3>
           <p class="card__body">
-            Whisper Tiny / Distil / Turbo (fp16+int8) / Large v3
+            Whisper Distil / Turbo (fp16+int8) / Large v3
             (fp16+int8), Russian fine-tunes, and GigaAM v3 e2e
             CTC + RNN-T (with built-in punctuation). Family chips on
             each card colour-code the lineage.
@@ -222,7 +222,8 @@
       <h2 class="section__title">Install</h2>
       <p class="section__lede">
         Requires Windows 10/11, Python 3.12, and a microphone. A CUDA-capable
-        GPU is optional but strongly recommended for any model larger than tiny.
+        GPU is optional but strongly recommended — every preset in the
+        registry now is either a Large-class Whisper variant or GigaAM v3.
       </p>
       <pre class="code"><code>git clone https://github.com/aa-blinov/lazy-to-text.git
 cd lazy-to-text
@@ -249,11 +250,10 @@ uv run lazy-to-text-ui        # launch the app</code></pre>
         <div class="reqs__col">
           <h4>VRAM by model</h4>
           <ul>
-            <li>Whisper Tiny — 1 GB</li>
             <li>GigaAM v3 e2e CTC — 2 GB</li>
             <li>GigaAM v3 e2e RNN-T — 2.5 GB</li>
-            <li>Whisper Distil / Turbo (int8) — 3.5 GB</li>
-            <li>Whisper Turbo / Distil (fp16) — 5–6 GB</li>
+            <li>Whisper Turbo (int8) — 3.5 GB</li>
+            <li>Whisper Distil / Turbo (fp16) — 5–6 GB</li>
             <li>Whisper Large v3 (int8) — 5 GB</li>
             <li>Whisper Large v3 (fp16) — 10 GB</li>
           </ul>

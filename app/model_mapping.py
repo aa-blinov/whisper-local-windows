@@ -84,21 +84,6 @@ class ModelInfo:
 
 
 MODELS: Tuple[ModelInfo, ...] = (
-    # ---- TEMPORARY: tiny preset for testing the download progress UI -------
-    # Remove this entry once verified.
-    ModelInfo(
-        alias="tiny",
-        canonical="Systran/faster-whisper-tiny",
-        display_name="Tiny (test)",
-        size_mb=75,
-        vram_gb=1.0,
-        speed="fast",
-        quality="basic",
-        languages="multilingual",
-        description="Temporary card for testing the download progress UI.",
-        compute_type="float16",
-        family="Whisper",
-    ),
     # ---- Distilled / turbo (faster, near-large quality) ---------------------
     ModelInfo(
         alias="turbo",

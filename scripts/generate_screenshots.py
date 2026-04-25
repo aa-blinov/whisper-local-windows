@@ -79,9 +79,9 @@ class _FakeHistory:
             ),
             TranscriptionEntry(
                 timestamp=now - 86400,
-                text="Yesterday I tried the tiny model for quick replies — surprisingly usable.",
+                text="Yesterday I tried the turbo-int8 build for quick replies — surprisingly usable on a 6 GB GPU.",
                 duration=4.0,
-                model="tiny",
+                model="turbo-int8",
                 language="en",
             ),
         ]
@@ -132,6 +132,26 @@ def _seed_logs(window) -> None:
         logger.removeHandler(bridge.handler())
 
 
+def _seed_resource_metrics(window) -> None:
+    """Push a realistic synthetic sample into the topbar's resource
+    widget. Without this the screenshot is captured before the real
+    ``ResourceMonitor`` has produced its first sample (it polls every
+    2 s), so CPU/RAM render as 0% — and on machines without an NVIDIA
+    driver the GPU/VRAM blocks would also be hidden, leaving a half-
+    empty bar that misrepresents what the app actually shows in use."""
+    window.topbar.set_resource_metrics(
+        {
+            "cpu_percent": 23.0,
+            "ram_percent": 38.7,
+            "ram_used_mb": 12_700.0,
+            "ram_total_mb": 32_768.0,
+            "gpu_util_percent": 67.0,
+            "gpu_vram_used_mb": 4_300.0,
+            "gpu_vram_total_mb": 8_192.0,
+        }
+    )
+
+
 def _capture(window, name: str) -> Path:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / f"{name}.png"
@@ -155,6 +175,7 @@ def main() -> int:
     app.processEvents()
 
     _seed_logs(window)
+    _seed_resource_metrics(window)
 
     # Force one initial paint so the layout settles before we grab.
     for _ in range(5):

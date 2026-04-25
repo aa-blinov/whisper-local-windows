@@ -337,7 +337,7 @@ def test_history_view_swaps_to_table_when_entries_arrive(qtbot):
 
 def test_history_model_column_shows_short_alias(qtbot):
     """The Model column should display the registry alias
-    (``large-v3``, ``tiny``) rather than the full canonical id
+    (``large-v3``, ``turbo-int8``) rather than the full canonical id
     (``Systran/faster-whisper-large-v3``) — it's what the user
     actually picked, and short enough not to truncate."""
     from app.gui.views.history_view import HistoryTableModel
