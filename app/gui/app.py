@@ -28,6 +28,26 @@ def _load_app_icon() -> QIcon:
     return icon
 
 
+def _set_app_user_model_id(app_id: str = "LazyToText.App") -> None:
+    """Tell Windows this process is its own app, not a hosted Python script.
+
+    Without this, the taskbar / Alt-Tab / system tray group everything under
+    Python's default AppUserModelID and use the Python interpreter's icon
+    instead of the one we set via setWindowIcon. This must run before any
+    window or QApplication is created.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception:
+        # Old Windows / missing API — non-fatal, the taskbar just stays
+        # grouped under Python.
+        pass
+
+
 def build_application(
     argv: Optional[List[str]] = None,
     theme: str = "dark",
@@ -85,6 +105,10 @@ def main() -> int:
     from app.gui.widgets.tray_icon import AppTrayIcon
     from app.instance_manager import try_acquire_single_instance
     from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+
+    # Distinct AppUserModelID before any window is created so Windows uses
+    # our icon in the taskbar instead of the Python interpreter's.
+    _set_app_user_model_id()
 
     # Single-instance check happens BEFORE we create QApplication. Showing
     # an early Qt dialog without a fully-initialised event loop crashes with
