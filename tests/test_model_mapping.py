@@ -157,3 +157,31 @@ def test_alias_for_passes_through_unknown_canonicals():
     from app.model_mapping import alias_for
 
     assert alias_for("unknown/model") == "unknown/model"
+
+
+def test_every_registry_entry_carries_a_known_family():
+    from app.model_mapping import FAMILIES, MODELS
+
+    for info in MODELS:
+        assert info.family in FAMILIES, (
+            f"{info.alias} has unknown family {info.family!r}"
+        )
+
+
+def test_model_url_for_faster_whisper_points_at_hf_repo():
+    from app.model_mapping import get_model, model_url
+
+    info = get_model("large-v3")
+    assert model_url(info) == (
+        "https://huggingface.co/Systran/faster-whisper-large-v3"
+    )
+
+
+def test_model_url_for_gigaam_resolves_internal_id_to_hf_repo():
+    from app.model_mapping import get_model, model_url
+
+    info = get_model("gigaam-v2-ctc")
+    # Sber's GigaAM canonical ('v2_ctc') maps to a real HF repo.
+    assert model_url(info) == (
+        "https://huggingface.co/salute-developers/GigaAM-CTC2"
+    )

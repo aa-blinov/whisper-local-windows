@@ -32,6 +32,11 @@ _COMPUTE_VALUES = ("float32", "float16", "int8_float16", "int8")
 # the default CT2 path; ``gigaam`` routes through the Sber Russian-only
 # acoustic model. New engines plug in here.
 BACKEND_KINDS = ("faster_whisper", "gigaam")
+# Visual grouping shown on the card — distinct from ``backend_kind``
+# because we want to show "Turbo" / "Distil" / "Russian" as
+# separate-feel groupings even though they all run through
+# faster-whisper under the hood.
+FAMILIES = ("Whisper", "Turbo", "Distil", "Russian", "GigaAM")
 
 
 @dataclass(frozen=True)
@@ -47,6 +52,7 @@ class ModelInfo:
     description: str
     compute_type: str = "float16"
     backend_kind: str = "faster_whisper"
+    family: str = "Whisper"
 
     def __post_init__(self) -> None:
         if self.speed not in _SPEED_VALUES:
@@ -65,6 +71,10 @@ class ModelInfo:
             raise ValueError(
                 f"backend_kind must be one of {BACKEND_KINDS}, got {self.backend_kind!r}"
             )
+        if self.family not in FAMILIES:
+            raise ValueError(
+                f"family must be one of {FAMILIES}, got {self.family!r}"
+            )
 
 
 MODELS: Tuple[ModelInfo, ...] = (
@@ -81,6 +91,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="multilingual",
         description="Temporary card for testing the download progress UI.",
         compute_type="float16",
+        family="Whisper",
     ),
     # ---- Distilled / turbo (faster, near-large quality) ---------------------
     ModelInfo(
@@ -94,6 +105,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="multilingual",
         description="Distilled large-v3 — much faster than the full model with similar quality.",
         compute_type="float16",
+        family="Turbo",
     ),
     ModelInfo(
         alias="turbo-int8",
@@ -106,6 +118,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="multilingual",
         description="Quantized turbo — half the VRAM, slight quality dip. Great on 4–6 GB GPUs.",
         compute_type="int8_float16",
+        family="Turbo",
     ),
     ModelInfo(
         alias="distil-large-v3",
@@ -118,6 +131,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="multilingual",
         description="6× faster than large-v3, ~1% WER drop. English-leaning.",
         compute_type="float16",
+        family="Distil",
     ),
     # ---- Full large-v3 ------------------------------------------------------
     ModelInfo(
@@ -131,6 +145,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="multilingual",
         description="Latest large model. Best overall quality.",
         compute_type="float16",
+        family="Whisper",
     ),
     ModelInfo(
         alias="large-v3-int8",
@@ -143,6 +158,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="multilingual",
         description="Quantized large-v3 — same accuracy on most prompts, half the VRAM.",
         compute_type="int8_float16",
+        family="Whisper",
     ),
     # ---- Russian fine-tunes -------------------------------------------------
     ModelInfo(
@@ -156,6 +172,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="Russian (fine-tuned)",
         description="large-v3 fine-tuned on Common Voice RU — WER 6.39 vs 9.84.",
         compute_type="float16",
+        family="Russian",
     ),
     ModelInfo(
         alias="large-v3-ru-int8",
@@ -168,6 +185,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="Russian (fine-tuned)",
         description="Quantized Russian fine-tune. Best Russian quality on a 6 GB GPU.",
         compute_type="int8_float16",
+        family="Russian",
     ),
     # ---- GigaAM (Sber, Russian-only) ---------------------------------------
     # GigaAM has its own engine; ``backend_kind`` switches the routing
@@ -184,6 +202,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="Russian (only)",
         description="Sber GigaAM v2 with CTC decoder — fast Russian transcription, smaller than Whisper.",
         backend_kind="gigaam",
+        family="GigaAM",
     ),
     ModelInfo(
         alias="gigaam-v2-rnnt",
@@ -196,6 +215,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="Russian (only)",
         description="Sber GigaAM v2 with RNN-T decoder — best Russian quality, slightly slower than CTC.",
         backend_kind="gigaam",
+        family="GigaAM",
     ),
 )
 
@@ -228,5 +248,29 @@ def canonical_for(name: str) -> str:
 
 def alias_for(canonical: str) -> str:
     return MODEL_TO_ALIAS.get(canonical, canonical)
+
+
+# GigaAM exposes models under short internal names; the actual
+# weights live in Hugging Face repos. Used by ``model_url`` so the
+# "open in browser" affordance on the card lands on a real page.
+_GIGAAM_HF_REPO: dict[str, str] = {
+    "v1_ctc": "salute-developers/GigaAM-CTC",
+    "v1_rnnt": "salute-developers/GigaAM-RNNT",
+    "v2_ctc": "salute-developers/GigaAM-CTC2",
+    "v2_rnnt": "salute-developers/GigaAM-RNNT2",
+}
+
+
+def model_url(info: ModelInfo) -> str:
+    """Resolve the canonical web home for a model card's link icon.
+
+    For ``faster_whisper`` models the canonical IS already a HF repo
+    path; for GigaAM we map the engine's internal short name to the
+    Sber HF repo holding the weights.
+    """
+    if info.backend_kind == "gigaam":
+        repo = _GIGAAM_HF_REPO.get(info.canonical, info.canonical)
+        return f"https://huggingface.co/{repo}"
+    return f"https://huggingface.co/{info.canonical}"
 
 

@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.widgets.flow_layout import FlowLayout
-from app.model_mapping import ModelInfo
+from app.model_mapping import ModelInfo, model_url
 from app.utils import is_cached_for_info
 
 
@@ -104,7 +104,18 @@ class ModelCard(QFrame):
         root.setSpacing(10)
 
         header = QHBoxLayout()
-        header.setSpacing(8)
+        header.setSpacing(10)
+
+        # Family chip — visual grouping (Whisper / Turbo / Distil /
+        # Russian / GigaAM). Coloured per family via QSS.
+        family_chip = QLabel(info.family, self)
+        family_chip.setObjectName("FamilyChip")
+        family_chip.setProperty("role", "family-chip")
+        family_chip.setProperty(
+            "family", info.family.lower().replace(" ", "-")
+        )
+        family_chip.setAlignment(Qt.AlignCenter)
+        header.addWidget(family_chip)
 
         title = QLabel(info.display_name, self)
         title.setProperty("role", "heading")
@@ -120,6 +131,27 @@ class ModelCard(QFrame):
         header.addWidget(self._active_pill)
 
         root.addLayout(header)
+
+        # Subtitle line: alias · canonical · external-link affordance.
+        # ``QLabel`` with ``openExternalLinks`` is the cheapest way to
+        # get a clickable URL inside the card without a button.
+        subtitle = QLabel(
+            f'<span style="color:#7aa2ff">{info.alias}</span>'
+            f'<span style="color:#7d828d">  ·  </span>'
+            f'<span style="color:#b8bcc6">{info.canonical}</span>'
+            f'  <a href="{model_url(info)}" '
+            f'style="color:#7aa2ff;text-decoration:none">↗</a>',
+            self,
+        )
+        subtitle.setObjectName("ModelSubtitle")
+        subtitle.setProperty("role", "muted")
+        subtitle.setOpenExternalLinks(True)
+        subtitle.setTextFormat(Qt.RichText)
+        subtitle.setTextInteractionFlags(
+            Qt.TextBrowserInteraction
+        )
+        subtitle.setToolTip(f"Open {model_url(info)}")
+        root.addWidget(subtitle)
 
         description = QLabel(info.description, self)
         description.setProperty("role", "muted")

@@ -146,6 +146,50 @@ QLabel[role="badge"] {
     font-weight: 500;
 }
 
+/* ---- Family chip on model cards ----------------------------------------- */
+
+QLabel[role="family-chip"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_primary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    padding: 2px {{space.sm}};
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+QLabel[role="family-chip"][family="whisper"] {
+    background-color: #1d2746;
+    color: #93b5ff;
+    border: 1px solid #2d3f6c;
+}
+
+QLabel[role="family-chip"][family="turbo"] {
+    background-color: #3d2a0a;
+    color: #fbbf24;
+    border: 1px solid #5a3f17;
+}
+
+QLabel[role="family-chip"][family="distil"] {
+    background-color: #1c3a28;
+    color: #86efac;
+    border: 1px solid #2c5a3e;
+}
+
+QLabel[role="family-chip"][family="russian"] {
+    background-color: #4a1c1c;
+    color: #fca5a5;
+    border: 1px solid #6c2929;
+}
+
+QLabel[role="family-chip"][family="gigaam"] {
+    background-color: #3a1c4a;
+    color: #d8b4fe;
+    border: 1px solid #5a2c6c;
+}
+
 /* Tier 1 — semantic highlight when the value is the desirable one. */
 QLabel[role="badge"][cat="speed"][value="fast"] {
     background-color: #1c3a28;

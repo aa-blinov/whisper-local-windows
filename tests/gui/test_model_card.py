@@ -142,6 +142,44 @@ def test_model_card_active_loading_swaps_pill_text(qtbot):
     assert card._active_pill.property("state") == "ready"
 
 
+def test_model_card_renders_family_chip_with_attribute(qtbot):
+    """The family chip in the card header carries a normalised
+    ``family`` attribute so QSS can color-code per family without
+    string parsing."""
+    from PySide6.QtWidgets import QLabel
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+
+    chip = next(
+        lbl for lbl in card.findChildren(QLabel)
+        if lbl.objectName() == "FamilyChip"
+    )
+    assert chip.text()  # non-empty
+    assert chip.property("family")  # populated for QSS selector
+
+
+def test_model_card_subtitle_contains_alias_canonical_and_link(qtbot):
+    """The subtitle line surfaces the registry alias, the full
+    canonical id, and a clickable link to the model's home page."""
+    from PySide6.QtWidgets import QLabel
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+
+    subtitle = next(
+        lbl for lbl in card.findChildren(QLabel)
+        if lbl.objectName() == "ModelSubtitle"
+    )
+    text = subtitle.text()
+    assert "large-v3" in text
+    assert "Systran/faster-whisper-large-v3" in text
+    assert "huggingface.co" in text
+    assert subtitle.openExternalLinks() is True
+
+
 def test_model_card_badges_carry_category_attribute(qtbot):
     """Each metadata badge carries a ``cat`` property so the QSS can
     style speed/quality/compute/lang differently — without it every
