@@ -12,6 +12,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -93,11 +94,20 @@ class InferenceSettingsPanel(QFrame):
         self._vad.toggled.connect(self._on_changed)
         grid.addWidget(self._vad, 0, 2, 1, 2)
 
-        # Row 1: Beam size | Temperature
+        # Row 1: Beam size | Temperature.
+        # Strip the up/down arrow buttons from both spinboxes — Qt's
+        # QSS support for the spinbox sub-controls is patchy (custom
+        # styles disable the native arrows but require a hand-rolled
+        # image, otherwise the arrows render as weird stacked
+        # widgets). Users still get keyboard ↑/↓ and mouse-wheel
+        # scrolling, plus direct typing — all the natural ways to
+        # adjust the value.
         grid.addWidget(QLabel("Beam size", self), 1, 0)
         self._beam = QSpinBox(self)
         self._beam.setObjectName("BeamSizeSpin")
         self._beam.setRange(1, 20)
+        self._beam.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self._beam.setAlignment(Qt.AlignCenter)
         self._beam.valueChanged.connect(self._on_changed)
         grid.addWidget(self._beam, 1, 1)
 
@@ -107,6 +117,8 @@ class InferenceSettingsPanel(QFrame):
         self._temperature.setRange(0.0, 1.0)
         self._temperature.setSingleStep(0.1)
         self._temperature.setDecimals(1)
+        self._temperature.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self._temperature.setAlignment(Qt.AlignCenter)
         self._temperature.valueChanged.connect(self._on_changed)
         grid.addWidget(self._temperature, 1, 3)
 
