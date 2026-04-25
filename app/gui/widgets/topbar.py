@@ -34,15 +34,21 @@ class TopBar(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("TopBar")
-        self.setFixedHeight(52)
+        self.setFixedHeight(44)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setContentsMargins(16, 6, 16, 6)
         layout.setSpacing(12)
 
-        # No title label here — the OS window title bar already shows the
-        # application name, and repeating it inside the chrome looks ugly.
+        # Left: contextual section title (driven by sidebar selection).
+        # The OS window title bar already shows the app name, so we use this
+        # area for "where am I" navigation context instead.
+        self._section_title = QLabel("", self)
+        self._section_title.setObjectName("TopBarSectionTitle")
+        self._section_title.setProperty("role", "section-title")
+        layout.addWidget(self._section_title)
+
         layout.addStretch(1)
 
         self._recording_pill = QLabel("", self)
@@ -67,6 +73,9 @@ class TopBar(QWidget):
         layout.addWidget(self._status_pill)
 
     # ---- public API ---------------------------------------------------------
+
+    def set_section_title(self, text: str) -> None:
+        self._section_title.setText(text)
 
     def set_active_model(self, display_name: Optional[str]) -> None:
         if display_name:

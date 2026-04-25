@@ -81,6 +81,7 @@ class MainWindow(QMainWindow):
         default_key = self.sidebar.active_key()
         if default_key in self._views:
             self.stack.setCurrentWidget(self._views[default_key])
+            self.topbar.set_section_title(default_key.capitalize())
 
         self.sidebar.nav_selected.connect(self._on_nav_selected)
 
@@ -112,3 +113,4 @@ class MainWindow(QMainWindow):
     def _on_nav_selected(self, key: str) -> None:
         if key in self._views:
             self.stack.setCurrentWidget(self._views[key])
+            self.topbar.set_section_title(key.capitalize())
