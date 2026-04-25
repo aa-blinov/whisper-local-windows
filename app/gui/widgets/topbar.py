@@ -72,33 +72,34 @@ class TopBar(QWidget):
         self.setFixedHeight(52)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        # Outer layout has no padding so the gutter / divider extend
-        # to the very top and bottom of the topbar — the divider
-        # then lines up edge-to-edge with the sidebar's
-        # ``border-right`` below.
+        # Outer layout has no padding so the gutter extends to the
+        # very top and bottom of the topbar — its right border
+        # (drawn via QSS) then lines up edge-to-edge with the
+        # sidebar's ``border-right`` below.
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # ---- Sidebar-aligned blank zone -------------------------------
-        # Eats the same horizontal space as the sidebar so the
-        # divider after it lands exactly on the sidebar's right
-        # border line.
+        # ---- Sidebar-aligned gutter -----------------------------------
+        # Eats the same horizontal space as the sidebar AND carries
+        # the divider line on its right edge. Using ``border-right``
+        # in QSS instead of a separate 1 px widget guarantees the
+        # line spans the full height of the gutter, regardless of
+        # whatever size-policy guesswork Qt would otherwise apply
+        # to a bare-QWidget child.
         left_gutter = QWidget(self)
-        left_gutter.setFixedWidth(_SIDEBAR_WIDTH_PX)
+        left_gutter.setObjectName("TopBarGutter")
+        # +1 so the inner content still starts at exactly the
+        # sidebar-aligned x coordinate after the 1 px border.
+        left_gutter.setFixedWidth(_SIDEBAR_WIDTH_PX + 1)
+        left_gutter.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        # ``WA_StyledBackground`` is mandatory for QSS borders /
+        # backgrounds to paint on a bare QWidget.
+        left_gutter.setAttribute(Qt.WA_StyledBackground, True)
         outer.addWidget(left_gutter)
 
-        divider = QWidget(self)
-        divider.setObjectName("TopBarDivider")
-        divider.setFixedWidth(1)
-        # ``WA_StyledBackground`` lets QSS's ``background-color``
-        # rule actually paint — without it Qt treats the widget as
-        # unstyled-bg and the line stays invisible.
-        divider.setAttribute(Qt.WA_StyledBackground, True)
-        outer.addWidget(divider)
-
         # Right-hand content lives in its own container so it can
-        # carry its own padding without cropping the divider.
+        # carry its own padding without cropping the gutter line.
         content = QWidget(self)
         content.setObjectName("TopBarContent")
         layout = QHBoxLayout(content)

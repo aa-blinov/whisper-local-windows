@@ -323,12 +323,14 @@ QLabel[role="toast-body"] {
     border-bottom: 1px solid {{color.border}};
 }
 
-/* Vertical line continuing the sidebar's right border up through
-   the topbar — sits between the leading gutter and the content
-   container. The widget needs ``WA_StyledBackground`` for this
-   colour to actually render. */
-#TopBarDivider {
-    background-color: {{color.border}};
+/* Empty zone above the sidebar — its right border continues the
+   sidebar's own ``border-right`` line up through the topbar so
+   the two segments form a single uninterrupted vertical rule.
+   Requires ``WA_StyledBackground`` on the widget for QSS borders
+   to render. */
+#TopBarGutter {
+    background-color: transparent;
+    border-right: 1px solid {{color.border}};
 }
 
 QLabel[role="model-pill"] {
