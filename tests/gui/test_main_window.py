@@ -122,3 +122,90 @@ def test_main_window_no_placeholders_remain(qtbot):
     qtbot.addWidget(window)
     for key in window.sidebar.items():
         assert not isinstance(window.get_view(key), PlaceholderView), key
+
+
+# ---- Close-to-tray behaviour -----------------------------------------------
+
+
+def test_close_event_closes_normally_by_default(qtbot):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QCloseEvent
+
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert event.isAccepted()
+
+
+def test_close_event_hides_when_close_to_tray_enabled(qtbot):
+    from PySide6.QtGui import QCloseEvent
+
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+
+    window.set_close_to_tray(True)
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+
+    assert not event.isAccepted()  # close was vetoed
+    assert not window.isVisible()  # but the window was hidden
+
+
+def test_close_event_emits_hidden_to_tray_signal(qtbot):
+    from PySide6.QtGui import QCloseEvent
+
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+    window.set_close_to_tray(True)
+
+    with qtbot.waitSignal(window.hidden_to_tray, timeout=1000):
+        window.closeEvent(QCloseEvent())
+
+
+def test_request_quit_overrides_close_to_tray(qtbot):
+    from PySide6.QtGui import QCloseEvent
+
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    window.set_close_to_tray(True)
+
+    # Mark the window as quitting — the next close should be honoured.
+    window.request_quit()
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert event.isAccepted()
+
+
+def test_set_close_to_tray_can_be_disabled(qtbot):
+    from PySide6.QtGui import QCloseEvent
+
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+
+    window.set_close_to_tray(True)
+    window.set_close_to_tray(False)
+
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert event.isAccepted()

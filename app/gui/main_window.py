@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
+from PySide6.QtCore import Signal
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -22,11 +24,15 @@ from app.gui.widgets.topbar import TopBar
 
 
 class MainWindow(QMainWindow):
+    hidden_to_tray = Signal()
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Lazy to Text")
         self.resize(1000, 660)
         self.setMinimumSize(860, 560)
+        self._close_to_tray = False
+        self._quitting = False
 
         central = QWidget(self)
         central.setObjectName("Central")
@@ -82,6 +88,26 @@ class MainWindow(QMainWindow):
         if key not in self._views:
             raise KeyError(key)
         return self._views[key]
+
+    def set_close_to_tray(self, enabled: bool) -> None:
+        """When True, the window's close button hides to tray instead of
+        quitting; the controller is expected to wire a tray icon that can
+        bring the window back. Call ``request_quit`` to bypass the override
+        for a real exit."""
+        self._close_to_tray = bool(enabled)
+
+    def request_quit(self) -> None:
+        """Mark the next close as a real quit and close the window."""
+        self._quitting = True
+        self.close()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 (Qt naming)
+        if self._close_to_tray and not self._quitting:
+            event.ignore()
+            self.hide()
+            self.hidden_to_tray.emit()
+            return
+        super().closeEvent(event)
 
     def _on_nav_selected(self, key: str) -> None:
         if key in self._views:
