@@ -102,6 +102,7 @@ class AppController(QObject):
         view.set_values(start_hotkey=start, stop_hotkey=stop, auto_paste=auto_paste)
 
         view.save_requested.connect(self._on_shortcuts_save)
+        view.reset_requested.connect(self._on_shortcuts_reset)
 
     def _on_shortcuts_save(self, payload: dict) -> None:
         self._config.update_user_setting(
@@ -112,6 +113,27 @@ class AppController(QObject):
         )
         self._config.update_user_setting(
             "clipboard", "auto_paste", payload["auto_paste"]
+        )
+
+    def _on_shortcuts_reset(self) -> None:
+        from app.config_manager import DEFAULT_CONFIG
+
+        defaults_hotkey = DEFAULT_CONFIG.get("hotkey", {})
+        defaults_clipboard = DEFAULT_CONFIG.get("clipboard", {})
+        start = defaults_hotkey.get("start_recording_hotkey", "")
+        stop = defaults_hotkey.get("stop_recording_hotkey", "")
+        auto_paste = bool(defaults_clipboard.get("auto_paste", True))
+
+        self._config.update_user_setting(
+            "hotkey", "start_recording_hotkey", start
+        )
+        self._config.update_user_setting(
+            "hotkey", "stop_recording_hotkey", stop
+        )
+        self._config.update_user_setting("clipboard", "auto_paste", auto_paste)
+        # set_values uses the suspend-emit guard so this won't fire save_requested.
+        self._window.shortcuts_view.set_values(
+            start_hotkey=start, stop_hotkey=stop, auto_paste=auto_paste
         )
 
     def _wire_history(self) -> None:

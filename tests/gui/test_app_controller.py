@@ -182,6 +182,82 @@ def test_controller_handles_missing_shortcut_sections(qtbot):
     assert window.shortcuts_view.auto_paste() is False
 
 
+def test_reset_shortcuts_restores_defaults_in_config(qtbot):
+    from app.config_manager import DEFAULT_CONFIG
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig(
+        {
+            "hotkey": {
+                "start_recording_hotkey": "ctrl+x",
+                "stop_recording_hotkey": "ctrl+y",
+            },
+            "clipboard": {"auto_paste": False},
+        }
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.reset_requested.emit()
+
+    expected_start = DEFAULT_CONFIG["hotkey"]["start_recording_hotkey"]
+    expected_stop = DEFAULT_CONFIG["hotkey"]["stop_recording_hotkey"]
+    expected_paste = DEFAULT_CONFIG["clipboard"]["auto_paste"]
+
+    assert ("hotkey", "start_recording_hotkey", expected_start) in config.writes
+    assert ("hotkey", "stop_recording_hotkey", expected_stop) in config.writes
+    assert ("clipboard", "auto_paste", expected_paste) in config.writes
+
+
+def test_reset_shortcuts_updates_view_to_defaults(qtbot):
+    from app.config_manager import DEFAULT_CONFIG
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig(
+        {
+            "hotkey": {
+                "start_recording_hotkey": "ctrl+x",
+                "stop_recording_hotkey": "ctrl+y",
+            },
+            "clipboard": {"auto_paste": False},
+        }
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.reset_requested.emit()
+
+    sv = window.shortcuts_view
+    assert sv.start_hotkey() == DEFAULT_CONFIG["hotkey"]["start_recording_hotkey"]
+    assert sv.stop_hotkey() == DEFAULT_CONFIG["hotkey"]["stop_recording_hotkey"]
+    assert sv.auto_paste() == bool(DEFAULT_CONFIG["clipboard"]["auto_paste"])
+
+
+def test_reset_does_not_re_emit_save_requested(qtbot):
+    """Reset programmatically updates fields — must not feed back as a save."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"hotkey": {"start_recording_hotkey": "ctrl+x"}})
+
+    AppController(config=config, window=window)
+
+    # Capture only writes that happen AFTER the reset.
+    writes_before = len(config.writes)
+    window.shortcuts_view.reset_requested.emit()
+    writes_during = len(config.writes) - writes_before
+
+    # Reset should write exactly 3 settings (start, stop, auto_paste).
+    # If save_requested re-fired from set_values, we'd see additional writes.
+    assert writes_during == 3
+
+
 # ---- Topbar sync ------------------------------------------------------------
 
 

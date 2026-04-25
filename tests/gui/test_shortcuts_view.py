@@ -16,8 +16,8 @@ def _auto_paste_cb(view) -> QCheckBox:
     return view.findChild(QCheckBox, "AutoPasteCheckbox")
 
 
-def _save_btn(view) -> QPushButton:
-    return view.findChild(QPushButton, "SaveShortcutsButton")
+def _reset_btn(view) -> QPushButton:
+    return view.findChild(QPushButton, "ResetShortcutsButton")
 
 
 def test_shortcuts_view_has_expected_widgets(qtbot):
@@ -29,7 +29,17 @@ def test_shortcuts_view_has_expected_widgets(qtbot):
     assert _start_edit(view) is not None
     assert _stop_edit(view) is not None
     assert _auto_paste_cb(view) is not None
-    assert _save_btn(view) is not None
+    assert _reset_btn(view) is not None
+
+
+def test_save_button_no_longer_exists(qtbot):
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+
+    save_btn = view.findChild(QPushButton, "SaveShortcutsButton")
+    assert save_btn is None
 
 
 def test_set_values_prefills_fields(qtbot):
@@ -81,12 +91,15 @@ def test_getters_return_current_values(qtbot):
     assert view.auto_paste() is True
 
 
-def test_save_button_emits_save_requested_with_values(qtbot):
+def test_set_values_does_not_emit_save_requested(qtbot):
+    """Programmatic prefill must not trigger persistence."""
     from app.gui.views.shortcuts_view import ShortcutsView
 
     view = ShortcutsView()
     qtbot.addWidget(view)
-    view.show()
+
+    emissions: list[dict] = []
+    view.save_requested.connect(emissions.append)
 
     view.set_values(
         start_hotkey="ctrl+f2",
@@ -94,39 +107,74 @@ def test_save_button_emits_save_requested_with_values(qtbot):
         auto_paste=True,
     )
 
-    with qtbot.waitSignal(view.save_requested, timeout=1000) as blocker:
-        qtbot.mouseClick(_save_btn(view), Qt.LeftButton)
-
-    payload = blocker.args[0]
-    assert payload == {
-        "start_hotkey": "ctrl+f2",
-        "stop_hotkey": "ctrl+f3",
-        "auto_paste": True,
-    }
+    assert emissions == []
 
 
-def test_save_reflects_user_edits(qtbot):
+def test_editing_start_hotkey_emits_save_requested_on_finish(qtbot):
     from app.gui.views.shortcuts_view import ShortcutsView
 
     view = ShortcutsView()
     qtbot.addWidget(view)
     view.show()
 
-    view.set_values(
-        start_hotkey="ctrl+f2",
-        stop_hotkey="ctrl+f3",
-        auto_paste=False,
-    )
+    view.set_values(start_hotkey="ctrl+f2", stop_hotkey="ctrl+f3", auto_paste=False)
 
     start = _start_edit(view)
     start.clear()
     qtbot.keyClicks(start, "ctrl+alt+1")
 
-    _auto_paste_cb(view).setChecked(True)
-
     with qtbot.waitSignal(view.save_requested, timeout=1000) as blocker:
-        qtbot.mouseClick(_save_btn(view), Qt.LeftButton)
+        # editingFinished fires on focus loss / Enter
+        start.editingFinished.emit()
 
     payload = blocker.args[0]
     assert payload["start_hotkey"] == "ctrl+alt+1"
-    assert payload["auto_paste"] is True
+    assert payload["stop_hotkey"] == "ctrl+f3"
+    assert payload["auto_paste"] is False
+
+
+def test_editing_stop_hotkey_emits_save_requested(qtbot):
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+
+    view.set_values(start_hotkey="ctrl+f2", stop_hotkey="ctrl+f3", auto_paste=False)
+
+    stop = _stop_edit(view)
+    stop.clear()
+    qtbot.keyClicks(stop, "ctrl+alt+2")
+
+    with qtbot.waitSignal(view.save_requested, timeout=1000) as blocker:
+        stop.editingFinished.emit()
+
+    assert blocker.args[0]["stop_hotkey"] == "ctrl+alt+2"
+
+
+def test_toggling_auto_paste_emits_save_requested_immediately(qtbot):
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+
+    view.set_values(start_hotkey="ctrl+f2", stop_hotkey="ctrl+f3", auto_paste=False)
+
+    cb = _auto_paste_cb(view)
+    with qtbot.waitSignal(view.save_requested, timeout=1000) as blocker:
+        cb.setChecked(True)
+
+    assert blocker.args[0]["auto_paste"] is True
+
+
+def test_reset_button_emits_reset_requested(qtbot):
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+
+    btn = _reset_btn(view)
+    with qtbot.waitSignal(view.reset_requested, timeout=1000):
+        qtbot.mouseClick(btn, Qt.LeftButton)
