@@ -84,23 +84,38 @@ def main() -> int:
     from app.gui.recording_factory import build_recording_stack
     from app.gui.widgets.tray_icon import AppTrayIcon
     from app.instance_manager import try_acquire_single_instance
-    from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
+    from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
-    # Need a QApplication before we can show any dialog.
-    qt_app = QApplication.instance() or QApplication(sys.argv)
-
+    # Single-instance check happens BEFORE we create QApplication. Showing
+    # an early Qt dialog without a fully-initialised event loop crashes with
+    # an access violation on Windows; instead, use the native Win32
+    # MessageBoxW which is a synchronous OS-level dialog that doesn't need
+    # any Qt machinery.
     instance_handle = try_acquire_single_instance("LazyToTextQt")
     if instance_handle is None:
-        QMessageBox.warning(
-            None,
-            "Lazy to Text",
-            "Another copy of Lazy to Text is already running.\n\n"
-            "Use its system tray icon to bring it back, or quit it first.",
-        )
+        try:
+            import ctypes
+            MB_ICONWARNING = 0x00000030
+            MB_OK = 0x00000000
+            MB_TOPMOST = 0x00040000
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "Another copy of Lazy to Text is already running.\n\n"
+                "Use its system tray icon to bring it back, or quit it first.",
+                "Lazy to Text",
+                MB_ICONWARNING | MB_OK | MB_TOPMOST,
+            )
+        except Exception:
+            # Fall back to stderr if even the native dialog fails.
+            print(
+                "Lazy to Text: another instance is already running.",
+                file=sys.stderr,
+            )
         return 0
-    # Keep the handle alive for the rest of the process by binding it to the
-    # QApplication; releasing the mutex prematurely would let a duplicate
-    # start before this one exits.
+
+    # We are the primary instance — bring up the QApplication. The mutex
+    # handle must outlive this function or another launch could race in.
+    qt_app = QApplication.instance() or QApplication(sys.argv)
     qt_app._instance_mutex = instance_handle  # type: ignore[attr-defined]
 
     config = ConfigManager()
