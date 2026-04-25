@@ -333,3 +333,56 @@ def test_history_view_swaps_to_table_when_entries_arrive(qtbot):
     qtbot.addWidget(view)
     view.set_entries(_make_entries(2))
     assert view._stack.currentWidget() is view._table_card
+
+
+def test_history_model_column_shows_short_alias(qtbot):
+    """The Model column should display the registry alias
+    (``large-v3``, ``tiny``) rather than the full canonical id
+    (``Systran/faster-whisper-large-v3``) — it's what the user
+    actually picked, and short enough not to truncate."""
+    from app.gui.views.history_view import HistoryTableModel
+
+    entry = FakeEntry(
+        timestamp=0.0,
+        text="x",
+        duration=1.0,
+        model="Systran/faster-whisper-large-v3",
+        language="ru",
+    )
+    model = HistoryTableModel([entry])
+    cell = model.data(model.index(0, 2), Qt.DisplayRole)
+    assert cell == "large-v3"
+
+
+def test_history_model_column_tooltip_shows_full_canonical(qtbot):
+    """Hovering still reveals the full canonical id for power users
+    who want to know exactly which Hugging Face repo was used."""
+    from app.gui.views.history_view import HistoryTableModel
+
+    entry = FakeEntry(
+        timestamp=0.0,
+        text="x",
+        duration=1.0,
+        model="Systran/faster-whisper-large-v3",
+        language="ru",
+    )
+    model = HistoryTableModel([entry])
+    tooltip = model.data(model.index(0, 2), Qt.ToolTipRole)
+    assert tooltip == "Systran/faster-whisper-large-v3"
+
+
+def test_history_model_column_passes_unknown_canonical_through(qtbot):
+    """If the model isn't in the registry (legacy entry, custom HF
+    id), display it as-is so the data isn't lost."""
+    from app.gui.views.history_view import HistoryTableModel
+
+    entry = FakeEntry(
+        timestamp=0.0,
+        text="x",
+        duration=1.0,
+        model="some-org/custom-model",
+        language="en",
+    )
+    model = HistoryTableModel([entry])
+    cell = model.data(model.index(0, 2), Qt.DisplayRole)
+    assert cell == "some-org/custom-model"

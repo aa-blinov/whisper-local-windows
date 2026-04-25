@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import html
+from collections import deque
 from typing import Optional
 
 from PySide6.QtGui import QTextCursor, QTextOption
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
+    QLineEdit,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
@@ -99,21 +101,34 @@ class LogsView(QWidget):
         self.setObjectName("LogsView")
         self._max_lines = max(1, int(max_lines))
         self._show_network = False
+        self._search_query = ""
+        # Ring-buffer of every record we've seen so re-renders (after
+        # a search filter or network-toggle change) don't have to
+        # parse HTML out of the textbox. Capped at ``max_lines`` so
+        # memory stays bounded on long-running sessions.
+        self._records: deque[tuple[str, str, str, str]] = deque(
+            maxlen=self._max_lines
+        )
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 18)
+        root.setContentsMargins(28, 22, 28, 22)
         root.setSpacing(10)
 
         header = QHBoxLayout()
         header.setSpacing(8)
+
+        self._search_edit = QLineEdit(self)
+        self._search_edit.setObjectName("LogsSearchEdit")
+        self._search_edit.setPlaceholderText("Search logs…")
+        self._search_edit.setClearButtonEnabled(True)
+        self._search_edit.textChanged.connect(self._on_search_changed)
+        header.addWidget(self._search_edit, 1)
 
         self._network_toggle = QCheckBox("Show network logs", self)
         self._network_toggle.setObjectName("ShowNetworkLogs")
         self._network_toggle.setChecked(False)
         self._network_toggle.toggled.connect(self._on_toggle_network)
         header.addWidget(self._network_toggle)
-
-        header.addStretch(1)
 
         self._clear_btn = QPushButton("Clear", self)
         self._clear_btn.setObjectName("ClearLogsButton")
@@ -149,15 +164,46 @@ class LogsView(QWidget):
         self, asctime: str, level: str, name: str, message: str
     ) -> None:
         """Render a structured log record with colours + filtering."""
-        if _is_noisy(name) and not self._show_network:
+        record = (asctime, level, name, message)
+        self._records.append(record)
+        if not self._record_visible(record):
             return
-        self._text.appendHtml(_format_record_html(asctime, level, name, message))
+        self._text.appendHtml(_format_record_html(*record))
         self._text.moveCursor(QTextCursor.End)
 
     def clear(self) -> None:
+        self._records.clear()
         self._text.clear()
 
     # ---- internal -----------------------------------------------------------
 
     def _on_toggle_network(self, checked: bool) -> None:
         self._show_network = bool(checked)
+        self._rerender()
+
+    def _on_search_changed(self, text: str) -> None:
+        self._search_query = text.lower().strip()
+        self._rerender()
+
+    def _record_visible(self, record: tuple[str, str, str, str]) -> bool:
+        _asctime, level, name, message = record
+        if _is_noisy(name) and not self._show_network:
+            return False
+        if self._search_query:
+            haystack = f"{level} {name} {message}".lower()
+            if self._search_query not in haystack:
+                return False
+        return True
+
+    def _rerender(self) -> None:
+        """Replay the buffered records, applying current filters.
+
+        ``QPlainTextEdit.clear`` then a stream of ``appendHtml`` calls
+        is the cheapest way to swap content without rebuilding a
+        document object.
+        """
+        self._text.clear()
+        for record in self._records:
+            if self._record_visible(record):
+                self._text.appendHtml(_format_record_html(*record))
+        self._text.moveCursor(QTextCursor.End)

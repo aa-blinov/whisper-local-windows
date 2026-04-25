@@ -152,3 +152,76 @@ def test_append_line_respects_buffer_cap(qtbot):
     content = _text(view)
     assert "a" not in content
     assert "b" in content and "c" in content and "d" in content
+
+
+def test_logs_view_has_search_field(qtbot):
+    from PySide6.QtWidgets import QLineEdit
+    from app.gui.views.logs_view import LogsView
+
+    view = LogsView()
+    qtbot.addWidget(view)
+    assert view.findChild(QLineEdit, "LogsSearchEdit") is not None
+
+
+def test_logs_search_filters_buffered_records(qtbot):
+    """Typing in the search field hides records that don't match;
+    re-rendering uses the in-memory ring buffer so previously-shown
+    entries can come back instantly when the filter clears."""
+    from PySide6.QtWidgets import QLineEdit, QPlainTextEdit
+    from app.gui.views.logs_view import LogsView
+
+    view = LogsView()
+    qtbot.addWidget(view)
+    view.append_record("12:00:00", "INFO", "app.state_manager", "model loaded")
+    view.append_record("12:00:01", "WARNING", "app.audio_recorder", "low gain")
+    view.append_record("12:00:02", "INFO", "app.state_manager", "transcribed")
+
+    text = view.findChild(QPlainTextEdit, "LogsTextArea").toPlainText()
+    assert "model loaded" in text
+    assert "low gain" in text
+
+    search = view.findChild(QLineEdit, "LogsSearchEdit")
+    search.setText("low")
+
+    after = view.findChild(QPlainTextEdit, "LogsTextArea").toPlainText()
+    assert "low gain" in after
+    assert "model loaded" not in after
+    assert "transcribed" not in after
+
+    search.setText("")
+    restored = view.findChild(QPlainTextEdit, "LogsTextArea").toPlainText()
+    assert "model loaded" in restored
+    assert "transcribed" in restored
+
+
+def test_logs_search_matches_logger_name(qtbot):
+    from PySide6.QtWidgets import QLineEdit, QPlainTextEdit
+    from app.gui.views.logs_view import LogsView
+
+    view = LogsView()
+    qtbot.addWidget(view)
+    view.append_record("12:00:00", "INFO", "app.state_manager", "alpha")
+    view.append_record("12:00:01", "INFO", "app.audio_recorder", "beta")
+
+    search = view.findChild(QLineEdit, "LogsSearchEdit")
+    search.setText("audio")
+    text = view.findChild(QPlainTextEdit, "LogsTextArea").toPlainText()
+    assert "beta" in text
+    assert "alpha" not in text
+
+
+def test_logs_clear_drops_buffered_records(qtbot):
+    """Clear should wipe both the visible textbox AND the buffer
+    feeding the filter — otherwise a stale search re-rendered from
+    the buffer would resurrect the cleared entries."""
+    from PySide6.QtWidgets import QPlainTextEdit
+    from app.gui.views.logs_view import LogsView
+
+    view = LogsView()
+    qtbot.addWidget(view)
+    view.append_record("12:00:00", "INFO", "app.state_manager", "alpha")
+    view.clear()
+    # Re-trigger render via toggle — anything buffered would appear.
+    view._on_toggle_network(True)
+    text = view.findChild(QPlainTextEdit, "LogsTextArea").toPlainText()
+    assert "alpha" not in text

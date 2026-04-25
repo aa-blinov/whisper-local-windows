@@ -12,6 +12,8 @@ from PySide6.QtCore import (
     Signal,
 )
 # Qt is imported above for the alignment flags used by the empty state.
+
+from app.model_mapping import alias_for
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -67,9 +69,14 @@ class HistoryTableModel(QAbstractTableModel):
         col = index.column()
         # Tooltip on the Text column carries the full transcription so
         # the user can hover-peek long entries without opening the
-        # detail dialog. Other columns delegate to the default tooltip.
-        if role == Qt.ToolTipRole and col == 1:
-            return getattr(entry, "text", "")
+        # detail dialog. The Model column tooltip surfaces the full
+        # canonical id (since the displayed value is the short alias).
+        if role == Qt.ToolTipRole:
+            if col == 1:
+                return getattr(entry, "text", "")
+            if col == 2:
+                return getattr(entry, "model", "")
+            return None
         if role != Qt.DisplayRole:
             return None
         if col == 0:
@@ -77,7 +84,11 @@ class HistoryTableModel(QAbstractTableModel):
         if col == 1:
             return getattr(entry, "text", "")
         if col == 2:
-            return getattr(entry, "model", "")
+            # Map the canonical Hugging Face / engine id back to the
+            # short registry alias (``large-v3``, ``gigaam-v2-ctc``).
+            # Falls through to the original string for unregistered
+            # canonicals.
+            return alias_for(getattr(entry, "model", ""))
         if col == 3:
             return getattr(entry, "language", "")
         if col == 4:
@@ -167,7 +178,7 @@ class HistoryView(QWidget):
         self.setObjectName("HistoryView")
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 18)
+        root.setContentsMargins(28, 22, 28, 22)
         root.setSpacing(10)
 
         controls = QHBoxLayout()
