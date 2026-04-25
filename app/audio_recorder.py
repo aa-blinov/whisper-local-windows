@@ -42,15 +42,38 @@ class AudioRecorder:
 
     @staticmethod
     def list_input_devices() -> list:
-        """Return ``[(index, name), ...]`` for every input-capable device."""
+        """Return ``[(index, name), ...]`` for every input-capable device.
+
+        On Windows the MME host API truncates device names to 32 characters
+        ("Микрофон (Razer BlackShark V2 P" instead of "Pro"). Prefer WASAPI
+        if it's available — same hardware, full names, modern API. Falls
+        back to listing every input across every host API on platforms
+        where WASAPI is not present (Linux, macOS).
+        """
         out = []
         try:
+            preferred_hostapi = AudioRecorder._find_hostapi(("WASAPI",))
             for idx, info in enumerate(sd.query_devices()):
-                if info.get("max_input_channels", 0) > 0:
-                    out.append((idx, info.get("name", "<unnamed>")))
+                if info.get("max_input_channels", 0) <= 0:
+                    continue
+                if preferred_hostapi is not None and info.get("hostapi") != preferred_hostapi:
+                    continue
+                out.append((idx, info.get("name", "<unnamed>")))
         except Exception:
             pass
         return out
+
+    @staticmethod
+    def _find_hostapi(needles) -> Optional[int]:
+        """Return the index of the first matching host API, or None."""
+        try:
+            for i, ha in enumerate(sd.query_hostapis()):
+                name = (ha.get("name") or "").upper()
+                if any(n.upper() in name for n in needles):
+                    return i
+        except Exception:
+            pass
+        return None
 
     def set_device(self, raw: Optional[Union[int, str]]) -> Optional[int]:
         """Switch the input device used for the next recording. Returns the

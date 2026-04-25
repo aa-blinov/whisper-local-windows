@@ -56,6 +56,13 @@ class ShortcutsView(QWidget):
 
         self._device_combo = QComboBox(card)
         self._device_combo.setObjectName("MicrophoneCombo")
+        # Long device names ("Микрофон (Razer BlackShark V2 Pro 2.4 …)") need
+        # a wider popup than the combo box itself, otherwise they're cut off.
+        self._device_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self._device_combo.view().setMinimumWidth(420)
+        self._device_combo.setStyleSheet(
+            "QComboBox QAbstractItemView { min-width: 420px; }"
+        )
         # Populated later via set_devices(); placeholder until then.
         self._device_combo.addItem("System default", None)
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
