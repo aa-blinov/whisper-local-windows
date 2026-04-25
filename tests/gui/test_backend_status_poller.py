@@ -4,17 +4,17 @@
 def test_tick_emits_initial_status(qtbot):
     from app.gui.controllers.backend_status_poller import BackendStatusPoller
 
-    poller = BackendStatusPoller(fetcher=lambda: "stopped")
+    poller = BackendStatusPoller(fetcher=lambda: "error")
     with qtbot.waitSignal(poller.status_changed, timeout=1000) as blocker:
         poller.tick()
     canonical, _label = blocker.args
-    assert canonical == "stopped"
+    assert canonical == "error"
 
 
 def test_tick_dedupes_unchanged_status(qtbot):
     from app.gui.controllers.backend_status_poller import BackendStatusPoller
 
-    poller = BackendStatusPoller(fetcher=lambda: "stopped")
+    poller = BackendStatusPoller(fetcher=lambda: "error")
     emissions: list[tuple[str, str]] = []
     poller.status_changed.connect(lambda s, l: emissions.append((s, l)))
 
@@ -45,7 +45,10 @@ def test_tick_emits_when_status_changes(qtbot):
     with qtbot.waitSignal(poller.status_changed, timeout=1000):
         poller.tick()
 
-    assert emissions == ["error", "stopped"]
+    # ``stopped`` canonical maps to ``hidden`` because, with manual
+    # model selection, "no model loaded" is the expected idle state —
+    # not an error worth advertising in the status pill.
+    assert emissions == ["error", "hidden"]
 
 
 def test_tick_runs_fetcher_off_main_thread(qtbot):
@@ -151,7 +154,11 @@ def test_map_backend_error_becomes_error(qtbot):
     assert canonical == "error"
 
 
-def test_map_stopped_renders_as_stopped(qtbot):
+def test_map_stopped_is_hidden_with_manual_loading(qtbot):
+    """Manual model selection makes ``stopped`` the normal idle state
+    while waiting for a click — the model_pill ('No model') already
+    surfaces it, so the right-hand status pill stays hidden to avoid
+    flagging the situation as an error."""
     from app.gui.controllers.backend_status_poller import BackendStatusPoller
 
     poller = BackendStatusPoller(fetcher=lambda: "stopped")
@@ -159,8 +166,8 @@ def test_map_stopped_renders_as_stopped(qtbot):
         poller.tick()
 
     canonical, label = blocker.args
-    assert canonical == "stopped"
-    assert "not loaded" in label.lower() or "model" in label.lower()
+    assert canonical == "hidden"
+    assert label == ""
 
 
 def test_fetcher_exception_surfaces_as_error(qtbot):
@@ -181,11 +188,11 @@ def test_fetcher_exception_surfaces_as_error(qtbot):
 def test_start_kicks_off_immediate_tick(qtbot):
     from app.gui.controllers.backend_status_poller import BackendStatusPoller
 
-    poller = BackendStatusPoller(fetcher=lambda: "stopped", interval_ms=10000)
+    poller = BackendStatusPoller(fetcher=lambda: "error", interval_ms=10000)
     try:
         with qtbot.waitSignal(poller.status_changed, timeout=1000) as blocker:
             poller.start()
-        assert blocker.args[0] == "stopped"
+        assert blocker.args[0] == "error"
     finally:
         poller.stop()
 

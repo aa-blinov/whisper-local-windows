@@ -25,18 +25,22 @@ def _map_status(raw: str) -> Tuple[str, str]:
     """Translate ``TranscriptionBackend.status()`` values into TopBar vocabulary.
 
     With the in-process backend, the recording-state pill on the left of
-    the TopBar already covers every "everything is fine" / "loading model"
-    case. To avoid the same yellow "Loading model…" message rendering
-    twice, we map ``ready`` and ``loading`` to ``hidden`` so the right-
-    hand status pill only appears when there's something actionable
-    (error / stopped) for the user to see.
+    the TopBar already covers every "everything is fine" / "loading
+    model" case, and the model_pill ("No model" / "Model: X") covers
+    the "user hasn't picked one yet" case. The status pill on the
+    right is reserved for actually-broken states — anything else is
+    redundant noise.
     """
-    if raw in ("ready", "loading"):
+    if raw in ("ready", "loading", "stopped"):
+        # ready: model is in VRAM, nothing actionable.
+        # loading: the recording-state pill on the left says
+        #          "Loading model…" — don't say it twice.
+        # stopped: with manual model selection this is the normal
+        #          waiting state; "No model" model_pill already shows
+        #          this. A second orange pill would look like an error.
         return "hidden", ""
     if raw == "error":
         return "error", "Backend error"
-    if raw == "stopped":
-        return "stopped", "Model not loaded"
     return "unknown", f"Status: {raw}"
 
 
