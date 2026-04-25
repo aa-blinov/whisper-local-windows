@@ -51,7 +51,34 @@ def test_resource_widget_drops_gpu_row_when_no_nvml(qtbot):
     )
     assert widget._gpu_vram_percent is None
     blocks = widget._block_specs()
-    assert all(label != "GPU" for label, _, _ in blocks)
+    labels = {label for label, _, _ in blocks}
+    assert "GPU" not in labels
+    assert "VRAM" not in labels
+    # Always-present rows still render.
+    assert "CPU" in labels
+    assert "RAM" in labels
+
+
+def test_resource_widget_block_order_is_cpu_ram_gpu_vram(qtbot):
+    """Blocks render left-to-right in CPU → RAM → GPU → VRAM order
+    so the eye reads from "everything has these" to "GPU specifics"."""
+    from app.gui.widgets.resource_widget import ResourceWidget
+
+    widget = ResourceWidget()
+    qtbot.addWidget(widget)
+    widget.set_metrics(
+        {
+            "cpu_percent": 25.0,
+            "ram_percent": 60.0,
+            "ram_used_mb": 9600.0,
+            "ram_total_mb": 16000.0,
+            "gpu_vram_used_mb": 4096.0,
+            "gpu_vram_total_mb": 8192.0,
+            "gpu_util_percent": 78.0,
+        }
+    )
+    labels = [label for label, _, _ in widget._block_specs()]
+    assert labels == ["CPU", "RAM", "GPU", "VRAM"]
 
 
 def test_resource_widget_color_thresholds():

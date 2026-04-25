@@ -39,9 +39,11 @@ class ResourceWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("ResourceWidget")
-        # One row of 3 blocks with label + bar + value. 380×30 px
-        # is plenty for "GPU 4.2/8.0 GB" through "RAM 28.4/32.0 GB".
-        self.setFixedSize(380, 32)
+        # One row with up to 4 blocks (CPU / RAM / GPU util / VRAM).
+        # On machines without an NVIDIA driver only the first two
+        # render. 460×32 px keeps every value readable without
+        # truncation.
+        self.setFixedSize(460, 32)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         self._cpu_percent: float = 0.0
@@ -150,21 +152,28 @@ class ResourceWidget(QWidget):
     # ---- helpers ------------------------------------------------------------
 
     def _block_specs(self) -> List[Tuple[str, str, float]]:
-        blocks: List[Tuple[str, str, float]] = []
-        if self._gpu_vram_percent is not None:
-            used_gb = self._gpu_vram_used_mb / 1024.0
-            total_gb = self._gpu_vram_total_mb / 1024.0
-            blocks.append(
-                ("GPU", f"{used_gb:.1f}/{total_gb:.1f} GB", self._gpu_vram_percent)
-            )
-        blocks.append(("CPU", f"{self._cpu_percent:.0f}%", self._cpu_percent))
-        blocks.append(
+        # Order matters — most-relevant-to-everyone first
+        # (CPU, RAM), then GPU breakdown (utilisation + VRAM).
+        # GPU blocks drop out when NVML isn't available so the
+        # widget collapses to the two-block CPU/RAM layout cleanly.
+        blocks: List[Tuple[str, str, float]] = [
+            ("CPU", f"{self._cpu_percent:.0f}%", self._cpu_percent),
             (
                 "RAM",
                 f"{self._ram_used_mb / 1024.0:.1f}/{self._ram_total_mb / 1024.0:.1f} GB",
                 self._ram_percent,
+            ),
+        ]
+        if self._gpu_util_percent is not None:
+            blocks.append(
+                ("GPU", f"{self._gpu_util_percent:.0f}%", self._gpu_util_percent)
             )
-        )
+        if self._gpu_vram_percent is not None:
+            used_gb = self._gpu_vram_used_mb / 1024.0
+            total_gb = self._gpu_vram_total_mb / 1024.0
+            blocks.append(
+                ("VRAM", f"{used_gb:.1f}/{total_gb:.1f} GB", self._gpu_vram_percent)
+            )
         return blocks
 
     def _refresh_tooltip(self) -> None:
