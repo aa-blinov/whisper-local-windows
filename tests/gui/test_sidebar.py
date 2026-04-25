@@ -93,3 +93,14 @@ def test_sidebar_label_for_falls_back_for_unknown_key(qtbot):
     sidebar = Sidebar()
     qtbot.addWidget(sidebar)
     assert sidebar.label_for("nope") == "Nope"
+
+
+def test_sidebar_uses_pixel_scroll_mode(qtbot):
+    """Sidebar wheel scrolling should be pixel-based, not item-based,
+    so the list doesn't snap by an entire row per notch."""
+    from PySide6.QtWidgets import QAbstractItemView
+    from app.gui.widgets.sidebar import Sidebar
+
+    sidebar = Sidebar()
+    qtbot.addWidget(sidebar)
+    assert sidebar._list.verticalScrollMode() == QAbstractItemView.ScrollPerPixel

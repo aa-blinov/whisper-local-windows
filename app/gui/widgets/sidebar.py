@@ -5,7 +5,13 @@ from __future__ import annotations
 from typing import List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QListWidget, QListWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QListWidget,
+    QListWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 NavItem = Tuple[str, str]
@@ -38,6 +44,10 @@ class Sidebar(QWidget):
         self._list.setObjectName("SidebarList")
         self._list.setFrameShape(QListWidget.NoFrame)
         self._list.setSelectionMode(QListWidget.SingleSelection)
+        # Pixel-level wheel scrolling so the sidebar doesn't snap by
+        # one item per notch.
+        self._list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self._list.verticalScrollBar().setSingleStep(20)
         layout.addWidget(self._list)
 
         resolved = tuple(items) if items is not None else _DEFAULT_ITEMS

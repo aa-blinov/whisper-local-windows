@@ -212,3 +212,14 @@ def test_copy_button_does_not_emit_when_no_selection(qtbot):
     qtbot.mouseClick(btn, Qt.LeftButton)
 
     assert emissions == []
+
+
+def test_history_view_uses_pixel_scroll_mode(qtbot):
+    """History table should scroll smoothly per pixel, not per row,
+    matching the rest of the UI's scroll feel."""
+    from PySide6.QtWidgets import QAbstractItemView
+    from app.gui.views.history_view import HistoryView
+
+    view = HistoryView()
+    qtbot.addWidget(view)
+    assert view._table.verticalScrollMode() == QAbstractItemView.ScrollPerPixel

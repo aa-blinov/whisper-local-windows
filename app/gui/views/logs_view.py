@@ -51,6 +51,9 @@ class LogsView(QWidget):
         # invisible.
         self._text.setLineWrapMode(QPlainTextEdit.WidgetWidth)
         self._text.setWordWrapMode(QTextOption.WrapAnywhere)
+        # Smooth wheel scrolling — default jumps a couple of lines per
+        # notch which feels stuttery in a tall log.
+        self._text.verticalScrollBar().setSingleStep(20)
         root.addWidget(self._text, 1)
 
     def append_line(self, text: str) -> None:

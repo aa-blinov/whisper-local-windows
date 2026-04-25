@@ -135,6 +135,9 @@ class HistoryView(QWidget):
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
+        # Smooth pixel-level scrolling instead of row-by-row jumps.
+        self._table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self._table.verticalScrollBar().setSingleStep(20)
         self._table.verticalHeader().setVisible(False)
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
