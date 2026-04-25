@@ -39,7 +39,8 @@ QLabel[role="section-header"] {
     font-size: {{font.size_small}};
     font-weight: 600;
     text-transform: uppercase;
-    padding-top: {{space.sm}};
+    letter-spacing: 1px;
+    padding-bottom: 2px;
 }
 
 QLabel[role="empty-title"] {

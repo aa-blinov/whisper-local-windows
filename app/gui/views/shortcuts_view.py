@@ -1,9 +1,10 @@
-"""Shortcuts view — global hotkeys, microphone, and auto-paste toggle.
+"""Settings view — global hotkeys, microphone, and auto-paste toggle.
 
-Edits persist immediately when a field commits (editingFinished on a
-QLineEdit, currentIndexChanged on the QComboBox, toggled on the
-QCheckBox); there is no Save button. A Reset button asks the controller
-to restore default values.
+Three independent cards (Audio input / Hotkeys / Clipboard) make the
+panel easier to scan than a single flat form. Edits persist
+immediately on commit (``editingFinished`` for line edits,
+``currentIndexChanged`` for the combo, ``toggled`` for the checkbox);
+there is no Save button. A Reset button restores defaults.
 """
 
 from __future__ import annotations
@@ -25,6 +26,36 @@ from PySide6.QtWidgets import (
 )
 
 
+def _make_section_card(title: str, parent: QWidget) -> tuple[QFrame, QFormLayout]:
+    """Build a card-styled QFrame with a section title and an empty
+    QFormLayout ready for rows.
+
+    Returns ``(card, form)`` so the caller can keep adding rows. The
+    title sits inside the card, above the form, with consistent
+    padding.
+    """
+    card = QFrame(parent)
+    card.setProperty("role", "card")
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(20, 16, 20, 16)
+    layout.setSpacing(12)
+
+    header = QLabel(title, card)
+    header.setProperty("role", "section-header")
+    layout.addWidget(header)
+
+    form = QFormLayout()
+    form.setContentsMargins(0, 0, 0, 0)
+    form.setHorizontalSpacing(16)
+    form.setVerticalSpacing(10)
+    form.setLabelAlignment(form.labelAlignment())  # default left
+    form.setFormAlignment(form.formAlignment())
+    form.setRowWrapPolicy(QFormLayout.DontWrapRows)
+    form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+    layout.addLayout(form)
+    return card, form
+
+
 class ShortcutsView(QWidget):
     save_requested = Signal(dict)
     reset_requested = Signal()
@@ -39,31 +70,21 @@ class ShortcutsView(QWidget):
         self._suspend_emit = False
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 18)
-        root.setSpacing(10)
+        root.setContentsMargins(28, 22, 28, 22)
+        root.setSpacing(14)
 
         hint = QLabel(
-            "Microphone, global hotkeys, paste behaviour. Changes save automatically.",
+            "Microphone, global hotkeys, paste behaviour. "
+            "Changes save automatically.",
             self,
         )
         hint.setProperty("role", "muted")
         root.addWidget(hint)
 
-        card = QFrame(self)
-        card.setProperty("role", "card")
-        form = QFormLayout(card)
-        form.setContentsMargins(16, 14, 16, 14)
-        form.setSpacing(10)
+        # ---- Audio input card -------------------------------------------
+        audio_card, audio_form = _make_section_card("Audio input", self)
 
-        # Section headers turn a flat 5-row form into three logically
-        # grouped chunks ("Audio input", "Hotkeys", "Clipboard") so
-        # the eye finds the relevant control faster. Cosmetic only —
-        # ``QFormLayout.addRow(QWidget)`` adds a span row.
-        audio_header = QLabel("Audio input", card)
-        audio_header.setProperty("role", "section-header")
-        form.addRow(audio_header)
-
-        self._device_combo = QComboBox(card)
+        self._device_combo = QComboBox(audio_card)
         self._device_combo.setObjectName("MicrophoneCombo")
         # Long device names ("Микрофон (Razer BlackShark V2 Pro 2.4 …)") need
         # a wider popup than the combo box itself, otherwise they're cut off.
@@ -75,48 +96,53 @@ class ShortcutsView(QWidget):
         # Populated later via set_devices(); placeholder until then.
         self._device_combo.addItem("System default", None)
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
-        form.addRow("Microphone", self._device_combo)
+        audio_form.addRow("Microphone", self._device_combo)
 
         # Quick verifier: capture ~3 s, report peak/RMS so the user
         # knows the chosen device is actually picking up sound.
         mic_test_row = QHBoxLayout()
-        mic_test_row.setSpacing(8)
-        self._test_mic_btn = QPushButton("Test microphone", card)
+        mic_test_row.setSpacing(10)
+        self._test_mic_btn = QPushButton("Test microphone", audio_card)
         self._test_mic_btn.setObjectName("TestMicrophoneButton")
         self._test_mic_btn.clicked.connect(self.test_mic_requested.emit)
         mic_test_row.addWidget(self._test_mic_btn)
-        self._test_mic_label = QLabel("", card)
+        self._test_mic_label = QLabel("", audio_card)
         self._test_mic_label.setObjectName("MicrophoneTestResult")
         self._test_mic_label.setProperty("role", "muted")
+        self._test_mic_label.setWordWrap(True)
         mic_test_row.addWidget(self._test_mic_label, 1)
-        form.addRow("", mic_test_row)
+        audio_form.addRow("", mic_test_row)
+        root.addWidget(audio_card)
 
-        hotkeys_header = QLabel("Hotkeys", card)
-        hotkeys_header.setProperty("role", "section-header")
-        form.addRow(hotkeys_header)
+        # ---- Hotkeys card -----------------------------------------------
+        hotkeys_card, hotkeys_form = _make_section_card("Hotkeys", self)
 
-        self._start_edit = QLineEdit(card)
+        self._start_edit = QLineEdit(hotkeys_card)
         self._start_edit.setObjectName("StartHotkeyEdit")
         self._start_edit.setPlaceholderText("e.g. ctrl+f2")
         self._start_edit.editingFinished.connect(self._emit_save)
-        form.addRow("Start recording", self._start_edit)
+        hotkeys_form.addRow("Start recording", self._start_edit)
 
-        self._stop_edit = QLineEdit(card)
+        self._stop_edit = QLineEdit(hotkeys_card)
         self._stop_edit.setObjectName("StopHotkeyEdit")
         self._stop_edit.setPlaceholderText("e.g. ctrl+f3")
         self._stop_edit.editingFinished.connect(self._emit_save)
-        form.addRow("Stop recording", self._stop_edit)
+        hotkeys_form.addRow("Stop recording", self._stop_edit)
+        root.addWidget(hotkeys_card)
 
-        clipboard_header = QLabel("Clipboard", card)
-        clipboard_header.setProperty("role", "section-header")
-        form.addRow(clipboard_header)
+        # ---- Clipboard card ---------------------------------------------
+        clipboard_card, clipboard_form = _make_section_card("Clipboard", self)
 
-        self._auto_paste_cb = QCheckBox("Auto-paste transcription", card)
+        self._auto_paste_cb = QCheckBox(
+            "Auto-paste transcription into the focused window",
+            clipboard_card,
+        )
         self._auto_paste_cb.setObjectName("AutoPasteCheckbox")
         self._auto_paste_cb.toggled.connect(self._on_auto_paste_toggled)
-        form.addRow("", self._auto_paste_cb)
-
-        root.addWidget(card)
+        # Single full-width row — no left label needed for a checkbox
+        # whose own text already describes it.
+        clipboard_form.addRow(self._auto_paste_cb)
+        root.addWidget(clipboard_card)
 
         footer = QHBoxLayout()
         footer.addStretch(1)
