@@ -1,171 +1,110 @@
 # Lazy to Text
 
-Speech-to-text application for Windows using hotkeys and the Whisper model. Records audio via global hotkey, transcribes it using a Docker-based backend, and automatically pastes the result.
+Press a global hotkey, speak, paste. Local Whisper-based speech-to-text for Windows, with a Qt UI.
+
+[![Python](https://img.shields.io/badge/python-3.12+-blue)](https://www.python.org/)
+[![Qt](https://img.shields.io/badge/UI-PySide6-41cd52)](https://doc.qt.io/qtforpython-6/)
+[![Docker](https://img.shields.io/badge/backend-Docker-2496ed)](https://www.docker.com/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+![Hero](docs/screenshots/hero.png)
+
+---
+
+## What it is
+
+A Windows desktop application that records microphone audio on a global hotkey,
+transcribes it through a local [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+container, and pastes the resulting text into the focused window.
+
+The audio never leaves the machine: transcription happens entirely against a
+locally-running Wyoming-protocol service (`linuxserver/faster-whisper:gpu`).
+Cloud APIs are not involved.
 
 ## Features
 
-- Global hotkey activation (default: Ctrl+F2 to start, Ctrl+F3 to stop)
-- Automatic text insertion into active application
-- System tray integration for background operation
-- Built-in Docker container management
-- Multiple Whisper model support (base, small, medium, turbo, large-v3)
-- Audio feedback with configurable sound alerts
-- Transcription history with search capability
-- Automatic punctuation and capitalization improvement
-- Configurable beam search parameters for quality control
+- Global hotkey activation (`Ctrl+F2` / `Ctrl+F3` by default).
+- Auto-paste into the foreground window after transcription.
+- 6 model presets (`tiny` → `large-v3`) with size / VRAM / speed / quality
+  metadata; switch from the UI, the running container reloads automatically.
+- Searchable transcription history persisted to JSON.
+- Settings auto-save on edit; "Reset to defaults" button.
+- Live application log stream inside the UI.
+- Native Windows system tray (close button hides to tray; right-click → Show / Quit).
+- Single-instance guard via a named mutex with a branded warning dialog.
+- Audio feedback for start / stop / cancel events with prewarmed playback so
+  the first keypress is never silent.
 
-## Requirements
+## Quick start
 
-- Windows 10 or 11
-- Microphone (built-in or USB)
-- Docker Desktop installed and running
-- Python 3.12 (for source installation)
+Requires Windows 10/11, Python 3.12, Docker Desktop, and a microphone.
 
-## Installation
-
-### Option 1: Portable Executable
-
-1. Download `LazyToText.exe` from releases
-2. Start Docker Desktop
-3. Open PowerShell in the application directory:
-
-   ```powershell
-   docker compose up -d
-   ```
-
-4. Run `LazyToText.exe`
-
-### Option 2: From Source
-
-```bash
+```powershell
 git clone https://github.com/aa-blinov/whisper-local-windows.git
 cd whisper-local-windows
 
-# Install uv package manager if not present
-# Create virtual environment and install dependencies
-uv venv --python 3.12
+# uv handles the venv and the lock-file pinned dependencies
 uv sync
 
-# Start Docker backend
+# bring up the local Wyoming faster-whisper backend
 docker compose up -d
 
-# Run application
+# launch the app
 uv run lazy-to-text-ui
 ```
 
-## Usage
+Press `Ctrl+F2`, speak, press `Ctrl+F3` — the transcript is pasted into
+whatever has focus when you stop recording.
 
-1. Ensure Docker Desktop is running (system tray icon visible)
-2. Launch the application (window and system tray icon appear)
-3. Click "Start Server" to launch the Docker container (first run downloads ~5GB model)
-4. Wait for status to show "ready"
-5. Press Ctrl+F2 to start recording (audio feedback plays)
-6. Speak clearly with natural pauses between sentences
-7. Press Ctrl+F3 to stop recording
-8. Transcribed text is automatically inserted into the active window
+## Screenshots
 
-### Default Hotkeys
+| Models | Shortcuts |
+| :---: | :---: |
+| ![Models](docs/screenshots/models.png) | ![Shortcuts](docs/screenshots/shortcuts.png) |
 
-- Ctrl+F2: Start recording
-- Ctrl+F3: Stop recording
+| History | Logs |
+| :---: | :---: |
+| ![History](docs/screenshots/history.png) | ![Logs](docs/screenshots/logs.png) |
 
-Hotkeys can be customized in the application UI.
+## Hotkeys
 
-## Transcription Quality
+| Action | Default | Configurable |
+| --- | --- | --- |
+| Start recording | `Ctrl+F2` | yes — Shortcuts tab |
+| Stop recording + transcribe | `Ctrl+F3` | yes — Shortcuts tab |
+| Hide / show window | close button / tray click | no |
 
-The application automatically applies post-processing to improve text quality:
-
-- Capitalizes first letter of text
-- Capitalizes letters after sentence-ending punctuation (. ! ?)
-- Adds spaces after commas where missing
-- Removes excessive whitespace
-- Normalizes punctuation spacing
-
-### Model Comparison
-
-| Model | Quality | Speed | Punctuation |
-|-------|---------|-------|-------------|
-| base | Low | Very Fast | Poor |
-| small | Medium | Fast | Fair |
-| medium | Good | Moderate | Good |
-| turbo | Excellent | Fast | Excellent |
-| large-v3 | Excellent | Moderate | Excellent |
-
-Recommended: turbo (best balance of quality and speed)
-
-### Quality Settings
-
-Use the UI to configure transcription parameters:
-
-- **Model**: Select from dropdown (base, small, medium, turbo, large-v3)
-- **Beam Size**: Range 3-10 (higher values improve quality but reduce speed)
-- **Language**: Specify language code or use "auto" for detection
-
-### Recording Best Practices
-
-- Speak clearly with natural pauses between sentences
-- Minimize background noise
-- Use 3-20 second recordings for optimal results
-- Maintain consistent microphone distance and volume
-
-## Building Executable
-
-To build a standalone executable:
-
-```powershell
-# Clean build
-Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
-uv run pyinstaller lazy_to_text.spec
-```
-
-Output: `dist\LazyToText\LazyToText.exe`
-
-Alternatively, use the provided script:
-
-```powershell
-./build-exe.ps1           # Standard build
-./build-exe.ps1 -Clean    # Clean build
-```
-
-## User Interface
-
-### Main Sections
-
-1. **Model Configuration**: Select model, language, and beam size parameters
-2. **System Status**: Docker daemon and container status with readiness indicators
-3. **Hotkeys**: Configure recording hotkeys and auto-paste behavior
-4. **History**: Browse and search previous transcriptions
-5. **Logs**: Application events and status messages
-
-### Control Buttons
-
-- **Apply Changes**: Apply new model configuration (restarts container)
-- **Start Server**: Launch Docker container
-- **Stop Server**: Stop Docker container
-- **View Logs**: Display container logs in separate window
+Hotkey edits in the Shortcuts tab persist immediately on focus loss; no Save
+button. The auto-paste toggle behaves the same way.
 
 ## Configuration
 
-The `config.yaml` file is created automatically on first run and stores all application settings. All parameters can be configured through the UI.
-
-### Configuration Structure
+`config.yaml` is created on first launch in the project root (or next to the
+executable in a built distribution). Most fields are exposed in the UI; the
+file is the source of truth.
 
 ```yaml
 whisper:
-  backend_mode: local        # local or external
-  model: large-v3            # base, small, medium, turbo, large-v3
-  beam_size: 7               # 3-10 range
-  language: ru               # Language code or "auto"
+  backend_mode: local            # local | external
+  model: large-v3                # alias from app/model_mapping.py
+  beam_size: 5
+  language: ru                   # or "auto"
   local_url: http://localhost:10300
+  external_url: http://remote-host:10300
 
 hotkey:
   start_recording_hotkey: ctrl+f2
   stop_recording_hotkey: ctrl+f3
 
 clipboard:
-  auto_paste: 1              # 0=disabled, 1=enabled
+  auto_paste: true
   preserve_clipboard: false
   key_simulation_delay: 0.05
+
+audio:
+  channels: 1
+  dtype: float32
+  max_duration: 300
 
 audio_feedback:
   enabled: true
@@ -173,147 +112,104 @@ audio_feedback:
   stop_sound: assets/sounds/record_stop.wav
   cancel_sound: assets/sounds/record_cancel.wav
 
-system_tray:
-  enabled: true
-  tooltip: Lazy to text
-
 history:
   enabled: true
   max_entries: 1000
   auto_cleanup_days: 30
 ```
 
-To reset configuration: delete `config.yaml` and restart the application.
+To reset settings, delete `config.yaml` and relaunch — defaults are written
+back. The Shortcuts tab "Reset to defaults" button does the same for hotkey
+and auto-paste fields without touching the rest of the file.
 
-## Docker Backend
+## Architecture
 
-The application uses a Docker container running the faster-whisper model. Container lifecycle is managed through the UI.
+```
+                                        ┌─────────────────────────────┐
+                                        │  Qt UI (app/gui)            │
+                                        │  views, widgets, controllers│
+                                        └─────────────┬───────────────┘
+                                                      │
+                                       Qt signals     │
+                                                      ▼
+┌─────────────┐    callbacks    ┌──────────────────────────────────┐
+│ Hotkey      ├────────────────▶│  StateManager  (app/)            │
+│ Listener    │                 │  recording / processing / model  │
+└─────────────┘                 │  loading state machine            │
+                                 └─────┬───────────────┬─────────────┘
+                                       │               │
+                            audio_data │               │ transcribe(audio)
+                                       ▼               ▼
+                          ┌──────────────────┐ ┌──────────────────────┐
+                          │ AudioRecorder    │ │ WhisperEngine        │
+                          │ sounddevice +    │ │ Wyoming TCP client   │
+                          │ daemon thread    │ │ (asyncio.run wrap)   │
+                          └──────────────────┘ └────────┬─────────────┘
+                                                        │
+                                                        ▼
+                                             ┌─────────────────────┐
+                                             │ Docker container    │
+                                             │ linuxserver/        │
+                                             │ faster-whisper:gpu  │
+                                             └─────────────────────┘
+```
 
-### Initial Setup
+The Qt layer (`app/gui/`) holds every UI concern. The domain layer
+(`app/state_manager.py`, `app/audio_recorder.py`, `app/whisper_engine.py`,
+`app/clipboard_manager.py`) is what `RecordingController` wires Qt signals
+into. Backend lifecycle (start / stop, status polling) is delegated to
+`app/docker_backend_manager.py`, polled off the UI thread by
+`BackendStatusPoller`.
+
+## Building a standalone executable
 
 ```powershell
-docker compose up -d
+.\build-exe.ps1            # folder build via lazy_to_text.spec
+.\build-exe.ps1 -OneFile   # single-file build (assets unpacked from _MEIPASS)
+.\build-exe.ps1 -Clean     # remove dist/ and build/ first
 ```
 
-First run downloads the model (~5GB). Subsequent starts are faster.
+Output: `dist\LazyToText\LazyToText.exe` (or `dist\LazyToText.exe` for
+`-OneFile`). The build script delegates to `pyinstaller` via `uv run`; a
+fresh `uv sync` runs first unless `-SkipSync` is passed.
 
-### Container Management
+## Development
 
-Use UI buttons "Start Server" and "Stop Server" to control the container. Manual Docker commands are not required during normal operation.
-
-### Container Status
-
-- **ready**: Container running, model loaded, service operational
-- **waiting**: Container running, model loading or service initializing
-- **stopped**: Container not running
-- **error**: Container or service failure
-
-Status is displayed in the System Status panel with color indicators.
-
-### Model Switching
-
-Model changes are applied through the UI:
-
-1. Select new model from dropdown
-2. Click "Apply Changes"
-3. Container automatically restarts with new model configuration
-
-The application verifies readiness by monitoring container logs for the service initialization message.
-
-## Troubleshooting
-
-### Hotkeys Not Working
-
-- Change hotkey combination in UI (another application may be intercepting)
-- Close other applications with global hotkeys
-- Verify hotkey configuration in Hotkeys section
-
-### Empty Transcription
-
-- Verify microphone input in Windows sound settings
-- Check microphone levels and test recording
-- Ensure container status shows "ready"
-- Speak clearly at normal volume
-
-### Text Not Pasting
-
-- Toggle auto-paste setting in UI
-- Verify Windows permissions for simulated keystrokes
-- Run application as administrator if necessary
-- Check that target application accepts pasted input
-
-### Poor Punctuation Quality
-
-- Increase beam_size parameter (7-10 range)
-- Speak with natural pauses between sentences
-- Automatic post-processing is always applied
-
-### Docker Issues
-
-- Verify Docker Desktop is running (system tray icon)
-- Restart Docker Desktop if necessary
-- Test Docker functionality: `docker ps` in PowerShell
-- Check Docker logs for error messages
-
-### Performance Issues
-
-- Reduce beam_size parameter (5 or lower)
-- Switch to "base" or "small" model
-- Close resource-intensive applications
-- Monitor CPU/GPU usage during transcription
-
-### Diagnostics
-
-- Application logs: `logs/app.log` (adjacent to executable)
-- Container logs: "View Logs" button in UI
-- Configuration reset: delete `config.yaml` and restart
-
-## Technical Architecture
-
-### Data Flow
-
-```
-Microphone → Audio Recording → Processing → Whisper Model → Text → Insertion
-                                              ↓
-                                        Docker Container
+```powershell
+uv sync --group dev
+uv run pytest                         # full test suite (~210 tests)
+uv run python lazy-to-text-ui.py      # run from source
+uv run python scripts/generate_screenshots.py  # regenerate docs/screenshots
 ```
 
-### Component Overview
+Tests live in `tests/` and use `pytest-qt` with the real Windows Qt platform.
+GUI tests can run headless via `QT_QPA_PLATFORM=offscreen`.
 
-1. **Audio Recorder**: Captures microphone input using sounddevice library
-2. **Hotkey Listener**: Detects global keyboard shortcuts
-3. **State Manager**: Coordinates recording lifecycle and application state
-4. **Whisper Engine**: Communicates with Docker backend via Wyoming protocol
-5. **Clipboard Manager**: Handles text copying and simulated paste operations
-6. **Docker Backend Manager**: Controls container lifecycle and health monitoring
-7. **UI Layer**: CustomTkinter-based interface for configuration and status
-8. **System Tray**: Background operation with status indicators
+## Roadmap
 
-### Technology Stack
+- [ ] Live audio level meter while recording
+- [ ] System tray notification when transcription completes
+- [ ] Light theme + custom QSS
+- [ ] Optional cloud backends (OpenAI, Groq) behind the same UI
+- [ ] Distil / turbo model presets in the registry
+- [ ] Auto-detect language toggle in the Models tab
+
+## Tech stack
 
 - Python 3.12
-- CustomTkinter (modern UI framework)
-- Docker SDK for Python (container management)
-- Wyoming Protocol (model communication)
-- sounddevice (audio capture)
-- PyAutoGUI (automated text insertion)
-- pystray (system tray integration)
+- PySide6 (Qt 6.11) for the UI
+- Wyoming protocol for backend RPC
+- faster-whisper running inside `linuxserver/faster-whisper:gpu`
+- `sounddevice` for audio capture, `pyautogui` + `pyperclip` for paste,
+  `global-hotkeys` + `pywin32` for Windows-native hotkey registration
 
-### Container Details
+## Acknowledgements
 
-- Image: linuxserver/faster-whisper:gpu
-- Protocol: Wyoming (TCP-based)
-- Port: 10300 (configurable)
-- GPU Support: NVIDIA with Container Toolkit
-- Models: Stored in persistent volume
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) and the
+  [Wyoming protocol](https://github.com/rhasspy/wyoming).
+- The `linuxserver/faster-whisper` container image.
+- UI direction borrowed from [Spokenly](https://spokenly.app/) (macOS).
 
-## Contributing
+## License
 
-Contributions are welcome. To report bugs or request features, open an issue in the repository with detailed information about the problem or proposed enhancement.
-
-For code contributions:
-
-1. Fork the repository
-2. Create a feature branch
-3. Implement changes with appropriate tests
-4. Submit a pull request with clear description
+[MIT](LICENSE)
