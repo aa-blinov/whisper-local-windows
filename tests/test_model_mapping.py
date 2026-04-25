@@ -89,7 +89,16 @@ def test_model_info_is_frozen():
 def test_registry_contains_core_models():
     from app.model_mapping import MODELS, aliases
 
-    expected = {"tiny", "base", "small", "medium", "large-v3"}
+    # Lineup is the post-cleanup powerful presets — large-v3 family
+    # plus turbo / distil and Russian fine-tunes.
+    expected = {
+        "turbo",
+        "distil-large-v3",
+        "large-v3",
+        "large-v3-int8",
+        "large-v3-ru",
+        "large-v3-ru-int8",
+    }
     assert expected.issubset(set(aliases()))
     assert len(MODELS) == len(aliases())
 

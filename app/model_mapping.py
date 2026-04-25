@@ -59,55 +59,6 @@ class ModelInfo:
 
 
 MODELS: Tuple[ModelInfo, ...] = (
-    # ---- Lightweight presets (fp16) -----------------------------------------
-    ModelInfo(
-        alias="tiny",
-        canonical="Systran/faster-whisper-tiny",
-        display_name="Tiny",
-        size_mb=75,
-        vram_gb=1.0,
-        speed="fast",
-        quality="basic",
-        languages="multilingual",
-        description="Smallest model. Fast and light, good for quick drafts.",
-        compute_type="float16",
-    ),
-    ModelInfo(
-        alias="base",
-        canonical="Systran/faster-whisper-base",
-        display_name="Base",
-        size_mb=145,
-        vram_gb=1.0,
-        speed="fast",
-        quality="basic",
-        languages="multilingual",
-        description="Lightweight general-purpose model with decent accuracy.",
-        compute_type="float16",
-    ),
-    ModelInfo(
-        alias="small",
-        canonical="Systran/faster-whisper-small",
-        display_name="Small",
-        size_mb=480,
-        vram_gb=2.0,
-        speed="medium",
-        quality="good",
-        languages="multilingual",
-        description="Balanced speed and quality for everyday transcription.",
-        compute_type="float16",
-    ),
-    ModelInfo(
-        alias="medium",
-        canonical="Systran/faster-whisper-medium",
-        display_name="Medium",
-        size_mb=1500,
-        vram_gb=5.0,
-        speed="medium",
-        quality="good",
-        languages="multilingual",
-        description="Higher accuracy, still reasonable on modern GPUs.",
-        compute_type="float16",
-    ),
     # ---- Distilled / turbo (faster, near-large quality) ---------------------
     ModelInfo(
         alias="turbo",
@@ -146,18 +97,6 @@ MODELS: Tuple[ModelInfo, ...] = (
         compute_type="float16",
     ),
     # ---- Full large-v3 ------------------------------------------------------
-    ModelInfo(
-        alias="large-v2",
-        canonical="Systran/faster-whisper-large-v2",
-        display_name="Large v2",
-        size_mb=3000,
-        vram_gb=10.0,
-        speed="slow",
-        quality="excellent",
-        languages="multilingual",
-        description="Older large-v2. Use only if v3 mis-recognises something specific to your domain.",
-        compute_type="float16",
-    ),
     ModelInfo(
         alias="large-v3",
         canonical="Systran/faster-whisper-large-v3",

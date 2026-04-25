@@ -20,12 +20,12 @@ def test_models_view_custom_registry(qtbot):
     from app.gui.widgets.model_card import ModelCard
     from app.model_mapping import get_model
 
-    subset = (get_model("tiny"), get_model("large-v3"))
+    subset = (get_model("turbo"), get_model("large-v3"))
     view = ModelsView(models=subset)
     qtbot.addWidget(view)
 
     cards = view.findChildren(ModelCard)
-    assert [c.alias() for c in cards] == ["tiny", "large-v3"]
+    assert [c.alias() for c in cards] == ["turbo", "large-v3"]
 
 
 def test_models_view_set_active_marks_correct_card(qtbot):
@@ -52,11 +52,11 @@ def test_models_view_set_active_switches_cleanly(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    view.set_active("tiny")
+    view.set_active("turbo")
     view.set_active("large-v3")
 
     cards = {c.alias(): c for c in view.findChildren(ModelCard)}
-    assert cards["tiny"].is_active() is False
+    assert cards["turbo"].is_active() is False
     assert cards["large-v3"].is_active() is True
 
 
@@ -76,12 +76,12 @@ def test_models_view_emits_model_selected_when_card_emits(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "small")
+    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "distil-large-v3")
 
     with qtbot.waitSignal(view.model_selected, timeout=1000) as blocker:
         card.select_requested.emit(card.alias())
 
-    assert blocker.args == ["small"]
+    assert blocker.args == ["distil-large-v3"]
 
 
 def test_models_view_starts_with_no_active(qtbot):
@@ -137,7 +137,7 @@ def test_set_locked_false_re_enables_buttons_for_inactive_cards(qtbot):
     assert cards["large-v3"].is_active() is True
     # Inactive cards must be clickable again.
     select_btn = next(
-        b for b in cards["tiny"].findChildren(__import__('PySide6.QtWidgets', fromlist=['QPushButton']).QPushButton)
+        b for b in cards["turbo"].findChildren(__import__('PySide6.QtWidgets', fromlist=['QPushButton']).QPushButton)
         if b.objectName() == "SelectButton"
     )
     assert select_btn.isEnabled()
