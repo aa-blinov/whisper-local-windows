@@ -31,6 +31,26 @@ _RECORDING_LABELS = {
 }
 
 
+def _format_size(num_bytes: int) -> str:
+    if num_bytes <= 0:
+        return ""
+    for unit in ("B", "KB", "MB", "GB"):
+        if num_bytes < 1024:
+            return f"{num_bytes:.0f} {unit}" if unit == "B" else f"{num_bytes:.1f} {unit}"
+        num_bytes /= 1024.0
+    return f"{num_bytes:.1f} TB"
+
+
+def _format_progress(current: int, total: int) -> str:
+    """Compact progress label suitable for appending to 'Loading model…'."""
+    if total > 0 and current >= 0:
+        pct = int(min(99, max(0, current * 100 // total)))
+        return f"{pct}%"
+    if current > 0:
+        return _format_size(current)
+    return ""
+
+
 class TopBar(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -59,6 +79,8 @@ class TopBar(QWidget):
         self._recording_pill.setAlignment(Qt.AlignCenter)
         self._recording_pill.setVisible(False)
         layout.addWidget(self._recording_pill)
+        self._recording_state = "idle"
+        self._loading_progress_text = ""
 
         self._model_pill = QLabel(_NO_MODEL_TEXT, self)
         self._model_pill.setObjectName("TopBarModelPill")
@@ -77,6 +99,12 @@ class TopBar(QWidget):
 
     def set_section_title(self, text: str) -> None:
         self._section_title.setText(text)
+
+    def _compose_label(self, state: str) -> str:
+        base = _RECORDING_LABELS.get(state, "")
+        if state == "model_loading" and self._loading_progress_text:
+            return f"{base} {self._loading_progress_text}"
+        return base
 
     def set_active_model(self, display_name: Optional[str]) -> None:
         if display_name:
@@ -110,9 +138,23 @@ class TopBar(QWidget):
         if state == "idle":
             self._recording_pill.setVisible(False)
             self._recording_pill.setProperty("state", "idle")
+            self._loading_progress_text = ""
         else:
-            self._recording_pill.setText(_RECORDING_LABELS[state])
+            self._recording_pill.setText(self._compose_label(state))
             self._recording_pill.setProperty("state", state)
             self._recording_pill.setVisible(True)
         self._recording_pill.style().unpolish(self._recording_pill)
         self._recording_pill.style().polish(self._recording_pill)
+        self._recording_state = state
+
+    def set_loading_progress(self, current: int, total: int) -> None:
+        """Update the loading-state pill with download progress.
+
+        ``current`` / ``total`` are byte counts; ``total == 0`` (unknown
+        size) renders as ``Loading model… (12 MB)``, otherwise as
+        ``Loading model… 35%``. Has no visible effect unless the pill is
+        currently in ``model_loading`` state.
+        """
+        self._loading_progress_text = _format_progress(current, total)
+        if self._recording_state == "model_loading":
+            self._recording_pill.setText(self._compose_label("model_loading"))

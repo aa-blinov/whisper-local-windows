@@ -21,7 +21,7 @@ import logging
 import os
 import sys
 import threading
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -30,6 +30,61 @@ log = logging.getLogger(__name__)
 
 
 _cuda_dlls_registered = False
+_tqdm_patched = False
+# Module-level callback called by the custom tqdm. Set by
+# ``FasterWhisperBackend.set_progress_callback``. Signature:
+# ``callback(current_bytes: int, total_bytes: int, desc: str) -> None``.
+_progress_callback: Optional["Callable[[int, int, str], None]"] = None  # type: ignore
+
+
+def _install_tqdm_progress() -> None:
+    """Patch ``tqdm`` so huggingface_hub's download bars report into our
+    progress callback.
+
+    huggingface_hub uses ``tqdm.tqdm`` for download progress. We subclass
+    it, override ``update`` and ``refresh`` to forward ``(n, total, desc)``
+    to ``_progress_callback`` whenever it's set. The patch is applied to
+    both ``tqdm`` and ``tqdm.auto`` (huggingface_hub imports from one or
+    the other depending on the call site). Idempotent.
+    """
+    global _tqdm_patched
+    if _tqdm_patched:
+        return
+    try:
+        import tqdm as _tqdm
+        import tqdm.auto as _tqdm_auto
+    except ImportError:
+        return
+
+    base_cls = _tqdm.tqdm
+
+    class _ProgressTqdm(base_cls):  # type: ignore[misc, valid-type]
+        def update(self, n=1):
+            ret = super().update(n)
+            self._fire()
+            return ret
+
+        def refresh(self, *args, **kwargs):
+            ret = super().refresh(*args, **kwargs)
+            self._fire()
+            return ret
+
+        def close(self):
+            self._fire()
+            return super().close()
+
+        def _fire(self):
+            cb = _progress_callback
+            if cb is None:
+                return
+            try:
+                cb(int(self.n or 0), int(self.total or 0), str(self.desc or ""))
+            except Exception:
+                pass
+
+    _tqdm.tqdm = _ProgressTqdm
+    _tqdm_auto.tqdm = _ProgressTqdm
+    _tqdm_patched = True
 
 
 def _register_cuda_dll_dirs() -> None:
@@ -243,6 +298,20 @@ class FasterWhisperBackend:
             self._model = None
             self._status = "stopped"
 
+    @staticmethod
+    def set_progress_callback(
+        callback: Optional[Callable[[int, int, str], None]],
+    ) -> None:
+        """Register a function called whenever a download progress bar
+        ticks. Signature ``(current_bytes, total_bytes, desc) -> None``.
+
+        Stored module-globally because the custom ``tqdm`` subclass is
+        installed once per process — it doesn't know which backend
+        instance it belongs to.
+        """
+        global _progress_callback
+        _progress_callback = callback
+
     # ---- internal -----------------------------------------------------------
 
     def _do_load(self, model_name: str) -> None:
@@ -250,6 +319,10 @@ class FasterWhisperBackend:
         # we import the engine. Without this, GPU inference falls over with
         # ``Library cublas64_12.dll is not found or cannot be loaded``.
         _register_cuda_dll_dirs()
+        # Install our custom tqdm subclass before huggingface_hub imports
+        # ``from tqdm import tqdm`` so its download progress bars go through
+        # our callback.
+        _install_tqdm_progress()
 
         # Lazy import: keeps ``import app.backends`` free of the heavy
         # CTranslate2 / cuDNN dependency chain until somebody actually loads

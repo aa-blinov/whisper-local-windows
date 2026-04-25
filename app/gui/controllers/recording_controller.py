@@ -33,6 +33,12 @@ class _HotkeyListenerLike(Protocol):
 class RecordingController(QObject):
     state_changed = Signal(str)
     history_updated = Signal()
+    # Emitted while the backend is downloading model weights from
+    # Hugging Face. ``current`` and ``total`` are byte counts (or 0 when
+    # unknown), ``desc`` is the file description from huggingface_hub
+    # (e.g. ``model.bin``). Progress comes from a non-Qt thread inside
+    # tqdm — Qt auto-queues the signal cross-thread.
+    download_progress = Signal(int, int, str)
 
     DEFAULT_POLL_INTERVAL_MS = 200
 
@@ -56,6 +62,10 @@ class RecordingController(QObject):
         # StateManager will invoke this from the transcription thread; the
         # signal connection is auto-queued onto the main thread.
         self._state_manager.history_update_callback = self._on_history_update
+
+        # Wire backend download progress (if backend supports it) through
+        # to a Qt signal so the UI can show a percentage.
+        self._wire_backend_progress()
 
     # ---- public API ---------------------------------------------------------
 
@@ -138,3 +148,20 @@ class RecordingController(QObject):
         # Called on the transcription pipeline thread. The signal connection
         # is queued cross-thread, so subscribers see it on the Qt main thread.
         self.history_updated.emit()
+
+    def _wire_backend_progress(self) -> None:
+        """Install a callback on the backend that re-emits progress as a
+        Qt signal. Called once at construction; safe if the backend
+        doesn't support ``set_progress_callback`` (no-op)."""
+        backend = getattr(self._state_manager, "backend", None)
+        if backend is None or not hasattr(backend, "set_progress_callback"):
+            return
+        try:
+            backend.set_progress_callback(self._on_backend_progress)
+        except Exception as exc:
+            log.debug("set_progress_callback failed: %s", exc)
+
+    def _on_backend_progress(self, current: int, total: int, desc: str) -> None:
+        # Fired from a non-Qt thread inside tqdm.update. Qt auto-queues
+        # signal emission to the main thread.
+        self.download_progress.emit(int(current), int(total), str(desc))

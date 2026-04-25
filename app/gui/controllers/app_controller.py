@@ -201,6 +201,20 @@ class AppController(QObject):
         recording.state_changed.connect(self._window.topbar.set_recording_state)
         recording.state_changed.connect(self._on_recording_state_changed)
         recording.history_updated.connect(self._on_history_updated_signal)
+        # Optional: download progress (only the real RecordingController
+        # exposes it; fakes in tests can omit it).
+        progress_signal = getattr(recording, "download_progress", None)
+        if progress_signal is not None:
+            try:
+                progress_signal.connect(self._on_download_progress)
+            except Exception:  # pragma: no cover — defensive
+                pass
+
+    def _on_download_progress(self, current: int, total: int, _desc: str) -> None:
+        try:
+            self._window.topbar.set_loading_progress(int(current), int(total))
+        except Exception:  # pragma: no cover — defensive
+            pass
 
     def _on_recording_state_changed(self, state: str) -> None:
         # Block destructive interactions while not idle.
