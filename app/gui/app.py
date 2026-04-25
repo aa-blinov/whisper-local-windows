@@ -171,44 +171,47 @@ def main() -> int:
     # our icon in the taskbar instead of the Python interpreter's.
     _set_app_user_model_id()
 
-    # Single-instance check happens BEFORE we create QApplication. Showing
-    # an early Qt dialog without a fully-initialised event loop crashes with
-    # an access violation on Windows; instead, use the native Win32
-    # MessageBoxW which is a synchronous OS-level dialog that doesn't need
-    # any Qt machinery.
     instance_handle = try_acquire_single_instance("LazyToTextQt")
+
+    # Bring up QApplication regardless of branch — both the primary path
+    # and the duplicate-warning dialog need our app icon to show in
+    # taskbar / Alt-Tab instead of python.exe's snake.
+    from PySide6.QtWidgets import QMessageBox
+
+    qt_app = QApplication.instance() or QApplication(sys.argv)
+    _early_icon = _load_app_icon()
+    if not _early_icon.isNull():
+        qt_app.setWindowIcon(_early_icon)
+
     if instance_handle is None:
+        # Use an explicit QMessageBox instance + exec() rather than the
+        # static QMessageBox.warning(None, ...) — the latter crashed with
+        # an access violation when invoked early in the process lifetime.
         try:
-            import ctypes
-            MB_ICONWARNING = 0x00000030
-            MB_OK = 0x00000000
-            MB_TOPMOST = 0x00040000
-            ctypes.windll.user32.MessageBoxW(
-                0,
+            msg = QMessageBox()
+            if not _early_icon.isNull():
+                msg.setWindowIcon(_early_icon)
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle("Lazy to Text")
+            msg.setText(
                 "Another copy of Lazy to Text is already running.\n\n"
-                "Use its system tray icon to bring it back, or quit it first.",
-                "Lazy to Text",
-                MB_ICONWARNING | MB_OK | MB_TOPMOST,
+                "Use its system tray icon to bring it back, or quit it first."
             )
+            msg.setStandardButtons(QMessageBox.Ok)
+            msg.show()
+            ico_path = resolve_asset_path("assets/tray_idle.ico")
+            if ico_path and os.path.isfile(ico_path):
+                _force_window_icon(int(msg.winId()), ico_path)
+            msg.exec()
         except Exception:
-            # Fall back to stderr if even the native dialog fails.
             print(
                 "Lazy to Text: another instance is already running.",
                 file=sys.stderr,
             )
         return 0
 
-    # We are the primary instance — bring up the QApplication. The mutex
-    # handle must outlive this function or another launch could race in.
-    qt_app = QApplication.instance() or QApplication(sys.argv)
+    # We are the primary instance — bind the mutex handle so it survives.
     qt_app._instance_mutex = instance_handle  # type: ignore[attr-defined]
-
-    # Set the icon on the QApplication immediately, before any window or
-    # secondary widget is created. Late setWindowIcon doesn't refresh the
-    # taskbar reliably on Windows.
-    _early_icon = _load_app_icon()
-    if not _early_icon.isNull():
-        qt_app.setWindowIcon(_early_icon)
 
     config = ConfigManager()
     docker = DockerBackendManager()
