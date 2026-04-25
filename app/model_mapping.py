@@ -32,11 +32,17 @@ _COMPUTE_VALUES = ("float32", "float16", "int8_float16", "int8")
 # the default CT2 path; ``gigaam`` routes through the Sber Russian-only
 # acoustic model. New engines plug in here.
 BACKEND_KINDS = ("faster_whisper", "gigaam")
-# Visual grouping shown on the card — distinct from ``backend_kind``
-# because we want to show "Turbo" / "Distil" / "Russian" as
-# separate-feel groupings even though they all run through
-# faster-whisper under the hood.
-FAMILIES = ("Whisper", "Turbo", "Distil", "Russian", "GigaAM")
+# Visual grouping shown on the card. All faster-whisper-based models
+# stay anchored to "Whisper" so the lineage is honest — the variant
+# is part of the family name, not a parallel family of its own.
+# ``GigaAM`` is a separate engine entirely.
+FAMILIES = (
+    "Whisper",
+    "Whisper Turbo",
+    "Whisper Distil",
+    "Whisper RU",
+    "GigaAM",
+)
 
 
 @dataclass(frozen=True)
@@ -105,7 +111,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="multilingual",
         description="Distilled large-v3 — much faster than the full model with similar quality.",
         compute_type="float16",
-        family="Turbo",
+        family="Whisper Turbo",
     ),
     ModelInfo(
         alias="turbo-int8",
@@ -118,7 +124,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="multilingual",
         description="Quantized turbo — half the VRAM, slight quality dip. Great on 4–6 GB GPUs.",
         compute_type="int8_float16",
-        family="Turbo",
+        family="Whisper Turbo",
     ),
     ModelInfo(
         alias="distil-large-v3",
@@ -131,7 +137,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="multilingual",
         description="6× faster than large-v3, ~1% WER drop. English-leaning.",
         compute_type="float16",
-        family="Distil",
+        family="Whisper Distil",
     ),
     # ---- Full large-v3 ------------------------------------------------------
     ModelInfo(
@@ -172,7 +178,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="Russian (fine-tuned)",
         description="large-v3 fine-tuned on Common Voice RU — WER 6.39 vs 9.84.",
         compute_type="float16",
-        family="Russian",
+        family="Whisper RU",
     ),
     ModelInfo(
         alias="large-v3-ru-int8",
@@ -185,7 +191,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="Russian (fine-tuned)",
         description="Quantized Russian fine-tune. Best Russian quality on a 6 GB GPU.",
         compute_type="int8_float16",
-        family="Russian",
+        family="Whisper RU",
     ),
     # ---- GigaAM (Sber, Russian-only) ---------------------------------------
     # GigaAM has its own engine; ``backend_kind`` switches the routing

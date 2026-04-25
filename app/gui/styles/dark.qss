@@ -165,19 +165,19 @@ QLabel[role="family-chip"][family="whisper"] {
     border: 1px solid #2d3f6c;
 }
 
-QLabel[role="family-chip"][family="turbo"] {
+QLabel[role="family-chip"][family="whisper-turbo"] {
     background-color: #3d2a0a;
     color: #fbbf24;
     border: 1px solid #5a3f17;
 }
 
-QLabel[role="family-chip"][family="distil"] {
+QLabel[role="family-chip"][family="whisper-distil"] {
     background-color: #1c3a28;
     color: #86efac;
     border: 1px solid #2c5a3e;
 }
 
-QLabel[role="family-chip"][family="russian"] {
+QLabel[role="family-chip"][family="whisper-ru"] {
     background-color: #4a1c1c;
     color: #fca5a5;
     border: 1px solid #6c2929;
