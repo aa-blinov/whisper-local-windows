@@ -41,11 +41,8 @@ class TopBar(QWidget):
         layout.setContentsMargins(16, 8, 16, 8)
         layout.setSpacing(12)
 
-        self._title = QLabel("Lazy to Text", self)
-        self._title.setObjectName("TopBarTitle")
-        self._title.setProperty("role", "heading")
-        layout.addWidget(self._title)
-
+        # No title label here — the OS window title bar already shows the
+        # application name, and repeating it inside the chrome looks ugly.
         layout.addStretch(1)
 
         self._recording_pill = QLabel("", self)

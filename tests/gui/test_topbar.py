@@ -9,15 +9,24 @@ def _label_by_name(widget, name: str) -> QLabel:
     return widget.findChild(QLabel, name)
 
 
-def test_topbar_has_title_model_and_status_labels(qtbot):
+def test_topbar_has_model_and_status_labels(qtbot):
     from app.gui.widgets.topbar import TopBar
 
     bar = TopBar()
     qtbot.addWidget(bar)
 
-    assert _label_by_name(bar, "TopBarTitle") is not None
     assert _label_by_name(bar, "TopBarModelPill") is not None
     assert _label_by_name(bar, "TopBarStatusPill") is not None
+
+
+def test_topbar_does_not_duplicate_window_title(qtbot):
+    """The window's title bar already shows the app name; the topbar should
+    not repeat it."""
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    assert _label_by_name(bar, "TopBarTitle") is None
 
 
 def test_topbar_default_model_pill_text_when_no_model(qtbot):
