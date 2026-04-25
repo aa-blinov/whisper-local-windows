@@ -222,6 +222,13 @@ class FasterWhisperBackend:
         self._compute_type = compute_type
         self._language = language
         self._beam_size = beam_size
+        # Inference-time tunables that ``transcribe`` plumbs into
+        # ``WhisperModel.transcribe``. Overridable via
+        # ``update_inference_settings`` so the user's per-model
+        # settings on the active card take effect without a reload.
+        self._vad_filter: bool = True
+        self._initial_prompt: Optional[str] = None
+        self._temperature: float = 0.0
 
         self._model = None
         self._status = "stopped"
@@ -302,6 +309,9 @@ class FasterWhisperBackend:
             model = self._model
             language = self._language
             beam_size = self._beam_size
+            vad_filter = self._vad_filter
+            initial_prompt = self._initial_prompt
+            temperature = self._temperature
 
         # Belt-and-suspenders: ctranslate2 lazy-loads cuBLAS / cuDNN on the
         # first inference call rather than at model construction. Re-register
@@ -309,10 +319,17 @@ class FasterWhisperBackend:
         # nvidia-* wheels weren't yet importable.
         _register_cuda_dll_dirs()
 
+        kwargs = {
+            "language": language,
+            "beam_size": beam_size,
+            "temperature": temperature,
+            "vad_filter": vad_filter,
+        }
+        if initial_prompt:
+            kwargs["initial_prompt"] = initial_prompt
+
         try:
-            segments, _info = model.transcribe(
-                audio, language=language, beam_size=beam_size,
-            )
+            segments, _info = model.transcribe(audio, **kwargs)
             text = "".join(segment.text for segment in segments).strip()
             return text or None
         except Exception as exc:
@@ -326,6 +343,20 @@ class FasterWhisperBackend:
             self._shutdown = True
             self._model = None
             self._status = "stopped"
+
+    def update_inference_settings(self, settings) -> None:
+        """Push a fresh ``InferenceSettings`` instance into the
+        backend — applied on the next ``transcribe`` call without a
+        reload (the parameters are passed straight to
+        ``WhisperModel.transcribe``)."""
+        with self._lock:
+            self._language = getattr(settings, "language", None)
+            self._beam_size = int(getattr(settings, "beam_size", 5))
+            self._vad_filter = bool(getattr(settings, "vad_filter", True))
+            self._initial_prompt = getattr(settings, "initial_prompt", None)
+            self._temperature = float(
+                getattr(settings, "temperature", 0.0)
+            )
 
     @staticmethod
     def set_progress_callback(

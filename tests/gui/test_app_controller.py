@@ -1039,3 +1039,104 @@ def test_test_microphone_button_does_not_grab_focus(qtbot):
     qtbot.addWidget(view)
     assert view._test_mic_btn.focusPolicy() == Qt.NoFocus
     assert view._reset_btn.focusPolicy() == Qt.NoFocus
+
+
+def test_controller_loads_persisted_inference_overrides_on_init(qtbot):
+    """When the user toggles a per-model setting, it lands in
+    ``config['model_overrides'][alias]`` — and the controller must
+    re-hydrate that mapping back into the card's inline panel on the
+    next launch."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({
+        "whisper": {"model": "large-v3"},
+        "model_overrides": {
+            "large-v3": {
+                "language": "ru",
+                "vad_filter": False,
+                "beam_size": 7,
+                "temperature": 0.4,
+                "initial_prompt": "Anthropic, Claude",
+            },
+        },
+    })
+
+    AppController(config=config, window=window)
+
+    settings = window.models_view._cards["large-v3"].inference_settings()
+    assert settings.language == "ru"
+    assert settings.vad_filter is False
+    assert settings.beam_size == 7
+    assert settings.temperature == 0.4
+    assert settings.initial_prompt == "Anthropic, Claude"
+
+
+def test_controller_persists_inference_change_on_active_card(qtbot):
+    """Tweaking a control fires
+    ``ModelsView.inference_settings_changed`` and the controller
+    writes the new dict into ``config['model_overrides'][alias]``
+    so it survives a restart."""
+    from app.inference_settings import InferenceSettings
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+
+    AppController(config=config, window=window)
+
+    new = InferenceSettings(
+        language="en", vad_filter=True, beam_size=3, temperature=0.2,
+        initial_prompt=None,
+    )
+    window.models_view.inference_settings_changed.emit("large-v3", new)
+
+    saved = config.get_setting("model_overrides", "large-v3")
+    assert saved["language"] == "en"
+    assert saved["beam_size"] == 3
+    assert saved["temperature"] == 0.2
+    assert saved["vad_filter"] is True
+
+
+def test_controller_pushes_inference_settings_to_live_backend_on_change(qtbot):
+    """Editing the panel of the *active* card should also push the
+    fresh values into the running backend so the next transcribe
+    honours them without waiting for a restart."""
+    from app.inference_settings import InferenceSettings
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    class _LiveBackend:
+        def __init__(self) -> None:
+            self.received: list[InferenceSettings] = []
+
+        def update_inference_settings(self, settings) -> None:
+            self.received.append(settings)
+
+    backend = _LiveBackend()
+
+    class _StateManager:
+        def __init__(self) -> None:
+            self.backend = backend
+            self.audio_recorder = None
+            self.clipboard_manager = None
+
+    rec = FakeRecordingController(state_manager=_StateManager())
+    rec.state_manager = _StateManager()
+    rec.state_manager.backend = backend
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+
+    AppController(config=config, window=window, recording=rec)
+
+    new = InferenceSettings(language="ru", vad_filter=False, beam_size=4)
+    window.models_view.inference_settings_changed.emit("large-v3", new)
+
+    # Most recent push must match what we emitted.
+    assert backend.received[-1] == new

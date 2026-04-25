@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from app.gui.controllers.backend_status_poller import BackendStatusPoller
 from app.gui.main_window import MainWindow
+from app.inference_settings import InferenceSettings
 from app.model_mapping import alias_for, canonical_for, get_model
 from app.utils import is_cached_for_info
 
@@ -128,7 +129,24 @@ class AppController(QObject):
 
         self._sync_topbar_model(active_info)
 
+        # Pre-fill every card's inference panel from saved per-alias
+        # overrides so the user sees the values they last picked
+        # when activating a card.
+        for alias in self._all_known_aliases():
+            view.set_inference_settings(
+                alias, self._load_inference_settings(alias)
+            )
+        if active_info is not None:
+            # Push the *active* card's overrides into the live backend
+            # so the first transcription respects the saved values.
+            self._push_inference_to_backend(
+                self._load_inference_settings(active_info.alias)
+            )
+
         view.model_selected.connect(self._on_model_selected)
+        view.inference_settings_changed.connect(
+            self._on_inference_settings_changed
+        )
 
     def _on_model_selected(self, alias: str) -> None:
         if self._window.models_view.active_alias() == alias:
@@ -152,6 +170,10 @@ class AppController(QObject):
         # Loading. The state poll's later set_loading(True) is
         # idempotent.
         self._window.models_view.set_loading(True)
+        # Push this card's persisted inference overrides into the
+        # live backend so the first transcription on the new model
+        # honours the saved values.
+        self._push_inference_to_backend(self._load_inference_settings(alias))
         self._sync_topbar_model(info)
         if self._recording is not None:
             canonical = info.canonical if info else canonical_for(alias)
@@ -262,6 +284,50 @@ class AppController(QObject):
     def _on_mic_test_failed(self, reason: str) -> None:
         self._mic_test_in_progress = False
         self._window.shortcuts_view.show_mic_test_error(reason)
+
+    # ---- Inference-settings plumbing ---------------------------------------
+
+    def _all_known_aliases(self) -> list:
+        from app.model_mapping import aliases
+        return aliases()
+
+    def _load_inference_settings(self, alias: str) -> InferenceSettings:
+        try:
+            raw = self._config.get_setting("model_overrides", alias)
+        except Exception:
+            raw = None
+        return InferenceSettings.from_mapping(raw)
+
+    def _save_inference_settings(
+        self, alias: str, settings: InferenceSettings
+    ) -> None:
+        self._config.update_user_setting(
+            "model_overrides", alias, settings.to_mapping()
+        )
+
+    def _push_inference_to_backend(self, settings: InferenceSettings) -> None:
+        if self._recording is None:
+            return
+        sm = getattr(self._recording, "state_manager", None)
+        backend = getattr(sm, "backend", None) if sm is not None else None
+        target = getattr(backend, "update_inference_settings", None)
+        if target is None:
+            return
+        try:
+            target(settings)
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("Live inference-settings push raised: %s", exc)
+
+    def _on_inference_settings_changed(
+        self, alias: str, settings: InferenceSettings
+    ) -> None:
+        # Persist for next launch.
+        self._save_inference_settings(alias, settings)
+        # Live-apply only if the change was made on the *active*
+        # card — otherwise the user is configuring something they
+        # haven't picked yet.
+        if self._window.models_view.active_alias() == alias:
+            self._push_inference_to_backend(settings)
 
     def _resolve_audio_recorder(self):
         """The state_manager owns the AudioRecorder; reach for it

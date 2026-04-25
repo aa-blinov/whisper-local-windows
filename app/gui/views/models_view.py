@@ -14,11 +14,15 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.widgets.model_card import ModelCard
+from app.inference_settings import InferenceSettings
 from app.model_mapping import MODELS, ModelInfo
 
 
 class ModelsView(QWidget):
     model_selected = Signal(str)
+    # Re-emitted from whichever card had its inline panel touched —
+    # ``(alias, InferenceSettings)``.
+    inference_settings_changed = Signal(str, InferenceSettings)
 
     def __init__(
         self,
@@ -62,6 +66,9 @@ class ModelsView(QWidget):
         for info in resolved:
             card = ModelCard(info, parent=content)
             card.select_requested.connect(self.model_selected.emit)
+            card.inference_settings_changed.connect(
+                self.inference_settings_changed.emit
+            )
             cards_layout.addWidget(card)
             self._cards[info.alias] = card
 
@@ -109,6 +116,16 @@ class ModelsView(QWidget):
         card surfaces it so the user sees the wait advancing."""
         for card in self._cards.values():
             card.set_loading_elapsed(seconds)
+
+    def set_inference_settings(
+        self, alias: str, settings: InferenceSettings
+    ) -> None:
+        """Push controller-loaded overrides onto a specific card's
+        inline panel (no signal round-trip — the panel suppresses
+        emission during programmatic updates)."""
+        card = self._cards.get(alias)
+        if card is not None:
+            card.set_inference_settings(settings)
 
     def refresh_cache_state(self) -> None:
         """Re-check the on-disk cache for every card. Called after a model

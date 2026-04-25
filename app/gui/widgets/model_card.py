@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.widgets.flow_layout import FlowLayout
+from app.gui.widgets.inference_settings_panel import InferenceSettingsPanel
+from app.inference_settings import InferenceSettings
 from app.model_mapping import ModelInfo, model_url
 from app.utils import is_cached_for_info
 
@@ -66,6 +68,11 @@ def _compute_label(compute_type: str) -> str:
 
 class ModelCard(QFrame):
     select_requested = Signal(str)
+    # Emitted when the user changes anything in the inline inference
+    # settings panel — args: ``(alias, InferenceSettings)`` so the
+    # controller can route to per-model config + push live to the
+    # backend without having to map widgets back to models.
+    inference_settings_changed = Signal(str, InferenceSettings)
 
     def __init__(self, info: ModelInfo, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -194,6 +201,23 @@ class ModelCard(QFrame):
             badges.addWidget(badge)
         root.addLayout(badges)
 
+        # Inline inference settings — only shown while the card is
+        # active. Controlled by ``set_active``.
+        self._settings_panel = InferenceSettingsPanel(self)
+        self._settings_panel.setVisible(False)
+        self._settings_panel.settings_changed.connect(
+            lambda s: self.inference_settings_changed.emit(self._info.alias, s)
+        )
+        # GigaAM has no inference-time tunables; grey the panel out
+        # for that engine instead of pretending the user can change
+        # something.
+        if info.backend_kind == "gigaam":
+            self._settings_panel.set_enabled_for_engine(
+                False,
+                "GigaAM is end-to-end and accepts no inference-time tunables.",
+            )
+        root.addWidget(self._settings_panel)
+
         footer = QHBoxLayout()
         footer.addStretch(1)
         self._select_btn = QPushButton("Select", self)
@@ -243,8 +267,20 @@ class ModelCard(QFrame):
         self._active_pill.setVisible(self._active)
         self._select_btn.setVisible(not self._active)
         self._select_btn.setEnabled(not self._active and not self._locked)
+        # Inference panel visible only on the active card to keep
+        # inactive cards compact.
+        self._settings_panel.setVisible(self._active)
         self.style().unpolish(self)
         self.style().polish(self)
+
+    def set_inference_settings(self, settings: InferenceSettings) -> None:
+        """Pre-fill the inline panel from the controller (called when
+        the card becomes active and the controller has loaded the
+        per-alias overrides out of config)."""
+        self._settings_panel.set_settings(settings)
+
+    def inference_settings(self) -> InferenceSettings:
+        return self._settings_panel.values()
 
     def set_locked(self, locked: bool) -> None:
         self._locked = bool(locked)

@@ -146,6 +146,19 @@ class RoutedBackend:
     def shutdown(self) -> None:
         self._inner.shutdown()
 
+    def update_inference_settings(self, settings) -> None:
+        """Forward per-model overrides to the inner backend if it
+        accepts them. GigaAM's backend ignores the call (its engine
+        has no inference-time tunables) — kept silent so the
+        controller can call this blindly after every model swap."""
+        target = getattr(self._inner, "update_inference_settings", None)
+        if target is None:
+            return
+        try:
+            target(settings)
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("update_inference_settings on inner raised: %s", exc)
+
     def set_progress_callback(
         self,
         callback: Optional[Callable[[int, int, str], None]],
