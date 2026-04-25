@@ -207,6 +207,22 @@ QLabel[role="toast-body"] {
     border-bottom: 1px solid {{color.border}};
 }
 
+QLabel[role="model-pill"] {
+    background-color: #1d2746;
+    color: #93b5ff;
+    border: 1px solid #2d3f6c;
+    border-radius: {{radius.sm}};
+    padding: 4px {{space.md}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+}
+
+QLabel[role="model-pill"][state="empty"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_muted}};
+    border: 1px solid {{color.border}};
+}
+
 QLabel[role="status-pill"] {
     border-radius: {{radius.sm}};
     padding: 4px {{space.md}};

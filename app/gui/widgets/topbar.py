@@ -57,11 +57,14 @@ class TopBar(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("TopBar")
-        self.setFixedHeight(44)
+        # Slightly taller so pills don't kiss the OS title bar above —
+        # 44 px was just enough to fit a pill at all, with no
+        # breathing room.
+        self.setFixedHeight(52)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 6, 16, 6)
+        layout.setContentsMargins(20, 10, 20, 10)
         layout.setSpacing(12)
 
         # The sidebar already highlights the active section name and
@@ -90,7 +93,8 @@ class TopBar(QWidget):
 
         self._model_pill = QLabel(_NO_MODEL_TEXT, self)
         self._model_pill.setObjectName("TopBarModelPill")
-        self._model_pill.setProperty("role", "badge")
+        self._model_pill.setProperty("role", "model-pill")
+        self._model_pill.setProperty("state", "empty")
         self._model_pill.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._model_pill)
 
@@ -116,8 +120,13 @@ class TopBar(QWidget):
     def set_active_model(self, display_name: Optional[str]) -> None:
         if display_name:
             self._model_pill.setText(f"Model: {display_name}")
+            self._model_pill.setProperty("state", "active")
         else:
             self._model_pill.setText(_NO_MODEL_TEXT)
+            self._model_pill.setProperty("state", "empty")
+        # ``setProperty`` doesn't trigger a style refresh on its own.
+        self._model_pill.style().unpolish(self._model_pill)
+        self._model_pill.style().polish(self._model_pill)
 
     def set_backend_status(
         self,
