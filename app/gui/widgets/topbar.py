@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.widgets.resource_widget import ResourceWidget
 from app.gui.widgets.vu_meter import VUMeter
 
 
@@ -72,6 +73,13 @@ class TopBar(QWidget):
         # area stays empty — duplicating the label was just visual
         # noise.
         layout.addStretch(1)
+
+        # Resource stats — sits at the far left of the right-side
+        # cluster so it's always visible without competing with the
+        # recording / model pills for attention. Updated by the
+        # ``ResourceMonitor`` that the controller owns.
+        self._resources = ResourceWidget(self)
+        layout.addWidget(self._resources)
 
         # Slim live-input meter — visible only while a recording is in
         # flight. Sits next to the recording pill so the eye associates
@@ -180,6 +188,11 @@ class TopBar(QWidget):
         from a Qt-side polling timer that reads
         ``AudioRecorder.current_input_level`` while recording."""
         self._vu_meter.set_level(level)
+
+    def set_resource_metrics(self, metrics: dict) -> None:
+        """Forward a sample from ``ResourceMonitor`` into the live
+        stats widget."""
+        self._resources.set_metrics(metrics)
 
     def set_loading_progress(self, current: int, total: int) -> None:
         """Update the loading-state pill with download progress.

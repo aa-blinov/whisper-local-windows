@@ -310,6 +310,15 @@ def main() -> int:
         tray=tray,
         install_logs=True,
     )
+
+    # Live CPU / RAM / GPU stats in the topbar — polls every 2 s and
+    # pushes numbers straight to the widget via signal.
+    from app.resource_monitor import ResourceMonitor
+
+    resource_monitor = ResourceMonitor(parent=window)
+    resource_monitor.metrics_updated.connect(window.topbar.set_resource_metrics)
+    resource_monitor.start()
+
     window.show()
 
     # Qt's setWindowIcon doesn't reliably translate into Win32 WM_SETICON,
@@ -323,6 +332,10 @@ def main() -> int:
     try:
         return app.exec()
     finally:
+        try:
+            resource_monitor.stop()
+        except Exception:  # pragma: no cover — defensive
+            pass
         if recording_controller is not None:
             recording_controller.shutdown()
         if backend is not None:
