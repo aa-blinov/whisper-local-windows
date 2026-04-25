@@ -1,4 +1,4 @@
-"""Top bar — shows app title, current model, and backend status."""
+"""Top bar — recording status, current/loading model, backend health, stats."""
 
 from __future__ import annotations
 
@@ -26,11 +26,13 @@ _STATUS_DEFAULT_LABELS = {
 }
 _NO_MODEL_TEXT = "No model"
 
+# The recording pill no longer handles model-load progress — that
+# moved into the model pill below to avoid showing two near-
+# duplicate "Loading model…" indicators side by side.
 _RECORDING_STATES = ("idle", "recording", "processing", "model_loading")
 _RECORDING_LABELS = {
     "recording": "● Recording",
     "processing": "Processing…",
-    "model_loading": "Loading model…",
 }
 
 
@@ -45,7 +47,7 @@ def _format_size(num_bytes: int) -> str:
 
 
 def _format_progress(current: int, total: int) -> str:
-    """Compact progress label suitable for appending to 'Loading model…'."""
+    """Compact progress label appended to the loading model pill."""
     if total > 0 and current >= 0:
         pct = int(min(99, max(0, current * 100 // total)))
         return f"{pct}%"
@@ -58,9 +60,7 @@ class TopBar(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("TopBar")
-        # Slightly taller so pills don't kiss the OS title bar above —
-        # 44 px was just enough to fit a pill at all, with no
-        # breathing room.
+        # Slightly taller so pills don't kiss the OS title bar above.
         self.setFixedHeight(52)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
@@ -68,22 +68,21 @@ class TopBar(QWidget):
         layout.setContentsMargins(20, 10, 20, 10)
         layout.setSpacing(12)
 
-        # The sidebar already highlights the active section name and
-        # the OS title bar shows "Lazy to Text", so the topbar's left
+        # Sidebar already highlights the active section name and the
+        # OS title bar shows "Lazy to Text", so the topbar's left
         # area stays empty — duplicating the label was just visual
         # noise.
         layout.addStretch(1)
 
-        # Resource stats — sits at the far left of the right-side
-        # cluster so it's always visible without competing with the
-        # recording / model pills for attention. Updated by the
-        # ``ResourceMonitor`` that the controller owns.
+        # Resource stats — sits at the far left of the right cluster
+        # so it's always visible. Updated by the ``ResourceMonitor``
+        # the controller owns.
         self._resources = ResourceWidget(self)
         layout.addWidget(self._resources)
 
-        # Slim live-input meter — visible only while a recording is in
-        # flight. Sits next to the recording pill so the eye associates
-        # the two.
+        # Slim live-input meter — visible only while a recording is
+        # in flight. Sits next to the recording pill so the eye
+        # associates the two.
         self._vu_meter = VUMeter(self)
         self._vu_meter.setVisible(False)
         layout.addWidget(self._vu_meter)
@@ -96,15 +95,20 @@ class TopBar(QWidget):
         self._recording_pill.setVisible(False)
         layout.addWidget(self._recording_pill)
         self._recording_state = "idle"
-        self._loading_progress_text = ""
-        self._loading_elapsed_s = 0
 
+        # Model pill: empty / loading / active. ``loading`` shows
+        # download progress + elapsed time inline so the topbar
+        # doesn't double up on "Loading model…" labels.
         self._model_pill = QLabel(_NO_MODEL_TEXT, self)
         self._model_pill.setObjectName("TopBarModelPill")
         self._model_pill.setProperty("role", "model-pill")
         self._model_pill.setProperty("state", "empty")
         self._model_pill.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._model_pill)
+        self._model_state: str = "empty"
+        self._model_display_name: Optional[str] = None
+        self._loading_progress_text = ""
+        self._loading_elapsed_s = 0
 
         self._status_pill = QLabel(_STATUS_DEFAULT_LABELS["unknown"], self)
         self._status_pill.setObjectName("TopBarStatusPill")
@@ -115,26 +119,20 @@ class TopBar(QWidget):
 
     # ---- public API ---------------------------------------------------------
 
-    def _compose_label(self, state: str) -> str:
-        base = _RECORDING_LABELS.get(state, "")
-        if state != "model_loading":
-            return base
-        if self._loading_progress_text:
-            return f"{base} {self._loading_progress_text}"
-        if self._loading_elapsed_s > 0:
-            return f"{base} {self._loading_elapsed_s}s"
-        return base
-
     def set_active_model(self, display_name: Optional[str]) -> None:
-        if display_name:
-            self._model_pill.setText(f"Current model: {display_name}")
-            self._model_pill.setProperty("state", "active")
-        else:
-            self._model_pill.setText(_NO_MODEL_TEXT)
-            self._model_pill.setProperty("state", "empty")
-        # ``setProperty`` doesn't trigger a style refresh on its own.
-        self._model_pill.style().unpolish(self._model_pill)
-        self._model_pill.style().polish(self._model_pill)
+        """Mark the model as the currently-loaded one (the green-blue
+        accent). Call ``set_recording_state('model_loading')`` to
+        flip the pill into its yellow loading variant — that's the
+        single source of truth for the loading state, not a separate
+        recording-pill label."""
+        self._model_display_name = display_name
+        if self._model_state == "loading":
+            # Keep the loading variant visible — the controller will
+            # call ``set_recording_state('idle')`` when ready, which
+            # will also drop us out of loading on the model pill.
+            self._render_model_pill()
+            return
+        self._render_model_pill(state_override="active" if display_name else "empty")
 
     def set_backend_status(
         self,
@@ -159,23 +157,33 @@ class TopBar(QWidget):
             raise ValueError(
                 f"state must be one of {_RECORDING_STATES}, got {state!r}"
             )
-        if state == "idle":
-            self._recording_pill.setVisible(False)
-            self._recording_pill.setProperty("state", "idle")
-            self._loading_progress_text = ""
-            self._loading_elapsed_s = 0
-        else:
-            if state != "model_loading":
-                # Reset loading state inputs when the pill is repurposed
-                # for a non-loading mode (recording / processing).
-                self._loading_progress_text = ""
-                self._loading_elapsed_s = 0
-            self._recording_pill.setText(self._compose_label(state))
+        # ``model_loading`` is reflected in the model pill, not in
+        # the recording pill — the latter only shows actively-
+        # recording / actively-processing states.
+        if state in _RECORDING_LABELS:
+            self._recording_pill.setText(_RECORDING_LABELS[state])
             self._recording_pill.setProperty("state", state)
             self._recording_pill.setVisible(True)
+        else:
+            self._recording_pill.setVisible(False)
+            self._recording_pill.setProperty("state", "idle")
         self._recording_pill.style().unpolish(self._recording_pill)
         self._recording_pill.style().polish(self._recording_pill)
         self._recording_state = state
+
+        # Model pill loading state mirrors the backend's
+        # ``model_loading`` phase exactly.
+        if state == "model_loading":
+            self._render_model_pill(state_override="loading")
+        else:
+            # Drop loading text when leaving the loading state.
+            if self._model_state == "loading":
+                self._loading_progress_text = ""
+                self._loading_elapsed_s = 0
+                self._render_model_pill(
+                    state_override="active" if self._model_display_name else "empty"
+                )
+
         # VU meter only matters while audio is actively flowing in.
         if state == "recording":
             self._vu_meter.setVisible(True)
@@ -195,25 +203,46 @@ class TopBar(QWidget):
         self._resources.set_metrics(metrics)
 
     def set_loading_progress(self, current: int, total: int) -> None:
-        """Update the loading-state pill with download progress.
+        """Update the model-pill's loading variant with download
+        progress. ``total == 0`` (unknown size) renders as e.g.
+        ``Loading: Tiny (test)  12 MB``, otherwise ``35%``.
 
-        ``current`` / ``total`` are byte counts; ``total == 0`` (unknown
-        size) renders as ``Loading model… (12 MB)``, otherwise as
-        ``Loading model… 35%``. Has no visible effect unless the pill is
-        currently in ``model_loading`` state.
+        No visible effect unless the model pill is in the
+        ``loading`` state (i.e. ``set_recording_state('model_loading')``
+        was called).
         """
         self._loading_progress_text = _format_progress(current, total)
-        if self._recording_state == "model_loading":
-            self._recording_pill.setText(self._compose_label("model_loading"))
+        if self._model_state == "loading":
+            self._render_model_pill()
 
     def set_loading_elapsed(self, seconds: int) -> None:
-        """Update the loading pill with elapsed seconds.
-
-        Used as a fallback when the backend is in ``model_loading`` but
-        no tqdm progress has fired (cached-model deserialisation).
-        Bytes-based progress, when available, takes priority over
-        elapsed time inside ``_compose_label``.
+        """Update the model-pill's loading variant with an elapsed
+        seconds counter — fallback when no tqdm progress is firing
+        (cached-model deserialisation). Bytes-progress wins over
+        elapsed inside ``_render_model_pill``.
         """
         self._loading_elapsed_s = max(0, int(seconds))
-        if self._recording_state == "model_loading":
-            self._recording_pill.setText(self._compose_label("model_loading"))
+        if self._model_state == "loading":
+            self._render_model_pill()
+
+    # ---- internal -----------------------------------------------------------
+
+    def _render_model_pill(self, state_override: Optional[str] = None) -> None:
+        state = state_override if state_override is not None else self._model_state
+        if state == "loading":
+            name = self._model_display_name or "model"
+            text = f"Loading: {name}"
+            if self._loading_progress_text:
+                text += f"  {self._loading_progress_text}"
+            elif self._loading_elapsed_s > 0:
+                text += f"  {self._loading_elapsed_s}s"
+        elif state == "active" and self._model_display_name:
+            text = f"Current model: {self._model_display_name}"
+        else:
+            text = _NO_MODEL_TEXT
+            state = "empty"
+        self._model_pill.setText(text)
+        self._model_pill.setProperty("state", state)
+        self._model_pill.style().unpolish(self._model_pill)
+        self._model_pill.style().polish(self._model_pill)
+        self._model_state = state

@@ -339,6 +339,12 @@ QLabel[role="model-pill"][state="empty"] {
     border: 1px solid {{color.border}};
 }
 
+QLabel[role="model-pill"][state="loading"] {
+    background-color: {{color.warning}};
+    color: {{color.bg_primary}};
+    border: 1px solid {{color.warning}};
+}
+
 QLabel[role="status-pill"] {
     border-radius: {{radius.sm}};
     padding: 4px {{space.md}};
