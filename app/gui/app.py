@@ -28,24 +28,28 @@ def _load_app_icon() -> QIcon:
     return icon
 
 
-def _set_app_user_model_id(app_id: str = "LazyToText.App") -> None:
+def _set_app_user_model_id(app_id: str = "LazyToText.App") -> int:
     """Tell Windows this process is its own app, not a hosted Python script.
 
     Without this, the taskbar / Alt-Tab / system tray group everything under
     Python's default AppUserModelID and use the Python interpreter's icon
     instead of the one we set via setWindowIcon. This must run before any
     window or QApplication is created.
+
+    Returns the HRESULT from the Win32 call (0 on success, non-zero on
+    failure), or -1 on platforms / pythons where the API is unavailable.
     """
     if sys.platform != "win32":
-        return
+        return -1
     try:
         import ctypes
 
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+        hr = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+        return int(hr) if hr is not None else 0
     except Exception:
         # Old Windows / missing API — non-fatal, the taskbar just stays
         # grouped under Python.
-        pass
+        return -1
 
 
 def build_application(
@@ -141,6 +145,13 @@ def main() -> int:
     # handle must outlive this function or another launch could race in.
     qt_app = QApplication.instance() or QApplication(sys.argv)
     qt_app._instance_mutex = instance_handle  # type: ignore[attr-defined]
+
+    # Set the icon on the QApplication immediately, before any window or
+    # secondary widget is created. Late setWindowIcon doesn't refresh the
+    # taskbar reliably on Windows.
+    _early_icon = _load_app_icon()
+    if not _early_icon.isNull():
+        qt_app.setWindowIcon(_early_icon)
 
     config = ConfigManager()
     docker = DockerBackendManager()
