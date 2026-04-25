@@ -177,11 +177,14 @@ def test_model_url_for_faster_whisper_points_at_hf_repo():
     )
 
 
-def test_model_url_for_gigaam_resolves_internal_id_to_hf_repo():
+def test_model_url_for_gigaam_points_at_github():
+    """GigaAM doesn't ship via Hugging Face — its weights come from
+    Sber's CDN. The closest "model home" the user can browse is the
+    project's GitHub README, so all GigaAM cards link there."""
     from app.model_mapping import get_model, model_url
 
     info = get_model("gigaam-v2-ctc")
-    # Sber's GigaAM canonical ('v2_ctc') maps to a real HF repo.
-    assert model_url(info) == (
-        "https://huggingface.co/salute-developers/GigaAM-CTC2"
-    )
+    assert model_url(info) == "https://github.com/salute-developers/GigaAM"
+
+    info_rnnt = get_model("gigaam-v2-rnnt")
+    assert model_url(info_rnnt) == "https://github.com/salute-developers/GigaAM"

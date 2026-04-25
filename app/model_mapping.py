@@ -250,27 +250,22 @@ def alias_for(canonical: str) -> str:
     return MODEL_TO_ALIAS.get(canonical, canonical)
 
 
-# GigaAM exposes models under short internal names; the actual
-# weights live in Hugging Face repos. Used by ``model_url`` so the
-# "open in browser" affordance on the card lands on a real page.
-_GIGAAM_HF_REPO: dict[str, str] = {
-    "v1_ctc": "salute-developers/GigaAM-CTC",
-    "v1_rnnt": "salute-developers/GigaAM-RNNT",
-    "v2_ctc": "salute-developers/GigaAM-CTC2",
-    "v2_rnnt": "salute-developers/GigaAM-RNNT2",
-}
+# GigaAM weights ship from Sber's own CDN (not Hugging Face), so
+# the closest "model home page" is the project's GitHub README. The
+# README documents each variant by its internal short name (``v2_ctc``,
+# ``v2_rnnt``, …) so a fragment anchor lands the user near their pick.
+_GIGAAM_GITHUB = "https://github.com/salute-developers/GigaAM"
 
 
 def model_url(info: ModelInfo) -> str:
     """Resolve the canonical web home for a model card's link icon.
 
-    For ``faster_whisper`` models the canonical IS already a HF repo
-    path; for GigaAM we map the engine's internal short name to the
-    Sber HF repo holding the weights.
+    ``faster_whisper`` canonicals are already Hugging Face repo
+    paths. GigaAM doesn't have a HF mirror — link to its GitHub
+    project page instead.
     """
     if info.backend_kind == "gigaam":
-        repo = _GIGAAM_HF_REPO.get(info.canonical, info.canonical)
-        return f"https://huggingface.co/{repo}"
+        return _GIGAAM_GITHUB
     return f"https://huggingface.co/{info.canonical}"
 
 

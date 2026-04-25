@@ -107,14 +107,21 @@ class ModelCard(QFrame):
         header.setSpacing(10)
 
         # Family chip — visual grouping (Whisper / Turbo / Distil /
-        # Russian / GigaAM). Coloured per family via QSS.
-        family_chip = QLabel(info.family, self)
+        # Russian / GigaAM). Coloured per family via QSS. Qt QSS
+        # doesn't honour ``text-transform: uppercase`` so we
+        # upper-case the text in Python; ``unpolish/polish`` forces
+        # the engine to re-evaluate the compound selector
+        # ``[role="family-chip"][family="…"]`` against the freshly-
+        # set property.
+        family_chip = QLabel(info.family.upper(), self)
         family_chip.setObjectName("FamilyChip")
         family_chip.setProperty("role", "family-chip")
         family_chip.setProperty(
             "family", info.family.lower().replace(" ", "-")
         )
         family_chip.setAlignment(Qt.AlignCenter)
+        family_chip.style().unpolish(family_chip)
+        family_chip.style().polish(family_chip)
         header.addWidget(family_chip)
 
         title = QLabel(info.display_name, self)

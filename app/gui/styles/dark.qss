@@ -153,10 +153,9 @@ QLabel[role="family-chip"] {
     color: {{color.text_primary}};
     border: 1px solid {{color.border}};
     border-radius: {{radius.sm}};
-    padding: 2px {{space.sm}};
-    font-size: 10px;
+    padding: 3px 10px;
+    font-size: {{font.size_small}};
     font-weight: 700;
-    text-transform: uppercase;
     letter-spacing: 1px;
 }
 
