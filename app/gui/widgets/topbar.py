@@ -5,11 +5,13 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QFrame,
     QHBoxLayout,
     QLabel,
     QSizePolicy,
+    QStyle,
+    QStyleOption,
     QWidget,
 )
 
@@ -82,17 +84,18 @@ class TopBar(QWidget):
 
         # ---- Sidebar-aligned blank zone -------------------------------
         # Eats the same horizontal space as the sidebar so the
-        # divider that follows it visually extends the sidebar's
-        # right border up through the topbar.
+        # ``paintEvent`` divider lands exactly on the sidebar's
+        # right border line. The divider itself is drawn in
+        # ``paintEvent`` so it spans the full topbar height (the
+        # layout's vertical padding doesn't crop it the way a
+        # ``QFrame`` child would).
         left_gutter = QWidget(self)
         left_gutter.setFixedWidth(_SIDEBAR_WIDTH_PX)
         layout.addWidget(left_gutter)
 
-        divider = QFrame(self)
-        divider.setObjectName("TopBarDivider")
-        divider.setFrameShape(QFrame.VLine)
-        divider.setFrameShadow(QFrame.Plain)
-        layout.addWidget(divider)
+        # Small gap so the resources widget breathes off the line
+        # rather than touching it pixel-for-pixel.
+        layout.addSpacing(12)
 
         # Resource stats — first thing right of the divider so the
         # ResourceWidget feels anchored to the body area's leading
@@ -251,6 +254,24 @@ class TopBar(QWidget):
             self._render_model_pill()
 
     # ---- internal -----------------------------------------------------------
+
+    def paintEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        # Render the QSS-defined background first so the
+        # ``#TopBar { background-color: …; border-bottom: … }`` rule
+        # still applies — Qt skips its default styled-widget paint
+        # path when ``paintEvent`` is overridden, so we have to call
+        # ``style().drawPrimitive(PE_Widget, …)`` ourselves.
+        opt = QStyleOption()
+        opt.initFrom(self)
+        painter = QPainter(self)
+        self.style().drawPrimitive(QStyle.PE_Widget, opt, painter, self)
+
+        # Vertical 1 px line at the sidebar's right edge — runs the
+        # full height of the topbar so it joins seamlessly with the
+        # sidebar's own ``border-right`` below.
+        painter.setPen(QColor("#2d3140"))
+        x = _SIDEBAR_WIDTH_PX
+        painter.drawLine(x, 0, x, self.height())
 
     def _render_model_pill(self, state_override: Optional[str] = None) -> None:
         state = state_override if state_override is not None else self._model_state

@@ -323,16 +323,6 @@ QLabel[role="toast-body"] {
     border-bottom: 1px solid {{color.border}};
 }
 
-/* Vertical line continuing the sidebar's right border up through
-   the topbar — matches ``#Sidebar { border-right: 1px solid border; }``. */
-#TopBarDivider {
-    color: {{color.border}};
-    background-color: {{color.border}};
-    max-width: 1px;
-    min-width: 1px;
-    border: none;
-}
-
 QLabel[role="model-pill"] {
     background-color: #1d2746;
     color: #93b5ff;
