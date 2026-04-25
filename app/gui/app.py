@@ -13,7 +13,7 @@ from app.gui.controllers.app_controller import AppController
 from app.gui.log_bridge import QtLogBridge
 from app.gui.main_window import MainWindow
 from app.gui.theme import apply_theme
-from app.utils import resolve_asset_path
+from app.utils import is_cached_for_info, is_model_cached, resolve_asset_path
 
 
 def _load_app_icon() -> QIcon:
@@ -136,8 +136,11 @@ def build_application(
     if not icon.isNull():
         window.setWindowIcon(icon)
     if install_logs:
+        # NB: ``main()`` is responsible for setting the root level + file
+        # handler before this function runs so the recording stack's INFO
+        # messages aren't lost. Here we just attach the UI bridge.
         bridge = QtLogBridge(parent=window)
-        bridge.line_received.connect(window.logs_view.append_line)
+        bridge.record_received.connect(window.logs_view.append_record)
         bridge.install()
     if config is not None:
         AppController(
@@ -159,8 +162,16 @@ def build_application(
 def main() -> int:
     import logging
 
+    # Redirect Hugging Face downloads into <project>/models/ before any
+    # huggingface_hub / faster_whisper code is imported — these libs read
+    # HF_HOME at import time. Without this the cache lands in
+    # ``~/.cache/huggingface/hub``, which is invisible to most users and
+    # eats the system drive.
+    from app.utils import get_project_models_path
+
+    os.environ.setdefault("HF_HOME", get_project_models_path())
+
     from app.config_manager import ConfigManager
-    from app.docker_backend_manager import DockerBackendManager
     from app.gui.controllers.recording_controller import RecordingController
     from app.gui.recording_factory import build_recording_stack
     from app.gui.widgets.tray_icon import AppTrayIcon
@@ -213,15 +224,36 @@ def main() -> int:
     # We are the primary instance — bind the mutex handle so it survives.
     qt_app._instance_mutex = instance_handle  # type: ignore[attr-defined]
 
+    # Set up the logging pipeline BEFORE building the recording stack so the
+    # HotkeyListener / model-load messages from build_recording_stack reach
+    # both the UI Logs view and logs/app.log. Without this, INFO records
+    # emitted during stack construction are dropped by the default WARNING
+    # root level and we lose the most useful diagnostic moment.
+    import logging as _logging
+
+    _logging.getLogger().setLevel(_logging.INFO)
+    from app.utils import get_project_logs_path
+
+    _log_path = os.path.join(get_project_logs_path(), "app.log")
+    _file_handler = _logging.FileHandler(_log_path, encoding="utf-8")
+    _file_handler.setLevel(_logging.INFO)
+    _file_handler.setFormatter(
+        _logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+    _logging.getLogger().addHandler(_file_handler)
+
     config = ConfigManager()
-    docker = DockerBackendManager()
 
     state_manager = None
     hotkey_listener = None
+    backend = None
     recording_controller = None
     try:
-        state_manager, hotkey_listener = build_recording_stack(
-            config_manager=config, docker_backend_manager=docker,
+        state_manager, hotkey_listener, backend = build_recording_stack(
+            config_manager=config,
         )
     except Exception as exc:
         logging.getLogger(__name__).warning(
@@ -235,7 +267,31 @@ def main() -> int:
             hotkey_listener=hotkey_listener,
         )
 
+    if backend is not None:
+        # Auto-load only models whose weights are already cached on disk.
+        # Triggering a fresh download silently on startup is a UX
+        # foot-gun — the user just sees the spinner stuck on
+        # "Loading model…" with no idea that 1.5 GB are coming over
+        # the wire. Force a deliberate click on a Download button in
+        # that case so progress is visible and consensual.
+        from app.model_mapping import alias_for, get_model
+
+        canonical = backend.current_model()
+        try:
+            cached = is_cached_for_info(get_model(alias_for(canonical)))
+        except KeyError:
+            cached = is_model_cached(canonical)
+        if cached:
+            backend.load()
+        else:
+            logging.getLogger(__name__).info(
+                "Persisted model %s is not cached — skipping auto-load. "
+                "Waiting for the user to pick a model.",
+                canonical,
+            )
+
     history = state_manager.history_manager if state_manager is not None else None
+    backend_status_fetcher = backend.status if backend is not None else None
 
     # qt_app already exists from the single-instance gate above.
     tray: Optional[AppTrayIcon] = None
@@ -249,11 +305,20 @@ def main() -> int:
     app, window = build_application(
         config=config,
         history=history,
-        backend_status_fetcher=docker.status,
+        backend_status_fetcher=backend_status_fetcher,
         recording=recording_controller,
         tray=tray,
         install_logs=True,
     )
+
+    # Live CPU / RAM / GPU stats in the topbar — polls every 2 s and
+    # pushes numbers straight to the widget via signal.
+    from app.resource_monitor import ResourceMonitor
+
+    resource_monitor = ResourceMonitor(parent=window)
+    resource_monitor.metrics_updated.connect(window.topbar.set_resource_metrics)
+    resource_monitor.start()
+
     window.show()
 
     # Qt's setWindowIcon doesn't reliably translate into Win32 WM_SETICON,
@@ -267,8 +332,14 @@ def main() -> int:
     try:
         return app.exec()
     finally:
+        try:
+            resource_monitor.stop()
+        except Exception:  # pragma: no cover — defensive
+            pass
         if recording_controller is not None:
             recording_controller.shutdown()
+        if backend is not None:
+            backend.shutdown()
         if tray is not None:
             tray.setVisible(False)
 

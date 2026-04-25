@@ -1,58 +1,40 @@
-"""Factory: build the StateManager + HotkeyListener stack from config.
+"""Factory: build the StateManager + HotkeyListener + backend stack from config.
 
-Mirrors the wiring previously done inside the legacy AppContext: instantiate
-audio recorder, whisper engine, clipboard manager, audio feedback, then a
-StateManager, then a HotkeyListener. Centralised here so the new Qt entry
-point (and integration tests) can compose the recording subsystem in one call.
+Replaces the legacy AppContext setup. Composes the audio recorder, clipboard
+manager, audio feedback, and an in-process speech-to-text backend (currently
+``FasterWhisperBackend``) into a ``StateManager``, then wraps it in a
+``HotkeyListener``. Returns the backend separately so the caller can hand it
+to the status poller and trigger ``backend.load()`` once the UI is up.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional, Tuple
+from typing import Tuple
 
 from app.audio_feedback import AudioFeedback
 from app.audio_recorder import AudioRecorder
+from app.backends.base import TranscriptionBackend
+from app.backends.routed_backend import RoutedBackend
 from app.clipboard_manager import ClipboardManager
 from app.config_manager import ConfigManager
 from app.hotkey_listener import HotkeyListener
-from app.model_mapping import ALIAS_TO_MODEL, alias_for
 from app.state_manager import StateManager
-from app.whisper_engine import WhisperEngine
 
 
 log = logging.getLogger(__name__)
 
 
-def _wyoming_url(http_or_tcp_url: str) -> str:
-    """Strip http(s):// for Wyoming TCP usage."""
-    if not http_or_tcp_url:
-        return "localhost:10300"
-    if http_or_tcp_url.startswith("http://"):
-        return http_or_tcp_url[len("http://"):]
-    if http_or_tcp_url.startswith("https://"):
-        return http_or_tcp_url[len("https://"):]
-    return http_or_tcp_url
-
-
-def _resolve_model_pair(raw: Optional[str]) -> Tuple[str, str]:
-    """Return (alias, canonical) for whatever the config stored."""
-    if raw and raw in ALIAS_TO_MODEL:
-        return raw, ALIAS_TO_MODEL[raw]
-    if raw:
-        return alias_for(raw), raw
-    return "large-v3", "Systran/faster-whisper-large-v3"
-
-
 def build_recording_stack(
     config_manager: ConfigManager,
-    docker_backend_manager=None,
-) -> Tuple[StateManager, HotkeyListener]:
+) -> Tuple[StateManager, HotkeyListener, TranscriptionBackend]:
     """Build the full domain stack and start the global hotkey listener.
 
-    Returns ``(state_manager, hotkey_listener)``. The HotkeyListener begins
-    listening immediately (its ``__init__`` calls ``start_listening``), so the
-    caller must keep both objects alive for the lifetime of the app.
+    Returns ``(state_manager, hotkey_listener, backend)``. The HotkeyListener
+    begins listening immediately (its ``__init__`` calls ``start_listening``),
+    so the caller must keep all three objects alive for the lifetime of the
+    app. The returned ``backend`` is constructed in the ``stopped`` state —
+    call ``backend.load()`` to begin loading the configured model.
     """
     whisper_cfg = config_manager.get_whisper_config()
     audio_cfg = config_manager.get_audio_config()
@@ -60,12 +42,12 @@ def build_recording_stack(
     feedback_cfg = config_manager.get_audio_feedback_config()
     hotkey_cfg = config_manager.get_hotkey_config()
 
-    backend_mode = whisper_cfg.get("backend_mode", "local")
-    base_url_key = "local_url" if backend_mode == "local" else "external_url"
-    base_url = whisper_cfg.get(base_url_key) or whisper_cfg.get("local_url") or "localhost:10300"
-    wyoming_url = _wyoming_url(base_url)
-
-    alias, canonical = _resolve_model_pair(whisper_cfg.get("model"))
+    # Resolve the model name. Accept either an alias from the registry
+    # (e.g. ``large-v3`` or ``gigaam-v2-ctc``) or a full Hugging Face id;
+    # ``RoutedBackend`` decides which engine to instantiate based on the
+    # alias' ``backend_kind`` and falls back to faster-whisper for bare
+    # repo paths.
+    raw_model = whisper_cfg.get("model") or "large-v3"
 
     audio_feedback = AudioFeedback(
         enabled=bool(feedback_cfg.get("enabled", True)),
@@ -78,6 +60,7 @@ def build_recording_stack(
         channels=int(audio_cfg.get("channels", 1)),
         dtype=str(audio_cfg.get("dtype", "float32")),
         max_duration=int(audio_cfg.get("max_duration", 300)),
+        device=audio_cfg.get("device"),
     )
 
     clipboard_manager = ClipboardManager(
@@ -86,22 +69,21 @@ def build_recording_stack(
         preserve_clipboard=bool(clipboard_cfg.get("preserve_clipboard", False)),
     )
 
-    whisper_engine = WhisperEngine(
-        base_url=wyoming_url,
-        model_size=alias,
+    backend: TranscriptionBackend = RoutedBackend(
+        model=raw_model,
+        device=str(whisper_cfg.get("device", "auto")),
+        compute_type=str(whisper_cfg.get("compute_type", "float16")),
         language=whisper_cfg.get("language") or None,
         beam_size=int(whisper_cfg.get("beam_size", 5)),
-        remote_model=canonical,
     )
 
     state_manager = StateManager(
         audio_recorder=audio_recorder,
-        whisper_engine=whisper_engine,
+        backend=backend,
         clipboard_manager=clipboard_manager,
         config_manager=config_manager,
         system_tray=None,
         audio_feedback=audio_feedback,
-        docker_backend_manager=docker_backend_manager,
     )
 
     # Recorder needs to call back into state_manager when max duration is hit.
@@ -116,7 +98,10 @@ def build_recording_stack(
     )
 
     log.info(
-        "Recording stack built: model=%s url=%s backend_mode=%s",
-        alias, wyoming_url, backend_mode,
+        "Recording stack built: model=%s kind=%s device=%s compute_type=%s",
+        backend.current_model(),
+        backend.current_kind(),
+        whisper_cfg.get("device", "auto"),
+        whisper_cfg.get("compute_type", "float16"),
     )
-    return state_manager, hotkey_listener
+    return state_manager, hotkey_listener, backend

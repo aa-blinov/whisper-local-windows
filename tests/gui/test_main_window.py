@@ -103,30 +103,6 @@ def test_main_window_has_topbar(qtbot):
     assert window.topbar.parent() is not None
 
 
-def test_main_window_section_title_matches_default_sidebar_key(qtbot):
-    from app.gui.main_window import MainWindow
-
-    window = MainWindow()
-    qtbot.addWidget(window)
-    assert window.topbar._section_title.text() == "Models"
-
-
-def test_main_window_section_title_follows_sidebar_changes(qtbot):
-    from app.gui.main_window import MainWindow
-
-    window = MainWindow()
-    qtbot.addWidget(window)
-
-    window.sidebar.set_active("history")
-    assert window.topbar._section_title.text() == "History"
-
-    window.sidebar.set_active("logs")
-    assert window.topbar._section_title.text() == "Logs"
-
-    window.sidebar.set_active("shortcuts")
-    assert window.topbar._section_title.text() == "Shortcuts"
-
-
 def test_main_window_uses_history_view_for_history_key(qtbot):
     from app.gui.main_window import MainWindow
     from app.gui.views.history_view import HistoryView
@@ -233,3 +209,31 @@ def test_set_close_to_tray_can_be_disabled(qtbot):
     event = QCloseEvent()
     window.closeEvent(event)
     assert event.isAccepted()
+
+
+def test_main_window_ctrl_n_shortcuts_switch_tabs(qtbot):
+    """Ctrl+1..4 should jump to Models / Settings / History / Logs in
+    sidebar order — keyboard-driven nav for power users."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeySequence
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+
+    nav_keys = list(window.sidebar.items())
+    target_keys = ["models", "shortcuts", "history", "logs"]
+
+    for index, expected_key in enumerate(target_keys[: len(nav_keys)]):
+        # Find the QShortcut that matches Ctrl+{index+1} and trigger it.
+        matched = None
+        for sc in window._shortcuts:
+            if sc.key().toString(QKeySequence.NativeText).lower().endswith(
+                str(index + 1)
+            ):
+                matched = sc
+                break
+        assert matched is not None
+        matched.activated.emit()
+        assert window.sidebar.active_key() == expected_key

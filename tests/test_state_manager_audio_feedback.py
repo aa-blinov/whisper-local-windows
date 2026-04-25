@@ -16,10 +16,10 @@ def _build_state_manager(can_start: bool):
 
     sm.audio_recorder = MagicMock()
     sm.audio_recorder.get_recording_status.return_value = False
-    sm.whisper_engine = MagicMock()
+    sm.backend = MagicMock()
+    sm.backend.health_check.return_value = can_start
     sm.clipboard_manager = MagicMock()
     sm.config_manager = MagicMock()
-    sm.docker_backend_manager = None
     sm.history_manager = None
     sm.history_update_callback = None
     sm.is_processing = False

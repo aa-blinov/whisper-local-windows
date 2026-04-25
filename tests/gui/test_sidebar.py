@@ -75,3 +75,32 @@ def test_sidebar_custom_items(qtbot):
 
     assert sidebar.items() == ["a", "b"]
     assert sidebar.active_key() == "a"
+
+
+def test_sidebar_label_for_returns_display_label(qtbot):
+    from app.gui.widgets.sidebar import Sidebar
+
+    sidebar = Sidebar()
+    qtbot.addWidget(sidebar)
+    # 'shortcuts' is the internal key; display label is 'Settings'.
+    assert sidebar.label_for("shortcuts") == "Settings"
+    assert sidebar.label_for("models") == "Models"
+
+
+def test_sidebar_label_for_falls_back_for_unknown_key(qtbot):
+    from app.gui.widgets.sidebar import Sidebar
+
+    sidebar = Sidebar()
+    qtbot.addWidget(sidebar)
+    assert sidebar.label_for("nope") == "Nope"
+
+
+def test_sidebar_uses_pixel_scroll_mode(qtbot):
+    """Sidebar wheel scrolling should be pixel-based, not item-based,
+    so the list doesn't snap by an entire row per notch."""
+    from PySide6.QtWidgets import QAbstractItemView
+    from app.gui.widgets.sidebar import Sidebar
+
+    sidebar = Sidebar()
+    qtbot.addWidget(sidebar)
+    assert sidebar._list.verticalScrollMode() == QAbstractItemView.ScrollPerPixel

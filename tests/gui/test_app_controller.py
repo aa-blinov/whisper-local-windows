@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 
+import pytest
+
 
 class FakeConfig:
     """Minimal stand-in for ConfigManager used in controller tests."""
@@ -18,6 +20,21 @@ class FakeConfig:
     def update_user_setting(self, section: str, key: str, value: Any) -> None:
         self._data.setdefault(section, {})[key] = value
         self.writes.append((section, key, value))
+
+
+@pytest.fixture(autouse=True)
+def _assume_cached(monkeypatch):
+    """The controller now consults ``is_cached_for_info`` before
+    restoring the persisted active card so a fresh install / cleared
+    cache doesn't silently kick off a multi-gigabyte download. The
+    bulk of the existing tests assume the persisted model is on disk;
+    default the mock to True here and let the dedicated uncached-
+    model test override it.
+    """
+    monkeypatch.setattr(
+        "app.gui.controllers.app_controller.is_cached_for_info",
+        lambda info: True,
+    )
 
 
 # ---- Init from config -------------------------------------------------------
@@ -77,7 +94,60 @@ def test_controller_handles_missing_model_in_config(qtbot):
     assert window.models_view.active_alias() is None
 
 
+def test_controller_skips_active_when_persisted_model_is_not_cached(
+    qtbot, monkeypatch
+):
+    """If the persisted model isn't on disk yet (fresh install / cleared
+    cache), don't restore it as Active — the green pill would advertise
+    a ready state while the backend is empty, AND the Select/Download
+    button stays hidden, leaving the user stuck. Force a deliberate
+    Download click so progress is visible."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setattr(
+        "app.gui.controllers.app_controller.is_cached_for_info",
+        lambda info: False,
+    )
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+
+    AppController(config=config, window=window)
+
+    assert window.models_view.active_alias() is None
+    # Topbar should also reflect the no-model state.
+    assert "No model" in window.topbar._model_pill.text() or window.topbar._model_pill.text() == "No model"
+
+
 # ---- Selection ↔ persistence ------------------------------------------------
+
+
+def test_controller_marks_view_loading_immediately_on_select(qtbot):
+    """Clicking Download must paint the orange Loading pill on the
+    card right away — without it, the user briefly sees the green
+    Active pill (200 ms until the next state poll) before it flips
+    to Loading, which looks like a flicker."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})
+
+    AppController(config=config, window=window)
+    window.models_view.model_selected.emit("turbo")
+
+    cards = {
+        c.alias(): c
+        for c in window.models_view.findChildren(
+            __import__(
+                "app.gui.widgets.model_card", fromlist=["ModelCard"]
+            ).ModelCard
+        )
+    }
+    assert cards["turbo"].is_loading() is True
 
 
 def test_controller_persists_selection_back_to_config(qtbot):
@@ -89,10 +159,10 @@ def test_controller_persists_selection_back_to_config(qtbot):
     config = FakeConfig({"whisper": {"model": "large-v3"}})
 
     AppController(config=config, window=window)
-    window.models_view.model_selected.emit("small")
+    window.models_view.model_selected.emit("turbo")
 
-    assert ("whisper", "model", "small") in config.writes
-    assert window.models_view.active_alias() == "small"
+    assert ("whisper", "model", "turbo") in config.writes
+    assert window.models_view.active_alias() == "turbo"
 
 
 def test_controller_no_ops_when_selecting_already_active(qtbot):
@@ -283,9 +353,9 @@ def test_controller_updates_topbar_on_model_select(qtbot):
     config = FakeConfig({"whisper": {"model": "large-v3"}})
 
     AppController(config=config, window=window)
-    window.models_view.model_selected.emit("tiny")
+    window.models_view.model_selected.emit("distil-large-v3")
 
-    assert "Tiny" in window.topbar._model_pill.text()
+    assert "Distil" in window.topbar._model_pill.text()
 
 
 def test_controller_clears_topbar_model_when_unknown(qtbot):
@@ -319,6 +389,8 @@ class FakeHistory:
     def __init__(self, entries=None):
         self._entries = list(entries or [])
         self.cleared = False
+        self.exported_to: list[str] = []
+        self.export_returns: bool = True
 
     def get_entries(self):
         return list(self._entries)
@@ -326,6 +398,10 @@ class FakeHistory:
     def clear_history(self):
         self._entries.clear()
         self.cleared = True
+
+    def export_to_text(self, filepath: str) -> bool:
+        self.exported_to.append(filepath)
+        return self.export_returns
 
 
 def test_controller_populates_history_view_from_manager(qtbot):
@@ -343,7 +419,10 @@ def test_controller_populates_history_view_from_manager(qtbot):
     assert table_model.rowCount() == 2
 
 
-def test_controller_clears_history_through_manager(qtbot):
+def test_controller_clears_history_through_manager(qtbot, monkeypatch):
+    """Clear is destructive — confirm via QMessageBox before
+    forwarding to the manager. The test simulates clicking Yes."""
+    from PySide6.QtWidgets import QMessageBox
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
 
@@ -352,11 +431,117 @@ def test_controller_clears_history_through_manager(qtbot):
     config = FakeConfig()
     history = FakeHistory([FakeHistoryEntry("a")])
 
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: QMessageBox.Yes,
+    )
+
     AppController(config=config, window=window, history=history)
     window.history_view.clear_requested.emit()
 
     assert history.cleared is True
     assert window.history_view._source_model.rowCount() == 0
+
+
+def test_controller_clear_cancelled_keeps_entries(qtbot, monkeypatch):
+    """If the user clicks Cancel on the confirm dialog, history must
+    stay intact."""
+    from PySide6.QtWidgets import QMessageBox
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([FakeHistoryEntry("a"), FakeHistoryEntry("b")])
+
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: QMessageBox.Cancel,
+    )
+
+    AppController(config=config, window=window, history=history)
+    window.history_view.clear_requested.emit()
+
+    assert history.cleared is False
+    assert window.history_view._source_model.rowCount() == 2
+
+
+def test_controller_export_writes_through_manager(qtbot, monkeypatch):
+    """Export should pop a save-as dialog and forward the chosen path
+    to ``history_manager.export_to_text``."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([FakeHistoryEntry("hi")])
+
+    chosen_path = "C:/tmp/history-export.txt"
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName",
+        lambda *a, **kw: (chosen_path, "Text files (*.txt)"),
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    AppController(config=config, window=window, history=history)
+    window.history_view.export_requested.emit()
+
+    assert history.exported_to == [chosen_path]
+
+
+def test_controller_export_cancelled_does_not_call_manager(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([FakeHistoryEntry("hi")])
+
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName",
+        lambda *a, **kw: ("", ""),  # user clicked Cancel
+    )
+
+    AppController(config=config, window=window, history=history)
+    window.history_view.export_requested.emit()
+
+    assert history.exported_to == []
+
+
+def test_controller_export_with_empty_history_skips_dialog(qtbot, monkeypatch):
+    """Don't bother the user with a save-as dialog when there's
+    nothing to write — just inform them."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([])
+
+    save_called = []
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName",
+        lambda *a, **kw: (save_called.append(True), ("", ""))[1],
+    )
+    info_called = []
+    monkeypatch.setattr(
+        QMessageBox, "information",
+        lambda *a, **kw: info_called.append(True),
+    )
+
+    AppController(config=config, window=window, history=history)
+    window.history_view.export_requested.emit()
+
+    assert save_called == []  # save dialog never shown
+    assert info_called  # informational popup shown instead
+    assert history.exported_to == []
 
 
 def test_controller_copy_writes_to_clipboard(qtbot):
@@ -403,12 +588,15 @@ def test_controller_drives_topbar_status_from_fetcher(qtbot):
     AppController(
         config=config,
         window=window,
-        backend_status_fetcher=lambda: "running",
+        backend_status_fetcher=lambda: "error",
     )
 
     # Polling is async (worker thread), so wait for the topbar to update.
+    # ``ready`` and ``loading`` map to ``hidden`` to avoid duplicating the
+    # left-side recording-state pill, so we use ``error`` here as a status
+    # the topbar surfaces visibly.
     qtbot.waitUntil(
-        lambda: window.topbar._status_pill.property("status") == "running",
+        lambda: window.topbar._status_pill.property("status") == "error",
         timeout=2000,
     )
 
@@ -429,10 +617,51 @@ def test_controller_without_backend_fetcher_leaves_status_unknown(qtbot):
 # ---- Recording controller wiring -------------------------------------------
 
 
+class FakeAudioRecorder:
+    def __init__(self, peak: float = 0.4, rms: float = 0.15) -> None:
+        self._peak = peak
+        self._rms = rms
+        self.test_calls = 0
+        self.raise_on_test: Optional[Exception] = None
+
+    def test_input_level(self, duration_s: float = 3.0) -> dict:
+        self.test_calls += 1
+        if self.raise_on_test is not None:
+            raise self.raise_on_test
+        return {
+            "peak": self._peak,
+            "rms": self._rms,
+            "duration_s": duration_s,
+        }
+
+
+class FakeClipboardManager:
+    def __init__(self) -> None:
+        self.auto_paste_calls: list[bool] = []
+
+    def update_auto_paste(self, enabled: bool) -> None:
+        self.auto_paste_calls.append(bool(enabled))
+
+
+class FakeStateManager:
+    def __init__(
+        self,
+        audio_recorder: Optional[FakeAudioRecorder] = None,
+        clipboard_manager: Optional[FakeClipboardManager] = None,
+    ) -> None:
+        self.audio_recorder = audio_recorder
+        self.clipboard_manager = clipboard_manager
+
+
 class FakeRecordingController:
     """Stand-in exposing the surface AppController consumes."""
 
-    def __init__(self, model_change_returns: bool = True) -> None:
+    def __init__(
+        self,
+        model_change_returns: bool = True,
+        state_manager: Optional[FakeStateManager] = None,
+        current_state_value: str = "idle",
+    ) -> None:
         from PySide6.QtCore import QObject, Signal
 
         class _Bus(QObject):
@@ -444,10 +673,15 @@ class FakeRecordingController:
         self.history_updated = self._bus.history_updated
         self.model_change_requests: list[str] = []
         self._model_change_returns = model_change_returns
+        self.state_manager = state_manager
+        self._current_state = current_state_value
 
-    def request_model_change(self, canonical: str) -> bool:
-        self.model_change_requests.append(canonical)
+    def request_model_change(self, canonical: str, compute_type=None) -> bool:
+        self.model_change_requests.append((canonical, compute_type))
         return self._model_change_returns
+
+    def current_state(self) -> str:
+        return self._current_state
 
 
 def test_controller_updates_topbar_recording_pill_on_state_change(qtbot):
@@ -489,6 +723,32 @@ def test_controller_refreshes_history_on_history_updated(qtbot):
     assert window.history_view._source_model.rowCount() == 2
 
 
+def test_controller_shows_toast_on_history_updated(qtbot):
+    """A successful transcription is silent in the UI otherwise — the
+    text just appears on the clipboard. Surfacing a confirmation
+    toast with the latest entry's text gives the user a 'yes, the
+    hotkey worked' moment."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    window.resize(800, 600)
+    qtbot.addWidget(window)
+    window.show()
+
+    config = FakeConfig()
+    history = FakeHistory([])
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, history=history, recording=rec)
+
+    history._entries.append(FakeHistoryEntry("transcribed phrase"))
+    rec.history_updated.emit()
+
+    assert window.toast.isVisible()
+    assert "transcribed phrase" in window.toast._body.text()
+
+
 def test_controller_routes_model_select_through_recording_when_present(qtbot):
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
@@ -499,13 +759,15 @@ def test_controller_routes_model_select_through_recording_when_present(qtbot):
     rec = FakeRecordingController()
 
     AppController(config=config, window=window, recording=rec)
-    window.models_view.model_selected.emit("tiny")
+    window.models_view.model_selected.emit("distil-large-v3")
 
     # config still updated for persistence
-    assert ("whisper", "model", "tiny") in config.writes
-    # AND recording stack was asked to actually switch
+    assert ("whisper", "model", "distil-large-v3") in config.writes
+    # compute_type written too — the registry tells us each card's preference
+    assert ("whisper", "compute_type", "float16") in config.writes
+    # AND recording stack was asked to actually switch (with compute_type)
     assert rec.model_change_requests == [
-        "Systran/faster-whisper-tiny",
+        ("Systran/faster-distil-whisper-large-v3", "float16"),
     ]
 
 
@@ -518,10 +780,10 @@ def test_controller_skips_recording_call_when_recording_absent(qtbot):
     config = FakeConfig({"whisper": {"model": "large-v3"}})
 
     AppController(config=config, window=window)  # no recording arg
-    window.models_view.model_selected.emit("tiny")
+    window.models_view.model_selected.emit("distil-large-v3")
 
     # Should still write config and not crash.
-    assert ("whisper", "model", "tiny") in config.writes
+    assert ("whisper", "model", "distil-large-v3") in config.writes
 
 
 def test_controller_locks_models_view_when_state_not_idle(qtbot):
@@ -607,7 +869,9 @@ def test_controller_show_requested_brings_window_back(qtbot):
     assert window.isVisible()
 
 
-def test_controller_quit_requested_calls_request_quit(qtbot):
+def test_controller_quit_requested_calls_request_quit_and_app_quit(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
 
@@ -620,10 +884,19 @@ def test_controller_quit_requested_calls_request_quit(qtbot):
     original = window.request_quit
     window.request_quit = lambda: quit_calls.append(None) or original()
 
+    app_quit_calls: list[None] = []
+    monkeypatch.setattr(
+        QApplication.instance(), "quit",
+        lambda: app_quit_calls.append(None),
+    )
+
     AppController(config=config, window=window, tray=tray)
     tray.quit_requested.emit()
 
+    # Both must fire — closing the window alone does not end the app loop
+    # when setQuitOnLastWindowClosed(False) is set for tray support.
     assert quit_calls == [None]
+    assert app_quit_calls == [None]
 
 
 def test_controller_forwards_recording_state_to_tray(qtbot):
@@ -655,3 +928,215 @@ def test_controller_without_tray_does_not_enable_close_to_tray(qtbot):
 
     AppController(config=config, window=window)
     assert window._close_to_tray is False
+
+
+def test_controller_runs_mic_test_and_reports_result(qtbot):
+    """Clicking 'Test microphone' should kick off a background capture
+    and land the result back on the Settings view via Qt signals."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    recorder = FakeAudioRecorder(peak=0.42, rms=0.18)
+    rec = FakeRecordingController(state_manager=FakeStateManager(recorder))
+
+    AppController(config=config, window=window, recording=rec)
+
+    window.shortcuts_view.test_mic_requested.emit()
+
+    qtbot.waitUntil(
+        lambda: "0.42" in window.shortcuts_view._test_mic_label.text(),
+        timeout=2000,
+    )
+    assert recorder.test_calls == 1
+    assert window.shortcuts_view._test_mic_btn.isEnabled()
+
+
+def test_controller_mic_test_blocked_during_recording(qtbot):
+    """Don't try to grab the input while a recording is in flight —
+    both would race for the device."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    recorder = FakeAudioRecorder()
+    rec = FakeRecordingController(
+        state_manager=FakeStateManager(recorder),
+        current_state_value="recording",
+    )
+
+    AppController(config=config, window=window, recording=rec)
+
+    window.shortcuts_view.test_mic_requested.emit()
+    # No worker thread should have run; label should report a refusal.
+    assert recorder.test_calls == 0
+    text = window.shortcuts_view._test_mic_label.text()
+    assert text  # any non-empty error message
+
+
+def test_controller_mic_test_surfaces_recorder_errors(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    recorder = FakeAudioRecorder()
+    recorder.raise_on_test = RuntimeError("device busy")
+    rec = FakeRecordingController(state_manager=FakeStateManager(recorder))
+
+    AppController(config=config, window=window, recording=rec)
+
+    window.shortcuts_view.test_mic_requested.emit()
+    qtbot.waitUntil(
+        lambda: "device busy" in window.shortcuts_view._test_mic_label.text(),
+        timeout=2000,
+    )
+
+
+def test_controller_pushes_auto_paste_to_live_clipboard_manager(qtbot):
+    """Toggling Auto-paste in Settings must update the running
+    ClipboardManager — otherwise the checkbox flips visually but the
+    actual delivery keeps using the value it had at startup."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"clipboard": {"auto_paste": True}})
+    clipboard = FakeClipboardManager()
+    rec = FakeRecordingController(
+        state_manager=FakeStateManager(clipboard_manager=clipboard)
+    )
+
+    AppController(config=config, window=window, recording=rec)
+
+    # Toggle off, then on, via the checkbox.
+    cb = window.shortcuts_view._auto_paste_cb
+    cb.setChecked(False)
+    cb.setChecked(True)
+
+    # Most recent should be True (re-enabled), and at least one False
+    # along the way (when disabled).
+    assert clipboard.auto_paste_calls
+    assert clipboard.auto_paste_calls[-1] is True
+    assert False in clipboard.auto_paste_calls
+
+
+def test_test_microphone_button_does_not_grab_focus(qtbot):
+    """``setEnabled(False)`` during the 3-second test would chase
+    focus to the next focusable widget (the Start hotkey edit) if
+    the button had focus. NoFocus prevents the button from grabbing
+    focus on click in the first place."""
+    from PySide6.QtCore import Qt
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    assert view._test_mic_btn.focusPolicy() == Qt.NoFocus
+    assert view._reset_btn.focusPolicy() == Qt.NoFocus
+
+
+def test_controller_loads_persisted_inference_overrides_on_init(qtbot):
+    """When the user toggles a per-model setting, it lands in
+    ``config['model_overrides'][alias]`` — and the controller must
+    re-hydrate that mapping back into the card's inline panel on the
+    next launch."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({
+        "whisper": {"model": "large-v3"},
+        "model_overrides": {
+            "large-v3": {
+                "language": "ru",
+                "vad_filter": False,
+                "beam_size": 7,
+                "temperature": 0.4,
+                "initial_prompt": "Anthropic, Claude",
+            },
+        },
+    })
+
+    AppController(config=config, window=window)
+
+    settings = window.models_view._cards["large-v3"].inference_settings()
+    assert settings.language == "ru"
+    assert settings.vad_filter is False
+    assert settings.beam_size == 7
+    assert settings.temperature == 0.4
+    assert settings.initial_prompt == "Anthropic, Claude"
+
+
+def test_controller_persists_inference_change_on_active_card(qtbot):
+    """Tweaking a control fires
+    ``ModelsView.inference_settings_changed`` and the controller
+    writes the new dict into ``config['model_overrides'][alias]``
+    so it survives a restart."""
+    from app.inference_settings import InferenceSettings
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+
+    AppController(config=config, window=window)
+
+    new = InferenceSettings(
+        language="en", vad_filter=True, beam_size=3, temperature=0.2,
+        initial_prompt=None,
+    )
+    window.models_view.inference_settings_changed.emit("large-v3", new)
+
+    saved = config.get_setting("model_overrides", "large-v3")
+    assert saved["language"] == "en"
+    assert saved["beam_size"] == 3
+    assert saved["temperature"] == 0.2
+    assert saved["vad_filter"] is True
+
+
+def test_controller_pushes_inference_settings_to_live_backend_on_change(qtbot):
+    """Editing the panel of the *active* card should also push the
+    fresh values into the running backend so the next transcribe
+    honours them without waiting for a restart."""
+    from app.inference_settings import InferenceSettings
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    class _LiveBackend:
+        def __init__(self) -> None:
+            self.received: list[InferenceSettings] = []
+
+        def update_inference_settings(self, settings) -> None:
+            self.received.append(settings)
+
+    backend = _LiveBackend()
+
+    class _StateManager:
+        def __init__(self) -> None:
+            self.backend = backend
+            self.audio_recorder = None
+            self.clipboard_manager = None
+
+    rec = FakeRecordingController(state_manager=_StateManager())
+    rec.state_manager = _StateManager()
+    rec.state_manager.backend = backend
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+
+    AppController(config=config, window=window, recording=rec)
+
+    new = InferenceSettings(language="ru", vad_filter=False, beam_size=4)
+    window.models_view.inference_settings_changed.emit("large-v3", new)
+
+    # Most recent push must match what we emitted.
+    assert backend.received[-1] == new

@@ -212,3 +212,177 @@ def test_copy_button_does_not_emit_when_no_selection(qtbot):
     qtbot.mouseClick(btn, Qt.LeftButton)
 
     assert emissions == []
+
+
+def test_history_model_exposes_full_text_via_tooltip(qtbot):
+    """Long transcripts are ellipsised in the table, so the tooltip
+    must carry the full text — quick hover-peek without opening the
+    detail dialog."""
+    from app.gui.views.history_view import HistoryTableModel
+
+    long_text = "a long transcription that overflows the column width " * 4
+    entry = FakeEntry(
+        timestamp=0.0, text=long_text, duration=1.0,
+        model="large-v3", language="ru",
+    )
+    model = HistoryTableModel([entry])
+    text_index = model.index(0, 1)  # Text column
+    assert model.data(text_index, Qt.ToolTipRole) == long_text
+
+
+def test_history_detail_dialog_shows_full_entry(qtbot):
+    """The detail dialog must surface every field — full text, time,
+    model, language, duration — so the user can read what got
+    transcribed without round-tripping through the clipboard."""
+    from app.gui.views.history_view import HistoryDetailDialog
+
+    entry = FakeEntry(
+        timestamp=0.0,
+        text="full transcription body that's too long for the table cell",
+        duration=12.5,
+        model="large-v3",
+        language="ru",
+    )
+    dialog = HistoryDetailDialog(entry)
+    qtbot.addWidget(dialog)
+    assert dialog._text.toPlainText() == entry.text
+    rendered = " ".join(
+        lbl.text() for lbl in dialog.findChildren(QLabel)
+    )
+    assert "large-v3" in rendered
+    assert "ru" in rendered
+    assert "12.5" in rendered
+
+
+def test_history_detail_dialog_copy_button_copies_text(qtbot):
+    """The dialog's Copy button must put the full text on the
+    clipboard so the user can paste it elsewhere."""
+    from PySide6.QtWidgets import QApplication
+    from app.gui.views.history_view import HistoryDetailDialog
+
+    entry = FakeEntry(
+        timestamp=0.0, text="transcribed words", duration=1.0,
+        model="large-v3", language="ru",
+    )
+    dialog = HistoryDetailDialog(entry)
+    qtbot.addWidget(dialog)
+
+    QApplication.clipboard().clear()
+    btn = next(
+        b for b in dialog.findChildren(QPushButton)
+        if b.objectName() == "DetailCopyButton"
+    )
+    btn.click()
+    assert QApplication.clipboard().text() == "transcribed words"
+
+
+def test_history_view_double_click_opens_detail(qtbot, monkeypatch):
+    """Double-clicking a row must surface the full transcript, not
+    just toggle selection — that's how the user reads long entries
+    when the table cell ellipsises."""
+    from app.gui.views.history_view import HistoryView
+
+    view = HistoryView()
+    qtbot.addWidget(view)
+
+    captured: list = []
+
+    def fake_open(self, entry):
+        captured.append(entry)
+
+    monkeypatch.setattr(HistoryView, "_open_detail_for_entry", fake_open)
+
+    entries = _make_entries(2)
+    view.set_entries(entries)
+
+    # Simulate double-click on first row — bypass mouse mechanics by
+    # invoking the slot directly via the underlying signal.
+    proxy_index = view._proxy.index(0, 1)
+    view._table.doubleClicked.emit(proxy_index)
+
+    assert len(captured) == 1
+    assert captured[0] is entries[0]
+
+
+def test_history_view_uses_pixel_scroll_mode(qtbot):
+    """History table should scroll smoothly per pixel, not per row,
+    matching the rest of the UI's scroll feel."""
+    from PySide6.QtWidgets import QAbstractItemView
+    from app.gui.views.history_view import HistoryView
+
+    view = HistoryView()
+    qtbot.addWidget(view)
+    assert view._table.verticalScrollMode() == QAbstractItemView.ScrollPerPixel
+
+
+def test_history_view_shows_empty_state_when_no_entries(qtbot):
+    """A blank table is unfriendly — surface a 'press the hotkey'
+    placeholder when there's nothing to show."""
+    from app.gui.views.history_view import HistoryView
+
+    view = HistoryView()
+    qtbot.addWidget(view)
+    view.set_entries([])
+    assert view._stack.currentWidget() is view._empty_state
+
+
+def test_history_view_swaps_to_table_when_entries_arrive(qtbot):
+    from app.gui.views.history_view import HistoryView
+
+    view = HistoryView()
+    qtbot.addWidget(view)
+    view.set_entries(_make_entries(2))
+    assert view._stack.currentWidget() is view._table_card
+
+
+def test_history_model_column_shows_short_alias(qtbot):
+    """The Model column should display the registry alias
+    (``large-v3``, ``tiny``) rather than the full canonical id
+    (``Systran/faster-whisper-large-v3``) — it's what the user
+    actually picked, and short enough not to truncate."""
+    from app.gui.views.history_view import HistoryTableModel
+
+    entry = FakeEntry(
+        timestamp=0.0,
+        text="x",
+        duration=1.0,
+        model="Systran/faster-whisper-large-v3",
+        language="ru",
+    )
+    model = HistoryTableModel([entry])
+    cell = model.data(model.index(0, 2), Qt.DisplayRole)
+    assert cell == "large-v3"
+
+
+def test_history_model_column_tooltip_shows_full_canonical(qtbot):
+    """Hovering still reveals the full canonical id for power users
+    who want to know exactly which Hugging Face repo was used."""
+    from app.gui.views.history_view import HistoryTableModel
+
+    entry = FakeEntry(
+        timestamp=0.0,
+        text="x",
+        duration=1.0,
+        model="Systran/faster-whisper-large-v3",
+        language="ru",
+    )
+    model = HistoryTableModel([entry])
+    tooltip = model.data(model.index(0, 2), Qt.ToolTipRole)
+    assert tooltip == "Systran/faster-whisper-large-v3"
+
+
+def test_history_model_column_passes_unknown_canonical_through(qtbot):
+    """If the model isn't in the registry (legacy entry, custom HF
+    id), display it as-is so the data isn't lost."""
+    from app.gui.views.history_view import HistoryTableModel
+
+    entry = FakeEntry(
+        timestamp=0.0,
+        text="x",
+        duration=1.0,
+        model="some-org/custom-model",
+        language="en",
+    )
+    model = HistoryTableModel([entry])
+    cell = model.data(model.index(0, 2), Qt.DisplayRole)
+    assert cell == "some-org/custom-model"

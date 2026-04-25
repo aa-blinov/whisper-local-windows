@@ -20,12 +20,12 @@ def test_models_view_custom_registry(qtbot):
     from app.gui.widgets.model_card import ModelCard
     from app.model_mapping import get_model
 
-    subset = (get_model("tiny"), get_model("large-v3"))
+    subset = (get_model("turbo"), get_model("large-v3"))
     view = ModelsView(models=subset)
     qtbot.addWidget(view)
 
     cards = view.findChildren(ModelCard)
-    assert [c.alias() for c in cards] == ["tiny", "large-v3"]
+    assert [c.alias() for c in cards] == ["turbo", "large-v3"]
 
 
 def test_models_view_set_active_marks_correct_card(qtbot):
@@ -52,11 +52,11 @@ def test_models_view_set_active_switches_cleanly(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    view.set_active("tiny")
+    view.set_active("turbo")
     view.set_active("large-v3")
 
     cards = {c.alias(): c for c in view.findChildren(ModelCard)}
-    assert cards["tiny"].is_active() is False
+    assert cards["turbo"].is_active() is False
     assert cards["large-v3"].is_active() is True
 
 
@@ -76,12 +76,12 @@ def test_models_view_emits_model_selected_when_card_emits(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "small")
+    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "distil-large-v3")
 
     with qtbot.waitSignal(view.model_selected, timeout=1000) as blocker:
         card.select_requested.emit(card.alias())
 
-    assert blocker.args == ["small"]
+    assert blocker.args == ["distil-large-v3"]
 
 
 def test_models_view_starts_with_no_active(qtbot):
@@ -121,6 +121,79 @@ def test_set_locked_disables_all_select_buttons(qtbot):
         assert not select_btn.isEnabled()
 
 
+def test_models_view_set_loading_elapsed_propagates_to_active_card(qtbot):
+    """Elapsed-seconds ticks should reach the active card so the user
+    sees the wait advancing during cached model loads."""
+    from app.gui.views.models_view import ModelsView
+    from app.gui.widgets.model_card import ModelCard
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+    view.set_active("turbo")
+    view.set_loading(True)
+
+    view.set_loading_elapsed(5)
+
+    cards = {c.alias(): c for c in view.findChildren(ModelCard)}
+    assert "5" in cards["turbo"]._active_pill.text()
+
+
+def test_models_view_set_loading_progress_propagates_to_active_card(qtbot):
+    """Download progress events arriving from the backend should bubble
+    down to whichever card is currently flagged as loading, so the
+    user sees percentage advance on the model they just clicked."""
+    from app.gui.views.models_view import ModelsView
+    from app.gui.widgets.model_card import ModelCard
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+    view.set_active("turbo")
+    view.set_loading(True)
+
+    view.set_loading_progress(50, 100)
+
+    cards = {c.alias(): c for c in view.findChildren(ModelCard)}
+    assert "50%" in cards["turbo"]._active_pill.text()
+    # Inactive cards' pills are hidden — text doesn't matter to the
+    # user, but we don't want to crash trying to update them either.
+
+
+def test_models_view_refresh_cache_state_propagates_to_all_cards(qtbot, monkeypatch):
+    """When the cache state for any model changes (e.g. a download just
+    finished), the view's refresh_cache_state must update every card so
+    freshly-downloaded models flip from 'Download' to 'Select'."""
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.views.models_view import ModelsView
+    from app.gui.widgets.model_card import ModelCard
+    from PySide6.QtWidgets import QPushButton
+
+    cache_status = {"cached": False}
+    monkeypatch.setattr(
+        model_card_module,
+        "is_cached_for_info",
+        lambda info: cache_status["cached"],
+    )
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    # Initially, every Select button should advertise Download.
+    for card in view.findChildren(ModelCard):
+        btn = next(
+            b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
+        )
+        assert btn.text() == "Download"
+
+    cache_status["cached"] = True
+    view.refresh_cache_state()
+
+    for card in view.findChildren(ModelCard):
+        btn = next(
+            b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
+        )
+        assert btn.text() == "Select"
+
+
 def test_set_locked_false_re_enables_buttons_for_inactive_cards(qtbot):
     from app.gui.views.models_view import ModelsView
     from app.gui.widgets.model_card import ModelCard
@@ -137,7 +210,112 @@ def test_set_locked_false_re_enables_buttons_for_inactive_cards(qtbot):
     assert cards["large-v3"].is_active() is True
     # Inactive cards must be clickable again.
     select_btn = next(
-        b for b in cards["tiny"].findChildren(__import__('PySide6.QtWidgets', fromlist=['QPushButton']).QPushButton)
+        b for b in cards["turbo"].findChildren(__import__('PySide6.QtWidgets', fromlist=['QPushButton']).QPushButton)
         if b.objectName() == "SelectButton"
     )
     assert select_btn.isEnabled()
+
+
+def test_models_view_uses_pixel_scroll_step(qtbot):
+    """The models scroll area should use a small wheel step so the
+    list scrolls pixel-by-pixel instead of jumping a whole card per
+    notch — matches the rest of the UI."""
+    from PySide6.QtWidgets import QScrollArea
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+    scroll = view.findChild(QScrollArea)
+    assert scroll is not None
+    assert scroll.verticalScrollBar().singleStep() <= 20
+
+
+def test_models_view_search_filters_by_substring(qtbot):
+    """Typing in the search box should hide cards whose
+    metadata doesn't contain the query (case-insensitive)."""
+    from PySide6.QtWidgets import QLineEdit
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    search = view.findChild(QLineEdit, "ModelsSearchEdit")
+    search.setText("turbo")
+
+    aliases = set(view.visible_aliases())
+    assert "turbo" in aliases
+    assert "turbo-int8" in aliases
+    assert "large-v3" not in aliases
+    assert "gigaam-v3-e2e-rnnt" not in aliases
+
+
+def test_models_view_search_matches_canonical_and_language(qtbot):
+    """The haystack covers alias, canonical, display name,
+    description, language, family — so 'russian' or 'bzikst'
+    both narrow to the RU fine-tunes."""
+    from PySide6.QtWidgets import QLineEdit
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    search = view.findChild(QLineEdit, "ModelsSearchEdit")
+    search.setText("russian")
+
+    aliases = set(view.visible_aliases())
+    assert "large-v3-ru" in aliases
+    assert "large-v3-ru-int8" in aliases
+    # GigaAM also says "Russian (only)" so it surfaces here too.
+    assert "gigaam-v3-e2e-rnnt" in aliases
+    # English-only cards filtered out.
+    assert "distil-large-v3" not in aliases
+
+
+def test_models_view_family_chip_filters_by_family(qtbot):
+    """Clicking the GIGAAM chip should leave only GigaAM cards visible."""
+    from PySide6.QtWidgets import QPushButton
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    chip = next(
+        b for b in view.findChildren(QPushButton)
+        if b.objectName() == "ModelsFilterChip" and b.text() == "GigaAM"
+    )
+    chip.click()
+
+    aliases = set(view.visible_aliases())
+    assert all(a.startswith("gigaam") for a in aliases)
+    assert aliases  # at least one model survived
+
+
+def test_models_view_no_match_shows_empty_state(qtbot):
+    """A search that matches nothing should swap the scroll for the
+    empty-state placeholder."""
+    from PySide6.QtWidgets import QLineEdit
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    search = view.findChild(QLineEdit, "ModelsSearchEdit")
+    search.setText("definitely-no-such-model")
+
+    assert view.visible_aliases() == []
+    assert view._stack.currentWidget() is view._empty_state
+
+
+def test_models_view_clearing_search_restores_all_cards(qtbot):
+    from PySide6.QtWidgets import QLineEdit
+    from app.gui.views.models_view import ModelsView
+    from app.model_mapping import MODELS
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    search = view.findChild(QLineEdit, "ModelsSearchEdit")
+    search.setText("turbo")
+    search.setText("")
+
+    assert set(view.visible_aliases()) == {m.alias for m in MODELS}

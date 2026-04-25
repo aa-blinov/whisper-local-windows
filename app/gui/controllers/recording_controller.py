@@ -33,6 +33,12 @@ class _HotkeyListenerLike(Protocol):
 class RecordingController(QObject):
     state_changed = Signal(str)
     history_updated = Signal()
+    # Emitted while the backend is downloading model weights from
+    # Hugging Face. ``current`` and ``total`` are byte counts (or 0 when
+    # unknown), ``desc`` is the file description from huggingface_hub
+    # (e.g. ``model.bin``). Progress comes from a non-Qt thread inside
+    # tqdm — Qt auto-queues the signal cross-thread.
+    download_progress = Signal(int, int, str)
 
     DEFAULT_POLL_INTERVAL_MS = 200
 
@@ -57,6 +63,10 @@ class RecordingController(QObject):
         # signal connection is auto-queued onto the main thread.
         self._state_manager.history_update_callback = self._on_history_update
 
+        # Wire backend download progress (if backend supports it) through
+        # to a Qt signal so the UI can show a percentage.
+        self._wire_backend_progress()
+
     # ---- public API ---------------------------------------------------------
 
     @property
@@ -70,8 +80,37 @@ class RecordingController(QObject):
     def current_state(self) -> Optional[str]:
         return self._last_state
 
-    def request_model_change(self, new_model_size: str) -> bool:
-        return self._state_manager.request_model_change(new_model_size)
+    def request_model_change(
+        self,
+        new_model_size: str,
+        compute_type: Optional[str] = None,
+    ) -> bool:
+        """Switch the active backend model. ``compute_type`` is forwarded to
+        the state manager; ``None`` keeps the current setting."""
+        return self._state_manager.request_model_change(
+            new_model_size, compute_type=compute_type
+        )
+
+    def list_input_devices(self) -> list:
+        recorder = getattr(self._state_manager, "audio_recorder", None)
+        if recorder is None or not hasattr(recorder, "list_input_devices"):
+            return []
+        try:
+            return recorder.list_input_devices()
+        except Exception:
+            return []
+
+    def current_input_device(self):
+        recorder = getattr(self._state_manager, "audio_recorder", None)
+        return getattr(recorder, "device", None) if recorder is not None else None
+
+    def set_input_device(self, raw):
+        """Switch the recorder's input device. Accepts ``None`` (system
+        default), an int index, or a substring of the device name."""
+        recorder = getattr(self._state_manager, "audio_recorder", None)
+        if recorder is None or not hasattr(recorder, "set_device"):
+            return None
+        return recorder.set_device(raw)
 
     def shutdown(self) -> None:
         if self._shutdown_done:
@@ -109,3 +148,20 @@ class RecordingController(QObject):
         # Called on the transcription pipeline thread. The signal connection
         # is queued cross-thread, so subscribers see it on the Qt main thread.
         self.history_updated.emit()
+
+    def _wire_backend_progress(self) -> None:
+        """Install a callback on the backend that re-emits progress as a
+        Qt signal. Called once at construction; safe if the backend
+        doesn't support ``set_progress_callback`` (no-op)."""
+        backend = getattr(self._state_manager, "backend", None)
+        if backend is None or not hasattr(backend, "set_progress_callback"):
+            return
+        try:
+            backend.set_progress_callback(self._on_backend_progress)
+        except Exception as exc:
+            log.debug("set_progress_callback failed: %s", exc)
+
+    def _on_backend_progress(self, current: int, total: int, desc: str) -> None:
+        # Fired from a non-Qt thread inside tqdm.update. Qt auto-queues
+        # signal emission to the main thread.
+        self.download_progress.emit(int(current), int(total), str(desc))

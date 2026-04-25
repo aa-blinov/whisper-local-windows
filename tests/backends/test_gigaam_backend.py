@@ -1,0 +1,327 @@
+"""Tests for the GigaAM backend.
+
+GigaAM ships its own model loader; tests monkey-patch ``gigaam.load_model``
+with a MagicMock so we never download real weights or pull in the heavy
+PyTorch dependency tree.
+"""
+
+from __future__ import annotations
+
+import sys
+import time
+import types
+from typing import Callable
+from unittest.mock import MagicMock
+
+import numpy as np
+import pytest
+
+
+def _wait(predicate: Callable[[], bool], timeout: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+def _install_fake_gigaam(monkeypatch, load_model=None) -> MagicMock:
+    """Install a fake ``gigaam`` module exposing ``load_model``."""
+    fake = types.ModuleType("gigaam")
+    fake.load_model = load_model or MagicMock(return_value=MagicMock())
+    monkeypatch.setitem(sys.modules, "gigaam", fake)
+    return fake
+
+
+# ---- Construction & initial state ------------------------------------------
+
+
+def test_initial_status_is_stopped():
+    from app.backends.gigaam_backend import GigaamBackend
+
+    backend = GigaamBackend(model="v2_ctc")
+    assert backend.status() == "stopped"
+    assert backend.current_model() == "v2_ctc"
+    assert backend.health_check() is False
+
+
+def test_implements_transcription_backend_protocol():
+    from app.backends.base import TranscriptionBackend
+    from app.backends.gigaam_backend import GigaamBackend
+
+    backend = GigaamBackend(model="v2_ctc")
+    assert isinstance(backend, TranscriptionBackend)
+
+
+# ---- Loading ---------------------------------------------------------------
+
+
+def test_load_transitions_through_loading_to_ready(monkeypatch):
+    from app.backends.gigaam_backend import GigaamBackend
+
+    _install_fake_gigaam(monkeypatch)
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    assert backend.health_check() is True
+
+
+def test_load_failure_transitions_to_error(monkeypatch):
+    from app.backends.gigaam_backend import GigaamBackend
+
+    def boom(_name):
+        raise RuntimeError("model file missing")
+
+    _install_fake_gigaam(monkeypatch, load_model=boom)
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "error")
+    assert backend.health_check() is False
+
+
+def test_load_passes_model_name_to_loader(monkeypatch):
+    from app.backends.gigaam_backend import GigaamBackend
+
+    load_model = MagicMock(return_value=MagicMock())
+    _install_fake_gigaam(monkeypatch, load_model=load_model)
+
+    backend = GigaamBackend(model="v2_rnnt")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    load_model.assert_called_once()
+    args, _kwargs = load_model.call_args
+    assert args[0] == "v2_rnnt"
+
+
+# ---- Transcription ---------------------------------------------------------
+
+
+def test_transcribe_returns_model_text(monkeypatch):
+    from app.backends.gigaam_backend import GigaamBackend
+
+    fake_model = MagicMock()
+    fake_model.transcribe.return_value = "привет мир"
+    _install_fake_gigaam(
+        monkeypatch, load_model=MagicMock(return_value=fake_model)
+    )
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    audio = np.zeros(16000, dtype=np.float32)
+    result = backend.transcribe(audio, sample_rate=16000)
+    assert result == "привет мир"
+
+
+def test_transcribe_returns_none_when_not_loaded():
+    from app.backends.gigaam_backend import GigaamBackend
+
+    backend = GigaamBackend(model="v2_ctc")
+    audio = np.zeros(16000, dtype=np.float32)
+    assert backend.transcribe(audio) is None
+
+
+def test_transcribe_returns_none_when_model_returned_empty(monkeypatch):
+    from app.backends.gigaam_backend import GigaamBackend
+
+    fake_model = MagicMock()
+    fake_model.transcribe.return_value = "   "  # only whitespace
+    _install_fake_gigaam(
+        monkeypatch, load_model=MagicMock(return_value=fake_model)
+    )
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    assert backend.transcribe(np.zeros(16000, dtype=np.float32)) is None
+
+
+def test_transcribe_swallows_runtime_errors(monkeypatch):
+    from app.backends.gigaam_backend import GigaamBackend
+
+    fake_model = MagicMock()
+    fake_model.transcribe.side_effect = RuntimeError("decoder crashed")
+    _install_fake_gigaam(
+        monkeypatch, load_model=MagicMock(return_value=fake_model)
+    )
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    assert backend.transcribe(np.zeros(16000, dtype=np.float32)) is None
+
+
+def test_transcribe_routes_long_audio_through_longform(monkeypatch):
+    """Captures longer than ~25 s have to go through GigaAM's
+    ``transcribe_longform`` — plain ``transcribe`` is documented as
+    good only up to that threshold and would silently truncate."""
+    from app.backends.gigaam_backend import GigaamBackend
+
+    plain_calls: list[str] = []
+    longform_calls: list[str] = []
+
+    class _Segment:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.start = 0
+            self.end = 1
+
+    def transcribe(_path):
+        plain_calls.append(_path)
+        return MagicMock(text="short result")
+
+    def transcribe_longform(path):
+        longform_calls.append(path)
+        return [_Segment("первый сегмент"), _Segment("второй сегмент")]
+
+    fake_model = MagicMock()
+    fake_model.transcribe.side_effect = transcribe
+    fake_model.transcribe_longform.side_effect = transcribe_longform
+
+    _install_fake_gigaam(
+        monkeypatch, load_model=MagicMock(return_value=fake_model)
+    )
+
+    backend = GigaamBackend(model="v3_e2e_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    # 30 seconds at 16 kHz mono.
+    long_audio = np.zeros(16000 * 30, dtype=np.float32)
+    text = backend.transcribe(long_audio, sample_rate=16000)
+
+    assert text == "первый сегмент второй сегмент"
+    assert len(longform_calls) == 1
+    assert plain_calls == []  # plain transcribe never called
+
+
+def test_transcribe_falls_back_to_plain_when_longform_raises(monkeypatch):
+    """If ``transcribe_longform`` blows up (deps missing or pyannote
+    gated model not accepted), drop back to plain ``transcribe`` so
+    the user gets at least a partial result rather than nothing."""
+    from app.backends.gigaam_backend import GigaamBackend
+
+    plain_calls: list[str] = []
+
+    def transcribe(path):
+        plain_calls.append(path)
+        return MagicMock(text="fallback text")
+
+    fake_model = MagicMock()
+    fake_model.transcribe.side_effect = transcribe
+    fake_model.transcribe_longform.side_effect = RuntimeError(
+        "pyannote/segmentation-3.0 not accepted"
+    )
+
+    _install_fake_gigaam(
+        monkeypatch, load_model=MagicMock(return_value=fake_model)
+    )
+
+    backend = GigaamBackend(model="v3_e2e_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    long_audio = np.zeros(16000 * 30, dtype=np.float32)
+    text = backend.transcribe(long_audio, sample_rate=16000)
+
+    assert text == "fallback text"
+    assert len(plain_calls) == 1
+
+
+def test_transcribe_writes_audio_to_wav_and_passes_path(monkeypatch, tmp_path):
+    """GigaAM's ``transcribe`` only accepts a path on disk. The
+    backend must spool the captured numpy buffer to a temp WAV
+    first, hand the path over, then clean up."""
+    from app.backends.gigaam_backend import GigaamBackend
+
+    captured_paths: list[str] = []
+
+    class _Result:
+        text = "тестовый текст"
+        words = []
+
+    def model_transcribe(wav_file):
+        captured_paths.append(wav_file)
+        # Confirm the file actually exists at the time of the call.
+        import os
+
+        assert os.path.isfile(wav_file)
+        return _Result()
+
+    fake_model = MagicMock()
+    fake_model.transcribe.side_effect = model_transcribe
+    _install_fake_gigaam(
+        monkeypatch, load_model=MagicMock(return_value=fake_model)
+    )
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    audio = np.zeros(16000, dtype=np.float32)
+    text = backend.transcribe(audio, sample_rate=16000)
+
+    assert text == "тестовый текст"
+    assert len(captured_paths) == 1
+    # Cleanup happened — the file is gone after transcribe returns.
+    import os
+
+    assert not os.path.exists(captured_paths[0])
+
+
+# ---- Model swap ------------------------------------------------------------
+
+
+def test_change_model_loads_new_model(monkeypatch):
+    from app.backends.gigaam_backend import GigaamBackend
+
+    load_model = MagicMock(return_value=MagicMock())
+    _install_fake_gigaam(monkeypatch, load_model=load_model)
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    backend.change_model("v2_rnnt")
+    assert _wait(lambda: backend.current_model() == "v2_rnnt")
+    assert _wait(lambda: backend.status() == "ready")
+    # Loader called twice: initial + change.
+    assert load_model.call_count == 2
+
+
+def test_change_model_to_same_name_is_noop(monkeypatch):
+    from app.backends.gigaam_backend import GigaamBackend
+
+    load_model = MagicMock(return_value=MagicMock())
+    _install_fake_gigaam(monkeypatch, load_model=load_model)
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    backend.change_model("v2_ctc")
+    time.sleep(0.05)
+
+    assert load_model.call_count == 1
+
+
+# ---- Shutdown --------------------------------------------------------------
+
+
+def test_shutdown_resets_state_to_stopped(monkeypatch):
+    from app.backends.gigaam_backend import GigaamBackend
+
+    _install_fake_gigaam(monkeypatch)
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    backend.shutdown()
+    assert backend.status() == "stopped"

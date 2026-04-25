@@ -29,24 +29,14 @@ def test_topbar_does_not_duplicate_window_title(qtbot):
     assert _label_by_name(bar, "TopBarTitle") is None
 
 
-def test_topbar_has_section_title_label(qtbot):
+def test_topbar_no_longer_duplicates_section_label(qtbot):
+    """The sidebar already highlights the active section; repeating
+    its name in the topbar was just visual noise."""
     from app.gui.widgets.topbar import TopBar
 
     bar = TopBar()
     qtbot.addWidget(bar)
-    assert _label_by_name(bar, "TopBarSectionTitle") is not None
-
-
-def test_set_section_title_updates_label(qtbot):
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-    bar.set_section_title("Models")
-    assert _label_by_name(bar, "TopBarSectionTitle").text() == "Models"
-
-    bar.set_section_title("History")
-    assert _label_by_name(bar, "TopBarSectionTitle").text() == "History"
+    assert _label_by_name(bar, "TopBarSectionTitle") is None
 
 
 def test_topbar_default_model_pill_text_when_no_model(qtbot):
@@ -181,17 +171,38 @@ def test_set_recording_state_processing_shows_pill(qtbot):
     assert "processing" in pill.text().lower()
 
 
-def test_set_recording_state_model_loading_shows_pill(qtbot):
+def test_set_recording_state_model_loading_flips_model_pill(qtbot):
+    """``model_loading`` is reflected on the model pill (yellow
+    'Loading: …' state), not on the recording pill — keeps the
+    topbar from showing two near-duplicate loading indicators."""
     from app.gui.widgets.topbar import TopBar
 
     bar = TopBar()
     qtbot.addWidget(bar)
     bar.show()
+    bar.set_active_model("Tiny (test)")
     bar.set_recording_state("model_loading")
-    pill = _recording_pill(bar)
-    assert pill.isVisibleTo(bar)
-    assert pill.property("state") == "model_loading"
-    assert "model" in pill.text().lower()
+
+    assert not _recording_pill(bar).isVisibleTo(bar)
+    model_pill = _label_by_name(bar, "TopBarModelPill")
+    assert model_pill.property("state") == "loading"
+    assert "loading" in model_pill.text().lower()
+    assert "Tiny (test)" in model_pill.text()
+
+
+def test_model_pill_returns_to_active_when_loading_ends(qtbot):
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.show()
+    bar.set_active_model("Tiny (test)")
+    bar.set_recording_state("model_loading")
+    bar.set_recording_state("idle")
+
+    pill = _label_by_name(bar, "TopBarModelPill")
+    assert pill.property("state") == "active"
+    assert "Current model" in pill.text()
 
 
 def test_set_recording_state_back_to_idle_hides_pill(qtbot):
@@ -212,3 +223,86 @@ def test_set_recording_state_rejects_unknown(qtbot):
     qtbot.addWidget(bar)
     with pytest.raises(ValueError):
         bar.set_recording_state("snoozing")
+
+
+def test_topbar_set_loading_elapsed_appends_seconds_when_no_progress(qtbot):
+    """While the backend is in model_loading state but no tqdm progress
+    has fired (cached model deserialisation), the elapsed-seconds
+    counter is the only signal that the wait is advancing.
+
+    Now lives on the model pill, not the recording pill.
+    """
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.set_active_model("Tiny (test)")
+    bar.set_recording_state("model_loading")
+
+    bar.set_loading_elapsed(5)
+    text = _label_by_name(bar, "TopBarModelPill").text()
+    assert "5" in text and "s" in text.lower()
+
+
+def test_topbar_loading_progress_takes_priority_over_elapsed(qtbot):
+    """Once download bytes start arriving, the percentage is more
+    informative than the elapsed counter."""
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.set_active_model("Tiny (test)")
+    bar.set_recording_state("model_loading")
+
+    bar.set_loading_elapsed(7)
+    bar.set_loading_progress(35, 100)
+    text = _label_by_name(bar, "TopBarModelPill").text()
+    assert "35%" in text
+    assert "7s" not in text
+
+
+def test_topbar_back_to_idle_clears_elapsed_state(qtbot):
+    """Once loading ends, the elapsed counter must reset so the next
+    loading session doesn't start at a stale number."""
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.set_active_model("Tiny (test)")
+    bar.set_recording_state("model_loading")
+    bar.set_loading_elapsed(8)
+
+    bar.set_recording_state("idle")
+    bar.set_recording_state("model_loading")
+    text = _label_by_name(bar, "TopBarModelPill").text()
+    assert "8" not in text
+
+
+def test_topbar_vu_meter_only_visible_in_recording_state(qtbot):
+    """The VU meter is meaningless outside the ``recording`` state —
+    show it only while audio is actually being captured."""
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.show()
+
+    # idle on construction → hidden.
+    assert not bar._vu_meter.isVisible()
+
+    bar.set_recording_state("recording")
+    assert bar._vu_meter.isVisibleTo(bar)
+
+    bar.set_recording_state("processing")
+    # Past recording — back to hidden.
+    assert not bar._vu_meter.isVisibleTo(bar) or bar._vu_meter.isHidden()
+
+
+def test_topbar_set_input_level_forwards_to_meter(qtbot):
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.set_recording_state("recording")
+    bar.set_input_level(0.6)
+    assert bar._vu_meter.current_level() == 0.6

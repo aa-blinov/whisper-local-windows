@@ -3,7 +3,7 @@
 QWidget {
     background-color: {{color.bg_primary}};
     color: {{color.text_primary}};
-    font-family: "{{font.family}}";
+    font-family: {{font.family}};
     font-size: {{font.size_body}};
 }
 
@@ -34,16 +34,58 @@ QLabel[role="muted"] {
     font-size: {{font.size_small}};
 }
 
+QLabel[role="section-header"] {
+    color: {{color.accent_hover}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding-bottom: 2px;
+}
+
+QLabel[role="empty-title"] {
+    color: {{color.text_primary}};
+    font-size: {{font.size_heading}};
+    font-weight: 600;
+}
+
+QLabel[role="empty-hint"] {
+    color: {{color.text_muted}};
+    font-size: {{font.size_body}};
+}
+
+QLabel[role="test-result-good"] {
+    color: {{color.success}};
+    font-size: {{font.size_small}};
+    font-weight: 500;
+}
+
+QLabel[role="test-result-warn"] {
+    color: {{color.warning}};
+    font-size: {{font.size_small}};
+    font-weight: 500;
+}
+
+QLabel[role="test-result-bad"] {
+    color: {{color.danger}};
+    font-size: {{font.size_small}};
+    font-weight: 500;
+}
+
+/* ---- Buttons ------------------------------------------------------------- */
+
 QPushButton {
     background-color: {{color.bg_elevated}};
     color: {{color.text_primary}};
     border: 1px solid {{color.border}};
     border-radius: {{radius.sm}};
-    padding: {{space.sm}} {{space.md}};
+    padding: 9px 18px;
+    font-weight: 500;
+    min-height: 16px;
 }
 
 QPushButton:hover {
-    background-color: {{color.border}};
+    background-color: {{color.bg_hover}};
     border-color: {{color.accent}};
 }
 
@@ -51,58 +93,268 @@ QPushButton:pressed {
     background-color: {{color.bg_secondary}};
 }
 
+QPushButton:disabled {
+    color: {{color.text_muted}};
+    background-color: {{color.bg_secondary}};
+    border-color: {{color.border}};
+}
+
 QPushButton[role="primary"] {
     background-color: {{color.accent}};
     color: {{color.text_primary}};
-    border: none;
+    border: 1px solid {{color.accent}};
+    font-weight: 600;
 }
 
 QPushButton[role="primary"]:hover {
     background-color: {{color.accent_hover}};
+    border-color: {{color.accent_hover}};
 }
+
+QPushButton[role="primary"]:disabled {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_muted}};
+    border-color: {{color.border}};
+}
+
+/* ---- Cards --------------------------------------------------------------- */
 
 QFrame[role="card"] {
     background-color: {{color.bg_secondary}};
     border: 1px solid {{color.border}};
-    border-radius: {{radius.md}};
+    border-radius: {{radius.lg}};
+}
+
+QFrame[role="card"]:hover {
+    border-color: {{color.accent_hover}};
 }
 
 QFrame[role="card"][active="true"] {
     border: 1px solid {{color.accent}};
+    background-color: {{color.bg_elevated}};
 }
+
+/* ---- Badges + pills ------------------------------------------------------ */
 
 QLabel[role="badge"] {
     background-color: {{color.bg_elevated}};
-    color: {{color.text_secondary}};
+    color: {{color.text_primary}};
+    border: 1px solid {{color.border}};
     border-radius: {{radius.sm}};
-    padding: 2px {{space.sm}};
+    padding: {{space.xs}} {{space.md}};
     font-size: {{font.size_small}};
+    font-weight: 500;
+}
+
+/* ---- Filter chips in the Models toolbar -------------------------------- */
+
+QPushButton[role="filter-chip"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_secondary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    padding: 4px 12px;
+    font-size: {{font.size_small}};
+    font-weight: 500;
+    min-height: 18px;
+}
+
+QPushButton[role="filter-chip"]:hover {
+    background-color: {{color.bg_hover}};
+    color: {{color.text_primary}};
+    border-color: {{color.accent_hover}};
+}
+
+QPushButton[role="filter-chip"]:checked {
+    background-color: {{color.accent}};
+    color: {{color.text_primary}};
+    border-color: {{color.accent}};
+}
+
+/* ---- Inference settings panel inside an active card -------------------- */
+
+QFrame[role="inference-panel"] {
+    background-color: transparent;
+    border-top: 1px solid {{color.border}};
+    margin-top: {{space.sm}};
+    padding-top: {{space.sm}};
+}
+
+QFrame[role="inference-panel"] QSpinBox,
+QFrame[role="inference-panel"] QDoubleSpinBox {
+    background-color: {{color.bg_secondary}};
+    color: {{color.text_primary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    padding: 4px 8px;
+    selection-background-color: {{color.accent}};
+}
+
+QFrame[role="inference-panel"] QSpinBox:focus,
+QFrame[role="inference-panel"] QDoubleSpinBox:focus {
+    border-color: {{color.accent}};
+}
+
+/* Belt-and-braces with ``setButtonSymbols(NoButtons)``: when a
+   spinbox is otherwise styled via QSS, Qt on Windows can still
+   render the native up/down sub-controls. Collapse the
+   sub-controls to zero size so the body of the field stays a
+   clean rounded rectangle that matches the other inputs. */
+QFrame[role="inference-panel"] QSpinBox::up-button,
+QFrame[role="inference-panel"] QSpinBox::down-button,
+QFrame[role="inference-panel"] QDoubleSpinBox::up-button,
+QFrame[role="inference-panel"] QDoubleSpinBox::down-button {
+    width: 0;
+    height: 0;
+    border: none;
+    background: transparent;
+}
+
+QFrame[role="inference-panel"] QSpinBox::up-arrow,
+QFrame[role="inference-panel"] QSpinBox::down-arrow,
+QFrame[role="inference-panel"] QDoubleSpinBox::up-arrow,
+QFrame[role="inference-panel"] QDoubleSpinBox::down-arrow {
+    width: 0;
+    height: 0;
+    image: none;
+}
+
+/* ---- Family chip on model cards ----------------------------------------- */
+
+QLabel[role="family-chip"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_primary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    padding: 3px 10px;
+    font-size: {{font.size_small}};
+    font-weight: 700;
+    letter-spacing: 1px;
+}
+
+QLabel[role="family-chip"][family="whisper"] {
+    background-color: #1d2746;
+    color: #93b5ff;
+    border: 1px solid #2d3f6c;
+}
+
+QLabel[role="family-chip"][family="whisper-turbo"] {
+    background-color: #3d2a0a;
+    color: #fbbf24;
+    border: 1px solid #5a3f17;
+}
+
+QLabel[role="family-chip"][family="whisper-distil"] {
+    background-color: #1c3a28;
+    color: #86efac;
+    border: 1px solid #2c5a3e;
+}
+
+QLabel[role="family-chip"][family="whisper-ru"] {
+    background-color: #4a1c1c;
+    color: #fca5a5;
+    border: 1px solid #6c2929;
+}
+
+QLabel[role="family-chip"][family="gigaam"] {
+    background-color: #3a1c4a;
+    color: #d8b4fe;
+    border: 1px solid #5a2c6c;
+}
+
+/* Tier 1 — semantic highlight when the value is the desirable one. */
+QLabel[role="badge"][cat="speed"][value="fast"] {
+    background-color: #1c3a28;
+    color: #86efac;
+    border: 1px solid #2c5a3e;
+}
+
+QLabel[role="badge"][cat="quality"][value="excellent"] {
+    background-color: #1d2746;
+    color: #93b5ff;
+    border: 1px solid #2d3f6c;
+}
+
+/* Tier 3 — purely informational metadata, dimmer + outlined only. */
+QLabel[role="badge"][cat="compute"],
+QLabel[role="badge"][cat="lang"] {
+    background-color: transparent;
+    color: {{color.text_secondary}};
+    border: 1px solid {{color.border}};
 }
 
 QLabel[role="pill-active"] {
-    background-color: {{color.accent}};
-    color: {{color.text_primary}};
+    background-color: {{color.success}};
+    color: {{color.bg_primary}};
     border-radius: {{radius.sm}};
-    padding: 2px {{space.sm}};
+    padding: 4px {{space.md}};
     font-size: {{font.size_small}};
     font-weight: 600;
 }
+
+QLabel[role="pill-active"][state="loading"] {
+    background-color: {{color.warning}};
+    color: {{color.bg_primary}};
+}
+
+/* ---- Toast --------------------------------------------------------------- */
+
+QFrame[role="toast"] {
+    background-color: {{color.bg_elevated}};
+    border: 1px solid {{color.accent}};
+    border-radius: {{radius.md}};
+}
+
+QLabel[role="toast-title"] {
+    color: {{color.success}};
+    font-weight: 600;
+    font-size: {{font.size_small}};
+}
+
+QLabel[role="toast-body"] {
+    color: {{color.text_primary}};
+    font-size: {{font.size_body}};
+}
+
+/* ---- TopBar -------------------------------------------------------------- */
 
 #TopBar {
     background-color: {{color.bg_secondary}};
     border-bottom: 1px solid {{color.border}};
 }
 
-QLabel[role="section-title"] {
-    font-size: {{font.size_heading}};
-    font-weight: 600;
-    color: {{color.text_primary}};
+/* Empty zone above the sidebar — same horizontal footprint, no
+   visible border. Just keeps the topbar's content aligned to the
+   sidebar's right edge. */
+#TopBarGutter {
     background-color: transparent;
+}
+
+QLabel[role="model-pill"] {
+    background-color: #1d2746;
+    color: #93b5ff;
+    border: 1px solid #2d3f6c;
+    border-radius: {{radius.sm}};
+    padding: 4px {{space.md}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+}
+
+QLabel[role="model-pill"][state="empty"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_muted}};
+    border: 1px solid {{color.border}};
+}
+
+QLabel[role="model-pill"][state="loading"] {
+    background-color: {{color.warning}};
+    color: {{color.bg_primary}};
+    border: 1px solid {{color.warning}};
 }
 
 QLabel[role="status-pill"] {
     border-radius: {{radius.sm}};
-    padding: 2px {{space.sm}};
+    padding: 4px {{space.md}};
     font-size: {{font.size_small}};
     font-weight: 600;
     background-color: {{color.bg_elevated}};
@@ -131,7 +383,7 @@ QLabel[role="status-pill"][status="unknown"] {
 
 QLabel[role="recording-pill"] {
     border-radius: {{radius.sm}};
-    padding: 2px {{space.sm}};
+    padding: 4px {{space.md}};
     font-size: {{font.size_small}};
     font-weight: 600;
     background-color: {{color.bg_elevated}};
@@ -151,4 +403,199 @@ QLabel[role="recording-pill"][state="processing"] {
 QLabel[role="recording-pill"][state="model_loading"] {
     background-color: {{color.warning}};
     color: {{color.bg_primary}};
+}
+
+/* ---- Sidebar ------------------------------------------------------------- */
+
+#Sidebar {
+    background-color: {{color.bg_secondary}};
+    border-right: 1px solid {{color.border}};
+}
+
+#SidebarList {
+    background-color: transparent;
+    border: none;
+    outline: none;
+    padding: {{space.sm}} {{space.xs}};
+}
+
+#SidebarList::item {
+    padding: 10px 14px;
+    margin: 2px {{space.sm}};
+    border-radius: {{radius.sm}};
+    color: {{color.text_secondary}};
+}
+
+#SidebarList::item:hover {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_primary}};
+}
+
+#SidebarList::item:selected {
+    background-color: {{color.accent}};
+    color: {{color.text_primary}};
+}
+
+/* ---- Scrollbars ---------------------------------------------------------- */
+
+QScrollBar:vertical {
+    background-color: transparent;
+    width: 10px;
+    margin: 4px 2px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: {{color.border}};
+    border-radius: 4px;
+    min-height: 24px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: {{color.text_muted}};
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0;
+    background: none;
+}
+
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+QScrollBar:horizontal {
+    background-color: transparent;
+    height: 10px;
+    margin: 2px 4px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: {{color.border}};
+    border-radius: 4px;
+    min-width: 24px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: {{color.text_muted}};
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0;
+    background: none;
+}
+
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {
+    background: none;
+}
+
+/* ---- Form inputs --------------------------------------------------------- */
+
+QLineEdit,
+QPlainTextEdit,
+QTextEdit,
+QComboBox {
+    background-color: {{color.bg_secondary}};
+    color: {{color.text_primary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    padding: 6px 10px;
+    selection-background-color: {{color.accent}};
+}
+
+QLineEdit:focus,
+QPlainTextEdit:focus,
+QTextEdit:focus,
+QComboBox:focus {
+    border-color: {{color.accent}};
+}
+
+/* Replace the native ``::drop-down`` rendering — Qt's default
+   sub-control draws its own background on top of our rounded
+   border, so the chevron looks like it's sitting in a square
+   chip glued to the right edge. Make the area transparent and
+   substitute a bundled chevron SVG. */
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 24px;
+    border: none;
+    background: transparent;
+}
+
+QComboBox::down-arrow {
+    image: url("{{path.styles_dir}}/icons/chevron-down.svg");
+    width: 12px;
+    height: 12px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: {{color.bg_secondary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    selection-background-color: {{color.accent}};
+    selection-color: {{color.text_primary}};
+    padding: 4px;
+}
+
+QCheckBox {
+    background-color: transparent;
+    spacing: 10px;
+    color: {{color.text_primary}};
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1px solid {{color.border}};
+    background-color: {{color.bg_elevated}};
+}
+
+QCheckBox::indicator:hover {
+    border-color: {{color.accent_hover}};
+}
+
+QCheckBox::indicator:checked {
+    background-color: {{color.accent}};
+    border-color: {{color.accent}};
+    image: url("{{path.styles_dir}}/check.svg");
+}
+
+QCheckBox::indicator:checked:hover {
+    background-color: {{color.accent_hover}};
+    border-color: {{color.accent_hover}};
+}
+
+QCheckBox::indicator:disabled {
+    border-color: {{color.border}};
+    background-color: {{color.bg_secondary}};
+}
+
+/* ---- Tables -------------------------------------------------------------- */
+
+QTableView {
+    background-color: {{color.bg_secondary}};
+    alternate-background-color: {{color.bg_elevated}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    gridline-color: {{color.border}};
+    selection-background-color: {{color.accent}};
+}
+
+QHeaderView::section {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_secondary}};
+    padding: 6px 10px;
+    border: none;
+    border-right: 1px solid {{color.border}};
+    border-bottom: 1px solid {{color.border}};
+    font-weight: 600;
+}
+
+QHeaderView::section:last {
+    border-right: none;
 }

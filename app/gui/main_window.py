@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -20,6 +20,7 @@ from app.gui.views.models_view import ModelsView
 from app.gui.views.placeholder import PlaceholderView
 from app.gui.views.shortcuts_view import ShortcutsView
 from app.gui.widgets.sidebar import Sidebar
+from app.gui.widgets.toast import Toast
 from app.gui.widgets.topbar import TopBar
 
 
@@ -81,9 +82,28 @@ class MainWindow(QMainWindow):
         default_key = self.sidebar.active_key()
         if default_key in self._views:
             self.stack.setCurrentWidget(self._views[default_key])
-            self.topbar.set_section_title(default_key.capitalize())
 
         self.sidebar.nav_selected.connect(self._on_nav_selected)
+
+        # Floating banner that shows after every successful
+        # transcription. Parented to the central widget so it sits
+        # above the views; positioned in the top-right by ``Toast``
+        # itself.
+        self.toast = Toast(parent=central)
+        central.installEventFilter(self)
+
+        # Ctrl+1..4 jump straight to the matching tab — same order as
+        # the sidebar.
+        self._shortcuts: list[QShortcut] = []
+        nav_keys = list(self.sidebar.items())
+        for index, key in enumerate(nav_keys[:9]):
+            sc = QShortcut(
+                QKeySequence(f"Ctrl+{index + 1}"),
+                self,
+            )
+            sc.setContext(Qt.ApplicationShortcut)
+            sc.activated.connect(lambda k=key: self._activate_nav(k))
+            self._shortcuts.append(sc)
 
     def get_view(self, key: str) -> QWidget:
         if key not in self._views:
@@ -113,4 +133,20 @@ class MainWindow(QMainWindow):
     def _on_nav_selected(self, key: str) -> None:
         if key in self._views:
             self.stack.setCurrentWidget(self._views[key])
-            self.topbar.set_section_title(key.capitalize())
+
+    def _activate_nav(self, key: str) -> None:
+        """Switch to the named tab — used by the Ctrl+N keyboard
+        shortcuts."""
+        try:
+            self.sidebar.set_active(key)
+        except ValueError:
+            pass
+
+    def eventFilter(self, watched, event):  # noqa: N802 (Qt naming)
+        # Re-anchor the toast on resize so it sticks to the top-right
+        # corner regardless of window size.
+        from PySide6.QtCore import QEvent
+
+        if event.type() == QEvent.Resize and watched is self.centralWidget():
+            self.toast.parentResized()
+        return super().eventFilter(watched, event)

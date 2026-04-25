@@ -52,6 +52,28 @@ def test_bridge_format_includes_level(qtbot):
         logger.removeHandler(bridge.handler())
 
 
+def test_bridge_emits_structured_record(qtbot):
+    """Alongside the legacy formatted line, every record must surface
+    on the structured ``record_received`` signal so the LogsView can
+    colour-code by level and filter by logger name."""
+    from app.gui.log_bridge import QtLogBridge
+
+    bridge = QtLogBridge()
+    logger = logging.getLogger("test.bridge.structured")
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(bridge.handler())
+    try:
+        with qtbot.waitSignal(bridge.record_received, timeout=1000) as blocker:
+            logger.warning("careful now")
+        asctime, level, name, message = blocker.args
+        assert level == "WARNING"
+        assert name == "test.bridge.structured"
+        assert message == "careful now"
+        assert asctime  # non-empty timestamp string
+    finally:
+        logger.removeHandler(bridge.handler())
+
+
 def test_bridge_respects_handler_level_filter(qtbot):
     from app.gui.log_bridge import QtLogBridge
 

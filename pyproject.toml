@@ -21,11 +21,26 @@ dependencies = [
     "pywin32>=311; platform_system=='Windows'",
     "pyautogui>=0.9.54; platform_system=='Windows'",
     "requests>=2.33.1",
-    "docker>=7.1.0",
-    "wyoming>=1.8.0",
     "pyyaml>=6.0.3",
     "pyinstaller>=6.20.0",
     "pyside6>=6.11.0",
+    "faster-whisper>=1.2.1",
+    "nvidia-cublas-cu12>=12.8",
+    "nvidia-cudnn-cu12>=9.0",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+    "psutil>=6.0",
+    # Used by the resource monitor in the topbar to report GPU VRAM /
+    # utilisation. Falls back gracefully on machines without an
+    # NVIDIA driver — the widget just hides the GPU bar.
+    "nvidia-ml-py>=12.0",
+    # ``[longform]`` pulls in pyannote-audio for VAD-based segmentation
+    # so ``model.transcribe_longform`` works on captures > 25 seconds.
+    # Requires the user to have accepted the gated
+    # ``pyannote/segmentation-3.0`` model on Hugging Face with
+    # ``HF_TOKEN`` set; without that, ``transcribe_longform`` will
+    # raise and we fall back to plain ``transcribe``.
+    "gigaam[longform] @ git+https://github.com/salute-developers/GigaAM",
 ]
 
 [project.scripts]

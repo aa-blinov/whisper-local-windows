@@ -89,7 +89,16 @@ def test_model_info_is_frozen():
 def test_registry_contains_core_models():
     from app.model_mapping import MODELS, aliases
 
-    expected = {"tiny", "base", "small", "medium", "large-v3"}
+    # Lineup is the post-cleanup powerful presets — large-v3 family
+    # plus turbo / distil and Russian fine-tunes.
+    expected = {
+        "turbo",
+        "distil-large-v3",
+        "large-v3",
+        "large-v3-int8",
+        "large-v3-ru",
+        "large-v3-ru-int8",
+    }
     assert expected.issubset(set(aliases()))
     assert len(MODELS) == len(aliases())
 
@@ -148,3 +157,34 @@ def test_alias_for_passes_through_unknown_canonicals():
     from app.model_mapping import alias_for
 
     assert alias_for("unknown/model") == "unknown/model"
+
+
+def test_every_registry_entry_carries_a_known_family():
+    from app.model_mapping import FAMILIES, MODELS
+
+    for info in MODELS:
+        assert info.family in FAMILIES, (
+            f"{info.alias} has unknown family {info.family!r}"
+        )
+
+
+def test_model_url_for_faster_whisper_points_at_hf_repo():
+    from app.model_mapping import get_model, model_url
+
+    info = get_model("large-v3")
+    assert model_url(info) == (
+        "https://huggingface.co/Systran/faster-whisper-large-v3"
+    )
+
+
+def test_model_url_for_gigaam_points_at_github():
+    """GigaAM doesn't ship via Hugging Face — its weights come from
+    Sber's CDN. The closest "model home" the user can browse is the
+    project's GitHub README, so all GigaAM cards link there."""
+    from app.model_mapping import get_model, model_url
+
+    info = get_model("gigaam-v3-e2e-ctc")
+    assert model_url(info) == "https://github.com/salute-developers/GigaAM"
+
+    info_rnnt = get_model("gigaam-v3-e2e-rnnt")
+    assert model_url(info_rnnt) == "https://github.com/salute-developers/GigaAM"
