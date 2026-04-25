@@ -146,6 +146,30 @@ QLabel[role="badge"] {
     font-weight: 500;
 }
 
+/* ---- Inference settings panel inside an active card -------------------- */
+
+QFrame[role="inference-panel"] {
+    background-color: transparent;
+    border-top: 1px solid {{color.border}};
+    margin-top: {{space.sm}};
+    padding-top: {{space.sm}};
+}
+
+QFrame[role="inference-panel"] QSpinBox,
+QFrame[role="inference-panel"] QDoubleSpinBox {
+    background-color: {{color.bg_secondary}};
+    color: {{color.text_primary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    padding: 4px 8px;
+    selection-background-color: {{color.accent}};
+}
+
+QFrame[role="inference-panel"] QSpinBox:focus,
+QFrame[role="inference-panel"] QDoubleSpinBox:focus {
+    border-color: {{color.accent}};
+}
+
 /* ---- Family chip on model cards ----------------------------------------- */
 
 QLabel[role="family-chip"] {
