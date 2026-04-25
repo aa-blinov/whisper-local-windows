@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication
 
 from app.gui.controllers.backend_status_poller import BackendStatusPoller
 from app.gui.main_window import MainWindow
-from app.model_mapping import alias_for, get_model
+from app.model_mapping import alias_for, canonical_for, get_model
 
 
 log = logging.getLogger(__name__)
@@ -26,6 +26,13 @@ class _HistoryLike(Protocol):
     def clear_history(self) -> None: ...
 
 
+class _RecordingLike(Protocol):
+    state_changed: Any
+    history_updated: Any
+
+    def request_model_change(self, canonical: str) -> bool: ...
+
+
 class AppController(QObject):
     def __init__(
         self,
@@ -33,17 +40,21 @@ class AppController(QObject):
         window: MainWindow,
         history: Optional[_HistoryLike] = None,
         backend_status_fetcher: Optional[Callable[[], str]] = None,
+        recording: Optional[_RecordingLike] = None,
     ) -> None:
         super().__init__(parent=window)
         self._config = config
         self._window = window
         self._history = history
+        self._recording = recording
         self._poller: Optional[BackendStatusPoller] = None
         self._wire_models()
         self._wire_shortcuts()
         self._wire_history()
         if backend_status_fetcher is not None:
             self._wire_backend_status(backend_status_fetcher)
+        if recording is not None:
+            self._wire_recording(recording)
 
     def _wire_models(self) -> None:
         view = self._window.models_view
@@ -74,6 +85,11 @@ class AppController(QObject):
             self._sync_topbar_model(get_model(alias))
         except KeyError:
             self._sync_topbar_model(None)
+        if self._recording is not None:
+            try:
+                self._recording.request_model_change(canonical_for(alias))
+            except Exception as exc:  # pragma: no cover — defensive
+                log.warning("request_model_change raised: %s", exc)
 
     def _sync_topbar_model(self, info) -> None:
         self._window.topbar.set_active_model(info.display_name if info else None)
@@ -118,3 +134,12 @@ class AppController(QObject):
         self._poller = BackendStatusPoller(fetcher=fetcher, parent=self)
         self._poller.status_changed.connect(self._window.topbar.set_backend_status)
         self._poller.start()
+
+    def _wire_recording(self, recording: _RecordingLike) -> None:
+        recording.state_changed.connect(self._window.topbar.set_recording_state)
+        recording.history_updated.connect(self._on_history_updated_signal)
+
+    def _on_history_updated_signal(self) -> None:
+        if self._history is None:
+            return
+        self._window.history_view.set_entries(self._history.get_entries())

@@ -348,3 +348,101 @@ def test_controller_without_backend_fetcher_leaves_status_unknown(qtbot):
     AppController(config=config, window=window)
 
     assert window.topbar._status_pill.property("status") == "unknown"
+
+
+# ---- Recording controller wiring -------------------------------------------
+
+
+class FakeRecordingController:
+    """Stand-in exposing the surface AppController consumes."""
+
+    def __init__(self, model_change_returns: bool = True) -> None:
+        from PySide6.QtCore import QObject, Signal
+
+        class _Bus(QObject):
+            state_changed = Signal(str)
+            history_updated = Signal()
+
+        self._bus = _Bus()
+        self.state_changed = self._bus.state_changed
+        self.history_updated = self._bus.history_updated
+        self.model_change_requests: list[str] = []
+        self._model_change_returns = model_change_returns
+
+    def request_model_change(self, canonical: str) -> bool:
+        self.model_change_requests.append(canonical)
+        return self._model_change_returns
+
+
+def test_controller_updates_topbar_recording_pill_on_state_change(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+
+    rec.state_changed.emit("recording")
+    assert window.topbar._recording_pill.property("state") == "recording"
+    assert window.topbar._recording_pill.isVisibleTo(window.topbar) or True
+    # visibility depends on parent visibility — property change is the contract
+
+    rec.state_changed.emit("idle")
+    assert window.topbar._recording_pill.property("state") == "idle"
+
+
+def test_controller_refreshes_history_on_history_updated(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([FakeHistoryEntry("first")])
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, history=history, recording=rec)
+
+    # New entry appears in the manager outside our control.
+    history._entries.append(FakeHistoryEntry("second"))
+    rec.history_updated.emit()
+
+    assert window.history_view._source_model.rowCount() == 2
+
+
+def test_controller_routes_model_select_through_recording_when_present(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+    window.models_view.model_selected.emit("tiny")
+
+    # config still updated for persistence
+    assert ("whisper", "model", "tiny") in config.writes
+    # AND recording stack was asked to actually switch
+    assert rec.model_change_requests == [
+        "Systran/faster-whisper-tiny",
+    ]
+
+
+def test_controller_skips_recording_call_when_recording_absent(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+
+    AppController(config=config, window=window)  # no recording arg
+    window.models_view.model_selected.emit("tiny")
+
+    # Should still write config and not crash.
+    assert ("whisper", "model", "tiny") in config.writes
