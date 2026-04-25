@@ -89,12 +89,14 @@ class TopBar(QWidget):
         left_gutter.setFixedWidth(_SIDEBAR_WIDTH_PX)
         outer.addWidget(left_gutter)
 
-        # Right-hand content lives in its own container so it can
-        # carry its own padding without cropping the gutter line.
+        # Right-hand content lives in its own container with the
+        # same horizontal padding as every body view (28 px) — so
+        # the resource widget's left edge lines up with each view's
+        # leading edge below it (search field, settings card, …).
         content = QWidget(self)
         content.setObjectName("TopBarContent")
         layout = QHBoxLayout(content)
-        layout.setContentsMargins(20, 10, 20, 10)
+        layout.setContentsMargins(28, 10, 20, 10)
         layout.setSpacing(12)
 
         # Resource stats — anchored to the leading edge of the
