@@ -83,7 +83,25 @@ def main() -> int:
     from app.gui.controllers.recording_controller import RecordingController
     from app.gui.recording_factory import build_recording_stack
     from app.gui.widgets.tray_icon import AppTrayIcon
-    from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+    from app.instance_manager import try_acquire_single_instance
+    from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
+
+    # Need a QApplication before we can show any dialog.
+    qt_app = QApplication.instance() or QApplication(sys.argv)
+
+    instance_handle = try_acquire_single_instance("LazyToTextQt")
+    if instance_handle is None:
+        QMessageBox.warning(
+            None,
+            "Lazy to Text",
+            "Another copy of Lazy to Text is already running.\n\n"
+            "Use its system tray icon to bring it back, or quit it first.",
+        )
+        return 0
+    # Keep the handle alive for the rest of the process by binding it to the
+    # QApplication; releasing the mutex prematurely would let a duplicate
+    # start before this one exits.
+    qt_app._instance_mutex = instance_handle  # type: ignore[attr-defined]
 
     config = ConfigManager()
     docker = DockerBackendManager()
@@ -109,9 +127,7 @@ def main() -> int:
 
     history = state_manager.history_manager if state_manager is not None else None
 
-    # Tray needs a QApplication to exist before construction. Nudge it into
-    # existence here if it doesn't already.
-    qt_app = QApplication.instance() or QApplication(sys.argv)
+    # qt_app already exists from the single-instance gate above.
     tray: Optional[AppTrayIcon] = None
     if QSystemTrayIcon.isSystemTrayAvailable():
         tray = AppTrayIcon(parent=qt_app)
