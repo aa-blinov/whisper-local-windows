@@ -136,6 +136,9 @@ def build_application(
     if not icon.isNull():
         window.setWindowIcon(icon)
     if install_logs:
+        # NB: ``main()`` is responsible for setting the root level + file
+        # handler before this function runs so the recording stack's INFO
+        # messages aren't lost. Here we just attach the UI bridge.
         bridge = QtLogBridge(parent=window)
         bridge.line_received.connect(window.logs_view.append_line)
         bridge.install()
@@ -220,6 +223,27 @@ def main() -> int:
 
     # We are the primary instance — bind the mutex handle so it survives.
     qt_app._instance_mutex = instance_handle  # type: ignore[attr-defined]
+
+    # Set up the logging pipeline BEFORE building the recording stack so the
+    # HotkeyListener / model-load messages from build_recording_stack reach
+    # both the UI Logs view and logs/app.log. Without this, INFO records
+    # emitted during stack construction are dropped by the default WARNING
+    # root level and we lose the most useful diagnostic moment.
+    import logging as _logging
+
+    _logging.getLogger().setLevel(_logging.INFO)
+    from app.utils import get_project_logs_path
+
+    _log_path = os.path.join(get_project_logs_path(), "app.log")
+    _file_handler = _logging.FileHandler(_log_path, encoding="utf-8")
+    _file_handler.setLevel(_logging.INFO)
+    _file_handler.setFormatter(
+        _logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+    _logging.getLogger().addHandler(_file_handler)
 
     config = ConfigManager()
 
