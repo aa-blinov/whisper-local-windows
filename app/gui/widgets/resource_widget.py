@@ -1,14 +1,15 @@
 """Compact GPU/CPU/RAM stats widget for the topbar.
 
-Custom-painted three-row mini display. Each row is a labelled
-horizontal bar showing one metric. GPU row hides itself if NVML
-isn't available on the host. A tooltip carries the full breakdown
-(absolute MB, percentages) on hover.
+Three horizontal mini-blocks (GPU / CPU / RAM) laid out in a row.
+Each block has a tiny label, a thin progress bar, and a numeric
+readout. Layout the painter does itself — Qt QSS can't draw
+labelled bars cleanly, so this widget owns its rendering. GPU
+block hides itself if NVML isn't reporting a device.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
@@ -17,11 +18,10 @@ from PySide6.QtWidgets import QSizePolicy, QWidget
 
 _BG = QColor("#252932")          # bg_elevated — chip surface
 _BORDER = QColor("#2d3140")      # border
-_TRACK = QColor("#1a1d24")       # darker than chip — bar background
-_TEXT = QColor("#b8bcc6")        # text_secondary
-_TEXT_MUTED = QColor("#7d828d")  # text_muted
+_TRACK = QColor("#1a1d24")       # bar background
+_TEXT = QColor("#b8bcc6")        # text_secondary — value
+_TEXT_MUTED = QColor("#7d828d")  # text_muted — label
 
-# Per-bar fill colour.
 _GREEN = QColor("#4ade80")       # success
 _AMBER = QColor("#f59e0b")       # warning
 _RED = QColor("#ef4444")         # danger
@@ -39,10 +39,9 @@ class ResourceWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("ResourceWidget")
-        # Three labelled rows × 12 px each + padding fits 38–40 px.
-        # Width covers two columns (label + bar) — 200 px is enough
-        # for the longest GPU label ("GPU 8.0/8.0 GB").
-        self.setFixedSize(200, 38)
+        # One row of 3 blocks with label + bar + value. 380×30 px
+        # is plenty for "GPU 4.2/8.0 GB" through "RAM 28.4/32.0 GB".
+        self.setFixedSize(380, 32)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         self._cpu_percent: float = 0.0
@@ -54,7 +53,6 @@ class ResourceWidget(QWidget):
         self._gpu_vram_total_mb: float = 0.0
         self._gpu_util_percent: Optional[float] = None
 
-        # Slightly smaller font so three rows fit cleanly.
         self._font = QFont(self.font())
         self._font.setPointSizeF(max(8.0, self._font.pointSizeF() - 1.0))
 
@@ -67,7 +65,11 @@ class ResourceWidget(QWidget):
         self._ram_percent = float(m.get("ram_percent", 0.0))
         self._ram_used_mb = float(m.get("ram_used_mb", 0.0))
         self._ram_total_mb = float(m.get("ram_total_mb", 0.0))
-        if "gpu_vram_used_mb" in m and "gpu_vram_total_mb" in m and m["gpu_vram_total_mb"]:
+        if (
+            "gpu_vram_used_mb" in m
+            and "gpu_vram_total_mb" in m
+            and m["gpu_vram_total_mb"]
+        ):
             self._gpu_vram_used_mb = float(m["gpu_vram_used_mb"])
             self._gpu_vram_total_mb = float(m["gpu_vram_total_mb"])
             self._gpu_vram_percent = (
@@ -92,107 +94,78 @@ class ResourceWidget(QWidget):
 
         rect = self.rect()
         radius = 6
-        # Chip background + border so the widget reads as a single
-        # piece next to the recording / model pills, not as bare
-        # paint on the topbar surface.
         painter.setPen(_BORDER)
         painter.setBrush(_BG)
         painter.drawRoundedRect(rect.adjusted(0, 0, -1, -1), radius, radius)
 
-        rows = self._row_specs()
-        if not rows:
+        blocks = self._block_specs()
+        if not blocks:
             return
 
-        # Lay rows out vertically inside the chip with even spacing.
-        padding = 5
-        gap = 2
-        total_h = rect.height() - 2 * padding
-        row_h = (total_h - gap * (len(rows) - 1)) / len(rows)
+        outer_pad = 8
+        between = 14
+        usable = rect.width() - 2 * outer_pad - between * (len(blocks) - 1)
+        block_w = usable // len(blocks)
 
-        fm = QFontMetrics(self._font)
-        # Reserve a small label column so bars line up between rows.
-        label_w = max(fm.horizontalAdvance(label) for label, _, _ in rows) + 4
+        x = rect.x() + outer_pad
+        for label, value_text, percent in blocks:
+            block_rect = QRect(x, rect.y(), block_w, rect.height())
+            self._paint_block(painter, block_rect, label, value_text, percent)
+            x += block_w + between
 
-        for i, (label, value_text, percent) in enumerate(rows):
-            y = padding + i * (row_h + gap)
-            row_rect = QRect(
-                padding,
-                int(y),
-                rect.width() - 2 * padding,
-                int(row_h),
-            )
-            self._paint_row(painter, fm, row_rect, label_w, label, value_text, percent)
-
-    def _paint_row(
+    def _paint_block(
         self,
         painter: QPainter,
-        fm: QFontMetrics,
         rect: QRect,
-        label_w: int,
         label: str,
         value_text: str,
         percent: float,
     ) -> None:
-        # Label on the left.
+        fm = QFontMetrics(self._font)
+
+        # Top half: label (left, muted) + value (right, bright).
+        top_h = rect.height() // 2
+        top_rect = QRect(rect.x(), rect.y(), rect.width(), top_h)
         painter.setPen(_TEXT_MUTED)
         painter.drawText(
-            QRect(rect.x(), rect.y(), label_w, rect.height()),
-            Qt.AlignVCenter | Qt.AlignLeft,
-            label,
+            top_rect, Qt.AlignBottom | Qt.AlignLeft, label
         )
-
-        bar_x = rect.x() + label_w
-        bar_y = rect.y() + (rect.height() - 6) // 2
-        # Reserve space on the right for the numeric value.
-        value_w = fm.horizontalAdvance(value_text) + 4
-        bar_w = rect.right() - bar_x - value_w
-        if bar_w < 20:
-            bar_w = 20
-
-        # Track.
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(_TRACK)
-        painter.drawRoundedRect(bar_x, bar_y, bar_w, 6, 3, 3)
-
-        # Fill.
-        clamped = max(0.0, min(percent, 100.0))
-        fill_w = int(bar_w * clamped / 100.0)
-        if fill_w > 0:
-            painter.setBrush(_fill_color_for(clamped))
-            painter.drawRoundedRect(bar_x, bar_y, fill_w, 6, 3, 3)
-
-        # Numeric value on the right.
         painter.setPen(_TEXT)
         painter.drawText(
-            QRect(
-                rect.right() - value_w,
-                rect.y(),
-                value_w,
-                rect.height(),
-            ),
-            Qt.AlignVCenter | Qt.AlignRight,
-            value_text,
+            top_rect, Qt.AlignBottom | Qt.AlignRight, value_text
         )
+
+        # Bottom half: thin progress bar.
+        bar_h = 5
+        bar_y = rect.y() + top_h + 2
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(_TRACK)
+        painter.drawRoundedRect(rect.x(), bar_y, rect.width(), bar_h, 2, 2)
+        clamped = max(0.0, min(percent, 100.0))
+        fill_w = int(rect.width() * clamped / 100.0)
+        if fill_w > 0:
+            painter.setBrush(_fill_color_for(clamped))
+            painter.drawRoundedRect(rect.x(), bar_y, fill_w, bar_h, 2, 2)
 
     # ---- helpers ------------------------------------------------------------
 
-    def _row_specs(self) -> list[tuple[str, str, float]]:
-        rows: list[tuple[str, str, float]] = []
+    def _block_specs(self) -> List[Tuple[str, str, float]]:
+        blocks: List[Tuple[str, str, float]] = []
         if self._gpu_vram_percent is not None:
             used_gb = self._gpu_vram_used_mb / 1024.0
             total_gb = self._gpu_vram_total_mb / 1024.0
-            rows.append(
+            blocks.append(
                 ("GPU", f"{used_gb:.1f}/{total_gb:.1f} GB", self._gpu_vram_percent)
             )
-        rows.append(("CPU", f"{self._cpu_percent:.0f}%", self._cpu_percent))
-        rows.append(
+        blocks.append(("CPU", f"{self._cpu_percent:.0f}%", self._cpu_percent))
+        blocks.append(
             (
                 "RAM",
                 f"{self._ram_used_mb / 1024.0:.1f}/{self._ram_total_mb / 1024.0:.1f} GB",
                 self._ram_percent,
             )
         )
-        return rows
+        return blocks
 
     def _refresh_tooltip(self) -> None:
         parts = []

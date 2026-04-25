@@ -50,8 +50,8 @@ def test_resource_widget_drops_gpu_row_when_no_nvml(qtbot):
         }
     )
     assert widget._gpu_vram_percent is None
-    rows = widget._row_specs()
-    assert all(label != "GPU" for label, _, _ in rows)
+    blocks = widget._block_specs()
+    assert all(label != "GPU" for label, _, _ in blocks)
 
 
 def test_resource_widget_color_thresholds():
