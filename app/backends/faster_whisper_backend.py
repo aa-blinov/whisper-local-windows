@@ -18,6 +18,8 @@ State machine::
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import threading
 from typing import Optional
 
@@ -25,6 +27,42 @@ import numpy as np
 
 
 log = logging.getLogger(__name__)
+
+
+def _register_cuda_dll_dirs() -> None:
+    """Add ``nvidia-*`` wheel ``bin`` directories to the Windows DLL search.
+
+    ``ctranslate2`` (the engine behind faster-whisper) loads
+    ``cublas64_12.dll`` / ``cudnn64_9.dll`` at inference time. The Python
+    ``nvidia-cublas-cu12`` and ``nvidia-cudnn-cu12`` wheels ship those DLLs
+    inside ``site-packages/nvidia/<pkg>/bin``, but Python does not put that
+    directory on ``%PATH%`` automatically. Register each present
+    sub-package's ``bin`` folder via ``os.add_dll_directory`` so the
+    runtime resolution succeeds without a system-wide CUDA install.
+    Idempotent — safe to call multiple times.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import nvidia  # type: ignore
+    except ImportError:
+        return
+    # ``nvidia`` is a PEP 420 namespace package — ``__file__`` is None,
+    # ``__path__`` lists every site-packages directory that contributes
+    # ``nvidia/<sub>/`` (typically just one).
+    roots = list(getattr(nvidia, "__path__", []) or [])
+    if not roots and getattr(nvidia, "__file__", None):
+        roots = [os.path.dirname(nvidia.__file__)]
+    for nvidia_root in roots:
+        if not os.path.isdir(nvidia_root):
+            continue
+        for sub in os.listdir(nvidia_root):
+            bin_dir = os.path.join(nvidia_root, sub, "bin")
+            if os.path.isdir(bin_dir):
+                try:
+                    os.add_dll_directory(bin_dir)
+                except (FileNotFoundError, OSError) as exc:
+                    log.debug("Skipping CUDA dll dir %s: %s", bin_dir, exc)
 
 
 class FasterWhisperBackend:
@@ -110,6 +148,12 @@ class FasterWhisperBackend:
             language = self._language
             beam_size = self._beam_size
 
+        # Belt-and-suspenders: ctranslate2 lazy-loads cuBLAS / cuDNN on the
+        # first inference call rather than at model construction. Re-register
+        # the DLL dirs here too in case load() ran in a context where the
+        # nvidia-* wheels weren't yet importable.
+        _register_cuda_dll_dirs()
+
         try:
             segments, _info = model.transcribe(
                 audio, language=language, beam_size=beam_size,
@@ -131,6 +175,11 @@ class FasterWhisperBackend:
     # ---- internal -----------------------------------------------------------
 
     def _do_load(self, model_name: str) -> None:
+        # Make CUDA DLLs from the ``nvidia-*-cu12`` wheels resolvable BEFORE
+        # we import the engine. Without this, GPU inference falls over with
+        # ``Library cublas64_12.dll is not found or cannot be loaded``.
+        _register_cuda_dll_dirs()
+
         # Lazy import: keeps ``import app.backends`` free of the heavy
         # CTranslate2 / cuDNN dependency chain until somebody actually loads
         # a backend.
