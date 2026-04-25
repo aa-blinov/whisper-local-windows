@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="description" content="Lazy to Text — local Whisper-based speech-to-text for Windows with global hotkeys and a Qt UI." />
-<meta name="theme-color" content="#161616" />
+<meta name="description" content="Lazy to Text — local Whisper + GigaAM speech-to-text for Windows with global hotkeys, per-model inference settings, and a Qt UI." />
+<meta name="theme-color" content="#0f1115" />
 <title>Lazy to Text — local speech-to-text for Windows</title>
 <link rel="icon" type="image/png" href="favicon.png" />
 <link rel="icon" type="image/x-icon" href="favicon.ico" />
@@ -28,11 +28,11 @@
 <main id="top">
   <section class="hero">
     <div class="container hero__inner">
-      <span class="hero__pill">Windows · MIT · Local-first</span>
+      <span class="hero__pill">Windows · MIT · Local-first · Whisper + GigaAM</span>
       <h1 class="hero__title">Press a hotkey, speak, paste.</h1>
       <p class="hero__sub">
         Lazy to Text records audio on a global keyboard shortcut, transcribes it locally
-        through a Whisper model running in-process via faster-whisper, and pastes the result
+        through faster-whisper or Sber's GigaAM running in-process, and pastes the result
         into whatever window has focus. No cloud round-trip, no subscription, no telemetry.
       </p>
       <div class="hero__ctas">
@@ -40,7 +40,7 @@
         <a class="button" href="#install">Install in 30 seconds</a>
       </div>
       <figure class="hero__shot">
-        <img src="screenshots/hero.png" alt="The Models tab of Lazy to Text showing six Whisper model cards." loading="lazy" />
+        <img src="screenshots/hero.png" alt="The Models tab of Lazy to Text showing model cards with family chips, an inline inference settings panel, and live resource stats in the topbar." loading="lazy" />
       </figure>
     </div>
   </section>
@@ -52,23 +52,27 @@
         <article class="card">
           <h3 class="card__title">Audio stays on your machine</h3>
           <p class="card__body">
-            Recording, encoding, and Wyoming-protocol RPC all run against
-            <code>localhost:10300</code>. The internet is never involved.
+            Recording, encoding, and inference all happen in-process.
+            Model weights download once from Hugging Face / Sber's CDN
+            and live in your local cache. The internet is never
+            involved during transcription.
           </p>
         </article>
         <article class="card">
           <h3 class="card__title">Works offline</h3>
           <p class="card__body">
-            After the first model download the app does not need a network
-            connection — useful for trains, planes, and locked-down enterprise
-            laptops.
+            After the first model download the app needs no network
+            connection — useful for trains, planes, and locked-down
+            enterprise laptops.
           </p>
         </article>
         <article class="card">
           <h3 class="card__title">No usage limits</h3>
           <p class="card__body">
-            One-time setup, then transcribe as much as you want. No API keys,
-            quotas, or per-minute billing.
+            One-time setup, then transcribe as much as you want. No API
+            keys, quotas, or per-minute billing. Long-form captures over
+            25 s route through pyannote VAD on GigaAM and Silero VAD on
+            Whisper, no length cap on Whisper.
           </p>
         </article>
       </div>
@@ -80,61 +84,109 @@
       <h2 class="section__title">Features</h2>
       <div class="grid grid--3">
         <article class="card">
+          <h3 class="card__title">Two engines, one Protocol</h3>
+          <p class="card__body">
+            faster-whisper for multilingual capture, GigaAM (Sber) for
+            best-in-class Russian. A <code>RoutedBackend</code> facade
+            picks the engine per model and rebuilds the inner backend
+            transparently when you swap families.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Per-model inference settings</h3>
+          <p class="card__body">
+            Each Whisper card surfaces an inline panel — language, VAD
+            filter, beam size, temperature, initial prompt — persisted
+            per alias and pushed live into the running backend. No
+            restart needed. GigaAM cards skip the panel; the engine is
+            end-to-end.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">9 model presets, 5 families</h3>
+          <p class="card__body">
+            Whisper Tiny / Distil / Turbo (fp16+int8) / Large v3
+            (fp16+int8), Russian fine-tunes, and GigaAM v3 e2e
+            CTC + RNN-T (with built-in punctuation). Family chips on
+            each card colour-code the lineage.
+          </p>
+        </article>
+        <article class="card">
           <h3 class="card__title">Global hotkey</h3>
           <p class="card__body">
-            <kbd>Ctrl</kbd>+<kbd>F2</kbd> starts recording, <kbd>Ctrl</kbd>+<kbd>F3</kbd>
-            stops and transcribes. Both are remappable in the Shortcuts tab.
+            <kbd>Ctrl</kbd>+<kbd>F2</kbd> starts recording,
+            <kbd>Ctrl</kbd>+<kbd>F3</kbd> stops and transcribes. Both
+            remappable in the Settings tab. <kbd>Ctrl</kbd>+<kbd>1</kbd>..<kbd>4</kbd>
+            jump between tabs.
           </p>
         </article>
         <article class="card">
           <h3 class="card__title">Auto-paste</h3>
           <p class="card__body">
-            The transcribed text drops into the foreground window via simulated
-            keystrokes. Toggle off if you want clipboard-only behaviour.
+            The transcribed text drops into the foreground window via
+            simulated keystrokes. A bottom-right toast confirms with a
+            preview so you can tell at a glance the run succeeded.
+            Toggle off for clipboard-only behaviour.
           </p>
         </article>
         <article class="card">
-          <h3 class="card__title">Six model presets</h3>
+          <h3 class="card__title">Live resource monitor</h3>
           <p class="card__body">
-            Tiny through Large v3, with size, VRAM, speed, and quality metadata
-            shown on each card. Switching the active model reloads the running
-            container automatically.
+            Topbar widget tracks CPU / RAM / GPU utilisation / VRAM in
+            real time via <code>psutil</code> + <code>nvidia-ml-py</code>.
+            Bars colour-code green / amber / red as load climbs.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Live VU meter</h3>
+          <p class="card__body">
+            A slim level bar appears in the topbar while recording, so
+            silent or muted mics show up immediately — no more "why is
+            my transcription empty?" debugging.
           </p>
         </article>
         <article class="card">
           <h3 class="card__title">Searchable history</h3>
           <p class="card__body">
-            Every transcription is persisted to <code>logs/transcription_history.json</code>,
-            displayed in a filterable table, and exportable to text.
+            Every transcription is persisted to
+            <code>logs/transcription_history.json</code>, displayed in a
+            filterable table with a hover tooltip showing the full text.
+            Double-click any row for a detail dialog with one-button
+            copy. Export to plain text from the toolbar.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Coloured logs view</h3>
+          <p class="card__body">
+            Records colour-coded by level + logger source, with a
+            "Show network logs" toggle that hides httpx / huggingface_hub
+            noise and a search field that filters the buffer on the fly.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Searchable model browser</h3>
+          <p class="card__body">
+            A search box plus family-filter chips narrow the grid; an
+            empty-state placeholder shows up if nothing matches.
+            Click a card's <code>↗</code> to jump to the model's
+            Hugging Face / GitHub page.
           </p>
         </article>
         <article class="card">
           <h3 class="card__title">Hide to tray</h3>
           <p class="card__body">
-            The close button minimises to the system tray instead of quitting.
-            Right-click the tray icon for Show / Quit; left-click restores the window.
+            Close button minimises to the system tray instead of
+            quitting. State-aware tray icon mirrors the recording
+            pipeline. Right-click for Show / Quit; left-click restores
+            the window.
           </p>
         </article>
         <article class="card">
           <h3 class="card__title">Single-instance guard</h3>
           <p class="card__body">
-            A named-mutex check prevents a second copy from registering the
-            same global hotkeys. The duplicate launch shows a branded warning
-            and exits cleanly.
-          </p>
-        </article>
-        <article class="card">
-          <h3 class="card__title">Live application logs</h3>
-          <p class="card__body">
-            The Logs tab streams the same log records the file logger writes,
-            so you can see what the recording pipeline is doing in real time.
-          </p>
-        </article>
-        <article class="card">
-          <h3 class="card__title">Settings auto-save</h3>
-          <p class="card__body">
-            Hotkey edits commit on focus loss, the auto-paste toggle commits
-            instantly. A "Reset to defaults" button restores stock values.
+            A named-mutex check prevents a second copy from registering
+            the same global hotkeys. The duplicate launch shows a
+            branded warning and exits cleanly.
           </p>
         </article>
       </div>
@@ -146,20 +198,20 @@
       <h2 class="section__title">Screenshots</h2>
       <div class="grid grid--2 grid--shots">
         <figure class="shot">
-          <img src="screenshots/models.png" alt="Models tab with six model cards." loading="lazy" />
-          <figcaption>Models — pick from tiny to large-v3 with full metadata.</figcaption>
+          <img src="screenshots/models.png" alt="Models tab — search box, family-filter chips, cards with family-coloured chips, alias / canonical subtitle, badges, and an inline inference settings panel on the active card." loading="lazy" />
+          <figcaption>Models — family-filtered grid with per-model inference settings inline.</figcaption>
         </figure>
         <figure class="shot">
-          <img src="screenshots/shortcuts.png" alt="Shortcuts tab with two hotkey fields and an auto-paste toggle." loading="lazy" />
-          <figcaption>Shortcuts — auto-saving fields, no Save button.</figcaption>
+          <img src="screenshots/shortcuts.png" alt="Settings tab — three cards (Audio input, Hotkeys, Clipboard) with a Test microphone button and result readout." loading="lazy" />
+          <figcaption>Settings — auto-saving fields grouped into themed cards, with a microphone test.</figcaption>
         </figure>
         <figure class="shot">
-          <img src="screenshots/history.png" alt="History tab with five sample transcriptions in a searchable table." loading="lazy" />
-          <figcaption>History — searchable table backed by HistoryManager.</figcaption>
+          <img src="screenshots/history.png" alt="History tab — searchable table with sample transcriptions, alias-displayed model column, full-text tooltip, and Copy / Export / Clear buttons." loading="lazy" />
+          <figcaption>History — searchable table with model aliases, tooltips, and a detail dialog on double-click.</figcaption>
         </figure>
         <figure class="shot">
-          <img src="screenshots/logs.png" alt="Logs tab showing application log lines." loading="lazy" />
-          <figcaption>Logs — the file logger streamed into the UI.</figcaption>
+          <img src="screenshots/logs.png" alt="Logs tab showing colour-coded log lines with a search field and a Show network logs toggle." loading="lazy" />
+          <figcaption>Logs — colour-coded by level, network noise hidden by default, searchable.</figcaption>
         </figure>
       </div>
     </div>
@@ -170,7 +222,7 @@
       <h2 class="section__title">Install</h2>
       <p class="section__lede">
         Requires Windows 10/11, Python 3.12, and a microphone. A CUDA-capable
-        GPU is optional but recommended for the larger models.
+        GPU is optional but strongly recommended for any model larger than tiny.
       </p>
       <pre class="code"><code>git clone https://github.com/aa-blinov/lazy-to-text.git
 cd lazy-to-text
@@ -178,10 +230,11 @@ cd lazy-to-text
 uv sync                       # creates the venv from uv.lock
 uv run lazy-to-text-ui        # launch the app</code></pre>
       <p class="section__note">
-        Press <kbd>Ctrl</kbd>+<kbd>F2</kbd> anywhere, speak, press
-        <kbd>Ctrl</kbd>+<kbd>F3</kbd>. The transcript is pasted into the focused
-        window. The first run downloads the selected model
-        (≈3 GB for <code>large-v3</code>).
+        The first launch leaves no model loaded — pick one from the
+        Models tab and click <strong>Download</strong>. Press
+        <kbd>Ctrl</kbd>+<kbd>F2</kbd>, speak,
+        <kbd>Ctrl</kbd>+<kbd>F3</kbd>; the transcript pastes into the
+        focused window and a confirmation banner pops up.
       </p>
       <div class="reqs">
         <div class="reqs__col">
@@ -189,17 +242,20 @@ uv run lazy-to-text-ui        # launch the app</code></pre>
           <ul>
             <li>Windows 10 or 11 (64-bit)</li>
             <li>Microphone (built-in or USB)</li>
-            <li>Optional: NVIDIA GPU + CUDA 12 / cuDNN 9 for fast inference</li>
-            <li>Python 3.12 (only when building from source)</li>
+            <li>Optional: NVIDIA GPU + CUDA 12 era driver for fast inference</li>
+            <li>Python 3.12 (only when building from source — bundled in the .exe build)</li>
           </ul>
         </div>
         <div class="reqs__col">
           <h4>VRAM by model</h4>
           <ul>
-            <li>tiny / base — 1 GB</li>
-            <li>small — 2 GB</li>
-            <li>medium — 5 GB</li>
-            <li>large-v2 / large-v3 — 10 GB</li>
+            <li>Whisper Tiny — 1 GB</li>
+            <li>GigaAM v3 e2e CTC — 2 GB</li>
+            <li>GigaAM v3 e2e RNN-T — 2.5 GB</li>
+            <li>Whisper Distil / Turbo (int8) — 3.5 GB</li>
+            <li>Whisper Turbo / Distil (fp16) — 5–6 GB</li>
+            <li>Whisper Large v3 (int8) — 5 GB</li>
+            <li>Whisper Large v3 (fp16) — 10 GB</li>
           </ul>
         </div>
       </div>
@@ -210,20 +266,28 @@ uv run lazy-to-text-ui        # launch the app</code></pre>
     <div class="container">
       <h2 class="section__title">Roadmap</h2>
       <ul class="roadmap">
-        <li>Live audio level meter while recording.</li>
-        <li>System tray notification when a transcription completes.</li>
-        <li>Light theme + custom QSS.</li>
-        <li>Optional cloud backends (OpenAI, Groq) behind the same UI.</li>
-        <li>Distil / turbo presets in the model registry.</li>
-        <li>Auto-detect language toggle in the Models tab.</li>
+        <li>Onboarding overlay for first-launch users</li>
+        <li>Per-model VRAM forecasting before download</li>
+        <li>Cloud-API backend behind the same <code>TranscriptionBackend</code> Protocol (OpenAI / Groq)</li>
+        <li>Light theme + theme switcher</li>
+        <li>System-font detection so we can drop the bundled Inter</li>
       </ul>
+      <p class="section__note">
+        Done since the previous draft of this page: live VU meter, live
+        resource monitor, transcription confirmation toast, GigaAM v3
+        engine + longform support, distilled / turbo / Russian Whisper
+        presets, per-model inference settings, search + family filter
+        on the model browser, history detail dialog, coloured logs
+        view, sidebar icons + Inter font, smooth pixel scrolling
+        throughout.
+      </p>
     </div>
   </section>
 </main>
 
 <footer class="footer">
   <div class="container footer__inner">
-    <span>© 2025 Alexander Blinov · <a href="https://github.com/aa-blinov/lazy-to-text/blob/prod/LICENSE">MIT</a></span>
+    <span>© 2025–2026 Alexander Blinov · <a href="https://github.com/aa-blinov/lazy-to-text/blob/prod/LICENSE">MIT</a></span>
     <span><a href="https://github.com/aa-blinov/lazy-to-text" target="_blank" rel="noopener">github.com/aa-blinov/lazy-to-text</a></span>
   </div>
 </footer>
