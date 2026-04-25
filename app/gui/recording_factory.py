@@ -60,6 +60,7 @@ def build_recording_stack(
         channels=int(audio_cfg.get("channels", 1)),
         dtype=str(audio_cfg.get("dtype", "float32")),
         max_duration=int(audio_cfg.get("max_duration", 300)),
+        device=audio_cfg.get("device"),
     )
 
     clipboard_manager = ClipboardManager(

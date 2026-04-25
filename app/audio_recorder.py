@@ -1,7 +1,7 @@
 import logging
 import threading
 import time
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 import sounddevice as sd
@@ -11,35 +11,77 @@ class AudioRecorder:
     THREAD_JOIN_TIMEOUT = 2.0
     RECORDING_SLEEP_INTERVAL = 100
     STREAM_DTYPE = np.float32
-       
-    def __init__(self, 
+
+    def __init__(self,
                  channels: int = 1,
-                 dtype: str = "float32", 
+                 dtype: str = "float32",
                  max_duration: int = 30,
-                 on_max_duration_reached: callable = None):
-        
+                 on_max_duration_reached: callable = None,
+                 device: Optional[Union[int, str]] = None):
+
         self.sample_rate = self.WHISPER_SAMPLE_RATE
         self.channels = channels
         self.dtype = dtype
         self.max_duration = max_duration
         self.on_max_duration_reached = on_max_duration_reached
+        # ``device`` may be ``None`` (use system default), an int index, or a
+        # case-insensitive substring of the device name. Resolved to an int
+        # at __init__ time so the rest of the code only deals with integers.
+        self.device: Optional[int] = self._resolve_device(device)
         self.is_recording = False
         self.audio_data = []
         self.recording_thread = None
         self.recording_start_time = None
         self.logger = logging.getLogger(__name__)
-        
+
         self._test_microphone()
-    
+
     def _wait_for_thread_finish(self):
         if self.recording_thread:
             self.recording_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
-    
+
+    def _resolve_device(self, raw: Optional[Union[int, str]]) -> Optional[int]:
+        if raw is None or raw == "":
+            return None
+        try:
+            if isinstance(raw, int) or (isinstance(raw, str) and raw.lstrip("-").isdigit()):
+                return int(raw)
+            needle = str(raw).lower()
+            for idx, info in enumerate(sd.query_devices()):
+                if info.get("max_input_channels", 0) <= 0:
+                    continue
+                if needle in str(info.get("name", "")).lower():
+                    return idx
+        except Exception:
+            pass
+        return None
+
     def _test_microphone(self):
         try:
-            default_input = sd.query_devices(kind='input')
-            self.logger.info(f"Default microphone: {default_input['name']}")
+            # List every input device so the user can pick one if the
+            # default is wrong.
+            for idx, info in enumerate(sd.query_devices()):
+                if info.get("max_input_channels", 0) <= 0:
+                    continue
+                self.logger.info(
+                    "Input device [%d]: %s (%s)",
+                    idx,
+                    info.get("name", "<unnamed>"),
+                    info.get("hostapi_name") or info.get("hostapi", ""),
+                )
 
+            if self.device is not None:
+                info = sd.query_devices(self.device)
+                self.logger.info(
+                    "Recording from device [%d]: %s",
+                    self.device, info.get("name", "<unnamed>"),
+                )
+            else:
+                default_input = sd.query_devices(kind="input")
+                self.logger.info(
+                    "Recording from system default: %s",
+                    default_input.get("name", "<unnamed>"),
+                )
         except Exception as e:
             self.logger.error(f"Microphone test failed: {e}")
             raise
@@ -80,11 +122,29 @@ class AudioRecorder:
         if len(self.audio_data) == 0:
             self.logger.warning("No audio data recorded!", extra={'user_message': True})
             return None
-        
+
         # Convert list of audio chunks into a single numpy array
         audio_array = np.concatenate(self.audio_data, axis=0)
         duration = self.get_audio_duration(audio_array)
-        self.logger.info(f"Recorded {duration:.2f} seconds of audio")
+        # Peak / RMS amplitude is the cheapest "did the mic actually pick
+        # anything up?" check. Whisper returning empty on a quiet recording
+        # is impossible to debug without this.
+        try:
+            peak = float(np.max(np.abs(audio_array)))
+            rms = float(np.sqrt(np.mean(audio_array.astype(np.float32) ** 2)))
+        except Exception:
+            peak = 0.0
+            rms = 0.0
+        self.logger.info(
+            "Recorded %.2f seconds of audio (peak=%.3f, rms=%.4f)",
+            duration, peak, rms,
+        )
+        if peak < 0.01:
+            self.logger.warning(
+                "Audio looks silent (peak<0.01). Wrong microphone selected, "
+                "muted in Windows Sound settings, or input gain too low?",
+                extra={'user_message': True},
+            )
         return audio_array
     
     def cancel_recording(self):
@@ -109,7 +169,8 @@ class AudioRecorder:
             with sd.InputStream(samplerate=self.sample_rate,
                                 channels=self.channels,
                                 callback=audio_callback,
-                                dtype=self.STREAM_DTYPE):
+                                dtype=self.STREAM_DTYPE,
+                                device=self.device):
                 
                 while self.is_recording:
                     if self._check_max_duration_exceeded():
