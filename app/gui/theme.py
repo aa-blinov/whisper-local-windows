@@ -9,8 +9,9 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 
@@ -74,7 +75,13 @@ TOKENS = _Tokens(
         "xl": 20,
     },
     fonts={
-        "family": "Segoe UI",
+        # Inter first — modern UI default used by GitHub, Vercel,
+        # Figma. Falls back to Segoe UI Variable on Windows 11, then
+        # Segoe UI on older Windows, then a generic sans for Linux /
+        # frozen-bundle scenarios where no preferred face is
+        # installed. The whole stack is emitted into QSS verbatim,
+        # which Qt's font matcher honours left-to-right.
+        "family": '"Inter", "Segoe UI Variable", "Segoe UI", "Helvetica Neue", Arial, sans-serif',
         "size_title": 22,
         "size_heading": 17,
         "size_body": 13,
@@ -115,5 +122,43 @@ def load_stylesheet(theme: str = "dark") -> str:
     return qss
 
 
+def icon_path(filename: str) -> Optional[str]:
+    """Resolve a bundled icon (SVG/PNG) under ``styles/icons/``.
+
+    Returns the absolute path string, or ``None`` if the file is
+    missing — callers should ``Path(...).is_file()`` to be safe in
+    PyInstaller-frozen builds where icons might not have been
+    bundled.
+    """
+    candidate = _STYLES_DIR / "icons" / filename
+    return str(candidate) if candidate.exists() else None
+
+
+_FONTS_LOADED = False
+
+
+def _load_bundled_fonts() -> None:
+    """Register every ``.ttf`` shipped under ``styles/fonts/`` with
+    Qt's font database.
+
+    Idempotent — if called twice (e.g. tests vs main), the same file
+    is just re-registered and Qt deduplicates internally. We bundle
+    Inter Variable so the UI looks identical on machines where the
+    user hasn't pre-installed it; the font-family stack in
+    ``TOKENS.fonts['family']`` references it by name.
+    """
+    global _FONTS_LOADED
+    if _FONTS_LOADED:
+        return
+    fonts_dir = _STYLES_DIR / "fonts"
+    if not fonts_dir.exists():
+        _FONTS_LOADED = True
+        return
+    for path in fonts_dir.glob("*.ttf"):
+        QFontDatabase.addApplicationFont(str(path))
+    _FONTS_LOADED = True
+
+
 def apply_theme(app: QApplication, theme: str = "dark") -> None:
+    _load_bundled_fonts()
     app.setStyleSheet(load_stylesheet(theme))

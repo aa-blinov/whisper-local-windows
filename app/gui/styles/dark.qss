@@ -3,7 +3,7 @@
 QWidget {
     background-color: {{color.bg_primary}};
     color: {{color.text_primary}};
-    font-family: "{{font.family}}";
+    font-family: {{font.family}};
     font-size: {{font.size_body}};
 }
 

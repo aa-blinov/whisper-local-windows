@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QListWidget,
@@ -13,24 +15,24 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.theme import icon_path
+
 
 NavItem = Tuple[str, str]
-# Item-row display strings — a leading Unicode glyph (rendered by
-# Segoe UI Symbol / Segoe UI Emoji on Windows) gives the eye a
-# categorical anchor without bundling SVG icons. The plain label is
-# preserved separately so ``label_for`` can return it without the
-# decoration for places like the topbar section title.
 _DEFAULT_ITEMS: tuple[NavItem, ...] = (
     ("models", "Models"),
     ("shortcuts", "Settings"),
     ("history", "History"),
     ("logs", "Logs"),
 )
-_KEY_ICONS: dict[str, str] = {
-    "models": "◆",
-    "shortcuts": "⚙",
-    "history": "⏱",
-    "logs": "≡",
+# Filename (without ``.svg``) inside ``app/gui/styles/icons/`` for
+# each nav key. Heroicons (outline, 24×24) — line-style works at
+# 20 px sidebar size and ages better than custom icons.
+_KEY_ICON_FILES: dict[str, str] = {
+    "models": "models",
+    "shortcuts": "settings",
+    "history": "history",
+    "logs": "logs",
 }
 _KEY_ROLE = Qt.UserRole + 1
 _LABEL_ROLE = Qt.UserRole + 2
@@ -60,15 +62,20 @@ class Sidebar(QWidget):
         # one item per notch.
         self._list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self._list.verticalScrollBar().setSingleStep(20)
+        # Heroicons render best at ~20 px in a 14-px-text row.
+        self._list.setIconSize(QSize(20, 20))
         layout.addWidget(self._list)
 
         resolved = tuple(items) if items is not None else _DEFAULT_ITEMS
         for key, label in resolved:
-            icon = _KEY_ICONS.get(key, "")
-            display = f"{icon}  {label}" if icon else label
-            entry = QListWidgetItem(display)
+            entry = QListWidgetItem(label)
             entry.setData(_KEY_ROLE, key)
             entry.setData(_LABEL_ROLE, label)
+            icon_name = _KEY_ICON_FILES.get(key)
+            if icon_name:
+                path = icon_path(f"{icon_name}.svg")
+                if path is not None and Path(path).is_file():
+                    entry.setIcon(QIcon(path))
             self._list.addItem(entry)
 
         self._current_key = resolved[0][0] if resolved else ""
