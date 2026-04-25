@@ -8,6 +8,9 @@ from typing import Any, Callable, Optional, Protocol
 from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QApplication
 
+# QApplication is imported above for the clipboard helper; reuse it for
+# explicit ``quit()`` calls from tray actions.
+
 from app.gui.controllers.backend_status_poller import BackendStatusPoller
 from app.gui.main_window import MainWindow
 from app.model_mapping import alias_for, canonical_for, get_model
@@ -190,7 +193,15 @@ class AppController(QObject):
         self._window.activateWindow()
 
     def _on_tray_quit(self) -> None:
+        # Close the main window (will accept thanks to request_quit's flag)
+        # and then explicitly tell the QApplication to leave its event loop.
+        # ``setQuitOnLastWindowClosed(False)`` is set when a tray is present,
+        # so the app would otherwise stay alive forever after the window
+        # disappears.
         self._window.request_quit()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     def _on_history_updated_signal(self) -> None:
         if self._history is None:

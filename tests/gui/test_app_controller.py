@@ -607,7 +607,9 @@ def test_controller_show_requested_brings_window_back(qtbot):
     assert window.isVisible()
 
 
-def test_controller_quit_requested_calls_request_quit(qtbot):
+def test_controller_quit_requested_calls_request_quit_and_app_quit(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
 
@@ -620,10 +622,19 @@ def test_controller_quit_requested_calls_request_quit(qtbot):
     original = window.request_quit
     window.request_quit = lambda: quit_calls.append(None) or original()
 
+    app_quit_calls: list[None] = []
+    monkeypatch.setattr(
+        QApplication.instance(), "quit",
+        lambda: app_quit_calls.append(None),
+    )
+
     AppController(config=config, window=window, tray=tray)
     tray.quit_requested.emit()
 
+    # Both must fire — closing the window alone does not end the app loop
+    # when setQuitOnLastWindowClosed(False) is set for tray support.
     assert quit_calls == [None]
+    assert app_quit_calls == [None]
 
 
 def test_controller_forwards_recording_state_to_tray(qtbot):
