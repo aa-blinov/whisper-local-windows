@@ -8,7 +8,7 @@ from typing import Any, Callable, Optional, Protocol
 import threading
 
 from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 # QApplication is imported above for the clipboard helper; reuse it for
 # explicit ``quit()`` calls from tray actions.
@@ -30,6 +30,7 @@ class _ConfigLike(Protocol):
 class _HistoryLike(Protocol):
     def get_entries(self) -> list: ...
     def clear_history(self) -> None: ...
+    def export_to_text(self, filepath: str) -> bool: ...
 
 
 class _RecordingLike(Protocol):
@@ -288,13 +289,66 @@ class AppController(QObject):
         if self._history is not None:
             view.set_entries(self._history.get_entries())
             view.clear_requested.connect(self._on_history_clear)
+            view.export_requested.connect(self._on_history_export)
         view.copy_requested.connect(self._on_history_copy)
 
     def _on_history_clear(self) -> None:
         if self._history is None:
             return
+        # Wipes the on-disk history file too — confirm before doing
+        # anything irreversible.
+        entries = self._history.get_entries()
+        if not entries:
+            return
+        answer = QMessageBox.question(
+            self._window,
+            "Clear history?",
+            f"Delete all {len(entries)} transcriptions? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            return
         self._history.clear_history()
         self._window.history_view.set_entries(self._history.get_entries())
+
+    def _on_history_export(self) -> None:
+        if self._history is None:
+            return
+        entries = self._history.get_entries()
+        if not entries:
+            QMessageBox.information(
+                self._window,
+                "Nothing to export",
+                "Your history is empty — record a transcription first.",
+            )
+            return
+        path, _selected_filter = QFileDialog.getSaveFileName(
+            self._window,
+            "Export history",
+            "transcription_history.txt",
+            "Text files (*.txt);;All files (*.*)",
+        )
+        if not path:
+            return
+        try:
+            ok = bool(self._history.export_to_text(path))
+        except Exception as exc:
+            log.warning("History export raised: %s", exc)
+            ok = False
+        if ok:
+            QMessageBox.information(
+                self._window,
+                "History exported",
+                f"Saved {len(entries)} transcriptions to:\n{path}",
+            )
+        else:
+            QMessageBox.warning(
+                self._window,
+                "Export failed",
+                "Could not write the history file. Check the destination "
+                "path and permissions.",
+            )
 
     def _on_history_copy(self, text: str) -> None:
         QApplication.clipboard().setText(text)

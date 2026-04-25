@@ -389,6 +389,8 @@ class FakeHistory:
     def __init__(self, entries=None):
         self._entries = list(entries or [])
         self.cleared = False
+        self.exported_to: list[str] = []
+        self.export_returns: bool = True
 
     def get_entries(self):
         return list(self._entries)
@@ -396,6 +398,10 @@ class FakeHistory:
     def clear_history(self):
         self._entries.clear()
         self.cleared = True
+
+    def export_to_text(self, filepath: str) -> bool:
+        self.exported_to.append(filepath)
+        return self.export_returns
 
 
 def test_controller_populates_history_view_from_manager(qtbot):
@@ -413,7 +419,10 @@ def test_controller_populates_history_view_from_manager(qtbot):
     assert table_model.rowCount() == 2
 
 
-def test_controller_clears_history_through_manager(qtbot):
+def test_controller_clears_history_through_manager(qtbot, monkeypatch):
+    """Clear is destructive — confirm via QMessageBox before
+    forwarding to the manager. The test simulates clicking Yes."""
+    from PySide6.QtWidgets import QMessageBox
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
 
@@ -422,11 +431,117 @@ def test_controller_clears_history_through_manager(qtbot):
     config = FakeConfig()
     history = FakeHistory([FakeHistoryEntry("a")])
 
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: QMessageBox.Yes,
+    )
+
     AppController(config=config, window=window, history=history)
     window.history_view.clear_requested.emit()
 
     assert history.cleared is True
     assert window.history_view._source_model.rowCount() == 0
+
+
+def test_controller_clear_cancelled_keeps_entries(qtbot, monkeypatch):
+    """If the user clicks Cancel on the confirm dialog, history must
+    stay intact."""
+    from PySide6.QtWidgets import QMessageBox
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([FakeHistoryEntry("a"), FakeHistoryEntry("b")])
+
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: QMessageBox.Cancel,
+    )
+
+    AppController(config=config, window=window, history=history)
+    window.history_view.clear_requested.emit()
+
+    assert history.cleared is False
+    assert window.history_view._source_model.rowCount() == 2
+
+
+def test_controller_export_writes_through_manager(qtbot, monkeypatch):
+    """Export should pop a save-as dialog and forward the chosen path
+    to ``history_manager.export_to_text``."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([FakeHistoryEntry("hi")])
+
+    chosen_path = "C:/tmp/history-export.txt"
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName",
+        lambda *a, **kw: (chosen_path, "Text files (*.txt)"),
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    AppController(config=config, window=window, history=history)
+    window.history_view.export_requested.emit()
+
+    assert history.exported_to == [chosen_path]
+
+
+def test_controller_export_cancelled_does_not_call_manager(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([FakeHistoryEntry("hi")])
+
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName",
+        lambda *a, **kw: ("", ""),  # user clicked Cancel
+    )
+
+    AppController(config=config, window=window, history=history)
+    window.history_view.export_requested.emit()
+
+    assert history.exported_to == []
+
+
+def test_controller_export_with_empty_history_skips_dialog(qtbot, monkeypatch):
+    """Don't bother the user with a save-as dialog when there's
+    nothing to write — just inform them."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([])
+
+    save_called = []
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName",
+        lambda *a, **kw: (save_called.append(True), ("", ""))[1],
+    )
+    info_called = []
+    monkeypatch.setattr(
+        QMessageBox, "information",
+        lambda *a, **kw: info_called.append(True),
+    )
+
+    AppController(config=config, window=window, history=history)
+    window.history_view.export_requested.emit()
+
+    assert save_called == []  # save dialog never shown
+    assert info_called  # informational popup shown instead
+    assert history.exported_to == []
 
 
 def test_controller_copy_writes_to_clipboard(qtbot):
