@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -104,6 +104,11 @@ class ShortcutsView(QWidget):
         mic_test_row.setSpacing(10)
         self._test_mic_btn = QPushButton("Test microphone", audio_card)
         self._test_mic_btn.setObjectName("TestMicrophoneButton")
+        # Without ``NoFocus`` clicking the button puts keyboard focus
+        # on it; once we disable it for the 3-second test, Qt chases
+        # focus to the next focusable widget — the Start hotkey
+        # QLineEdit — and the cursor lands inside it. Annoying.
+        self._test_mic_btn.setFocusPolicy(Qt.NoFocus)
         self._test_mic_btn.clicked.connect(self.test_mic_requested.emit)
         mic_test_row.addWidget(self._test_mic_btn)
         self._test_mic_label = QLabel("", audio_card)
@@ -148,6 +153,7 @@ class ShortcutsView(QWidget):
         footer.addStretch(1)
         self._reset_btn = QPushButton("Reset to defaults", self)
         self._reset_btn.setObjectName("ResetShortcutsButton")
+        self._reset_btn.setFocusPolicy(Qt.NoFocus)
         self._reset_btn.clicked.connect(self.reset_requested.emit)
         footer.addWidget(self._reset_btn)
         root.addLayout(footer)

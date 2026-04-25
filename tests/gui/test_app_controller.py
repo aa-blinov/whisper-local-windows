@@ -635,9 +635,22 @@ class FakeAudioRecorder:
         }
 
 
+class FakeClipboardManager:
+    def __init__(self) -> None:
+        self.auto_paste_calls: list[bool] = []
+
+    def update_auto_paste(self, enabled: bool) -> None:
+        self.auto_paste_calls.append(bool(enabled))
+
+
 class FakeStateManager:
-    def __init__(self, audio_recorder: Optional[FakeAudioRecorder] = None) -> None:
+    def __init__(
+        self,
+        audio_recorder: Optional[FakeAudioRecorder] = None,
+        clipboard_manager: Optional[FakeClipboardManager] = None,
+    ) -> None:
         self.audio_recorder = audio_recorder
+        self.clipboard_manager = clipboard_manager
 
 
 class FakeRecordingController:
@@ -983,3 +996,46 @@ def test_controller_mic_test_surfaces_recorder_errors(qtbot):
         lambda: "device busy" in window.shortcuts_view._test_mic_label.text(),
         timeout=2000,
     )
+
+
+def test_controller_pushes_auto_paste_to_live_clipboard_manager(qtbot):
+    """Toggling Auto-paste in Settings must update the running
+    ClipboardManager — otherwise the checkbox flips visually but the
+    actual delivery keeps using the value it had at startup."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"clipboard": {"auto_paste": True}})
+    clipboard = FakeClipboardManager()
+    rec = FakeRecordingController(
+        state_manager=FakeStateManager(clipboard_manager=clipboard)
+    )
+
+    AppController(config=config, window=window, recording=rec)
+
+    # Toggle off, then on, via the checkbox.
+    cb = window.shortcuts_view._auto_paste_cb
+    cb.setChecked(False)
+    cb.setChecked(True)
+
+    # Most recent should be True (re-enabled), and at least one False
+    # along the way (when disabled).
+    assert clipboard.auto_paste_calls
+    assert clipboard.auto_paste_calls[-1] is True
+    assert False in clipboard.auto_paste_calls
+
+
+def test_test_microphone_button_does_not_grab_focus(qtbot):
+    """``setEnabled(False)`` during the 3-second test would chase
+    focus to the next focusable widget (the Start hotkey edit) if
+    the button had focus. NoFocus prevents the button from grabbing
+    focus on click in the first place."""
+    from PySide6.QtCore import Qt
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    assert view._test_mic_btn.focusPolicy() == Qt.NoFocus
+    assert view._reset_btn.focusPolicy() == Qt.NoFocus

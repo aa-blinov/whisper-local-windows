@@ -194,6 +194,15 @@ class AppController(QObject):
         self._config.update_user_setting(
             "clipboard", "auto_paste", payload["auto_paste"]
         )
+        # Push the new auto-paste flag into the running ClipboardManager
+        # too — without this the checkbox visually toggles but the
+        # actual delivery path keeps the value it had at startup.
+        clipboard = self._resolve_clipboard_manager()
+        if clipboard is not None and hasattr(clipboard, "update_auto_paste"):
+            try:
+                clipboard.update_auto_paste(bool(payload["auto_paste"]))
+            except Exception as exc:  # pragma: no cover — defensive
+                log.warning("Failed to push auto_paste live: %s", exc)
         if "device" in payload:
             self._config.update_user_setting("audio", "device", payload["device"])
             if self._recording is not None and hasattr(self._recording, "set_input_device"):
@@ -262,6 +271,15 @@ class AppController(QObject):
         if sm is None:
             return None
         return getattr(sm, "audio_recorder", None)
+
+    def _resolve_clipboard_manager(self):
+        """Same indirection for the ClipboardManager so settings can
+        push live updates (auto_paste toggle) without the user having
+        to restart the app for the change to take effect."""
+        sm = getattr(self._recording, "state_manager", None)
+        if sm is None:
+            return None
+        return getattr(sm, "clipboard_manager", None)
 
     def _on_shortcuts_reset(self) -> None:
         from app.config_manager import DEFAULT_CONFIG
