@@ -61,6 +61,17 @@ def _install_tqdm_progress() -> None:
     class _ProgressTqdm(base_cls):  # type: ignore[misc, valid-type]
         def update(self, n=1):
             ret = super().update(n)
+            # PyQt apps usually run without a TTY, so huggingface_hub's
+            # tqdm gets ``disable=None`` which auto-resolves to ``True``.
+            # When disabled, vanilla tqdm short-circuits ``update()`` and
+            # leaves ``self.n`` at zero — meaning our callback would see
+            # 0 bytes forever. Mirror the count ourselves in that case so
+            # the progress callback reports accurate bytes.
+            if getattr(self, "disable", False) and n:
+                try:
+                    self.n = (self.n or 0) + n
+                except (TypeError, ValueError):
+                    pass
             self._fire()
             return ret
 
@@ -77,8 +88,17 @@ def _install_tqdm_progress() -> None:
             cb = _progress_callback
             if cb is None:
                 return
+            # ``disable=True`` makes tqdm.__init__ return early before
+            # ``self.desc`` is assigned — and PyQt apps run without a TTY,
+            # which auto-disables every bar huggingface_hub creates. Use
+            # getattr so we still report progress instead of swallowing
+            # an AttributeError silently.
             try:
-                cb(int(self.n or 0), int(self.total or 0), str(self.desc or ""))
+                cb(
+                    int(getattr(self, "n", 0) or 0),
+                    int(getattr(self, "total", 0) or 0),
+                    str(getattr(self, "desc", "") or ""),
+                )
             except Exception:
                 pass
 

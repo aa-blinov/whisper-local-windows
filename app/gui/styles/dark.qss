@@ -80,8 +80,8 @@ QLabel[role="badge"] {
 }
 
 QLabel[role="pill-active"] {
-    background-color: {{color.accent}};
-    color: {{color.text_primary}};
+    background-color: {{color.success}};
+    color: {{color.bg_primary}};
     border-radius: {{radius.sm}};
     padding: 2px {{space.sm}};
     font-size: {{font.size_small}};

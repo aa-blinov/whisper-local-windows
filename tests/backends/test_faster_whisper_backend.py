@@ -239,6 +239,69 @@ def test_change_model_to_same_name_is_noop(monkeypatch):
     assert call_count["n"] == 1
 
 
+# ---- Download progress (tqdm patch) ----------------------------------------
+
+
+def test_tqdm_patch_fires_progress_callback_when_enabled():
+    """The patch routes tqdm.update calls through our callback so the UI
+    can mirror download progress."""
+    from app.backends.faster_whisper_backend import (
+        FasterWhisperBackend,
+        _install_tqdm_progress,
+    )
+
+    _install_tqdm_progress()
+
+    captured: list[tuple[int, int, str]] = []
+    FasterWhisperBackend.set_progress_callback(
+        lambda current, total, desc: captured.append((current, total, desc))
+    )
+    try:
+        import tqdm.auto
+
+        bar = tqdm.auto.tqdm(total=100, desc="model.bin", disable=False)
+        bar.update(50)
+        bar.close()
+    finally:
+        FasterWhisperBackend.set_progress_callback(None)
+
+    assert any(c == 50 and t == 100 for (c, t, _) in captured), captured
+
+
+def test_tqdm_patch_fires_progress_callback_even_when_disabled():
+    """PyQt apps run without a TTY, so tqdm's ``disable=None`` resolves
+    to ``True`` and vanilla ``update()`` becomes a no-op that never
+    increments ``self.n``. The patch must still report accurate progress
+    in that case — otherwise the topbar shows ``Loading model… 0%``
+    forever even while bytes are arriving."""
+    from app.backends.faster_whisper_backend import (
+        FasterWhisperBackend,
+        _install_tqdm_progress,
+    )
+
+    _install_tqdm_progress()
+
+    captured: list[tuple[int, int, str]] = []
+    FasterWhisperBackend.set_progress_callback(
+        lambda current, total, desc: captured.append((current, total, desc))
+    )
+    try:
+        import tqdm.auto
+
+        bar = tqdm.auto.tqdm(total=100, desc="model.bin", disable=True)
+        bar.update(50)
+        bar.update(25)
+        bar.close()
+    finally:
+        FasterWhisperBackend.set_progress_callback(None)
+
+    # At least one callback must report a non-zero current — otherwise
+    # the UI thinks 0 bytes have arrived.
+    assert any(c > 0 for (c, _, _) in captured), captured
+    # Final cumulative count should reach the bytes we fed in.
+    assert any(c == 75 and t == 100 for (c, t, _) in captured), captured
+
+
 # ---- Shutdown --------------------------------------------------------------
 
 
