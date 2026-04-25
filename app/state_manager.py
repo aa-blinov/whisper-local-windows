@@ -144,19 +144,31 @@ class StateManager:
             self.logger.debug(f"[Pipeline] Recorded duration={duration:.3f}s; starting transcription")
             
             transcribed_text = self.backend.transcribe(audio_data)
-            self.logger.debug(f"[Pipeline] transcribe_audio returned length={0 if not transcribed_text else len(transcribed_text)}")
-            
-            if not transcribed_text:
-                self.logger.debug("[Pipeline] No transcription text -> return path")
-                return
-            
-            self.system_tray.update_state("processing")
-            self.logger.debug("[Pipeline] System tray set to processing; delivering transcription (auto_enter=%s)" % use_auto_enter)
+            text_len = 0 if not transcribed_text else len(transcribed_text)
+            self.logger.info(
+                "Transcription returned %d characters", text_len,
+                extra={'user_message': True},
+            )
 
+            if not transcribed_text:
+                self.logger.info(
+                    "No speech detected (empty transcription) — nothing to paste.",
+                    extra={'user_message': True},
+                )
+                return
+
+            preview = transcribed_text if len(transcribed_text) <= 80 else transcribed_text[:77] + "..."
+            self.logger.info("Transcribed: %s", preview, extra={'user_message': True})
+
+            self.system_tray.update_state("processing")
             success = self.clipboard_manager.deliver_transcription(
                 transcribed_text, use_auto_enter
             )
-            self.logger.debug(f"[Pipeline] deliver_transcription success={success}")
+            self.logger.info(
+                "Clipboard delivery %s",
+                "succeeded" if success else "failed",
+                extra={'user_message': True},
+            )
             
             if success:
                 self.last_transcription = transcribed_text
