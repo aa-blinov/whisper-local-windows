@@ -50,6 +50,35 @@ def get_project_logs_path():
     os.makedirs(logs_dir, exist_ok=True)
     return str(logs_dir)
 
+def get_project_models_path() -> str:
+    """Return the directory used to cache downloaded model weights.
+
+    Lives next to the executable when frozen (PyInstaller), otherwise in the
+    project root identified by ``pyproject.toml``. Created if missing.
+
+    Used as ``HF_HOME`` so faster-whisper / huggingface_hub keep their
+    downloads inside the project tree rather than the per-user
+    ``~/.cache/huggingface`` location, which is invisible to most users and
+    eats the system drive.
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).parent
+    elif is_installed_package():
+        base = Path.cwd()
+    else:
+        current = Path(__file__).parent
+        base = None
+        for p in [current, *current.parents]:
+            if (p / "pyproject.toml").exists():
+                base = p
+                break
+        if base is None:
+            base = current.parent.parent.parent
+    models_dir = base / "models"
+    os.makedirs(models_dir, exist_ok=True)
+    return str(models_dir)
+
+
 def resolve_asset_path(relative_path: str) -> str:
     
     if not relative_path or os.path.isabs(relative_path):

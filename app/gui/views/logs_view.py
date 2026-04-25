@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QTextCursor, QTextOption
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -46,7 +46,11 @@ class LogsView(QWidget):
         self._text.setObjectName("LogsTextArea")
         self._text.setReadOnly(True)
         self._text.setMaximumBlockCount(self._max_lines)
-        self._text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        # Wrap to widget width — log lines from the recording pipeline can be
+        # 200+ chars, and a horizontal scrollbar makes them effectively
+        # invisible.
+        self._text.setLineWrapMode(QPlainTextEdit.WidgetWidth)
+        self._text.setWordWrapMode(QTextOption.WrapAnywhere)
         root.addWidget(self._text, 1)
 
     def append_line(self, text: str) -> None:

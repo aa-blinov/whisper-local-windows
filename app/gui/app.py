@@ -159,6 +159,15 @@ def build_application(
 def main() -> int:
     import logging
 
+    # Redirect Hugging Face downloads into <project>/models/ before any
+    # huggingface_hub / faster_whisper code is imported — these libs read
+    # HF_HOME at import time. Without this the cache lands in
+    # ``~/.cache/huggingface/hub``, which is invisible to most users and
+    # eats the system drive.
+    from app.utils import get_project_models_path
+
+    os.environ.setdefault("HF_HOME", get_project_models_path())
+
     from app.config_manager import ConfigManager
     from app.gui.controllers.recording_controller import RecordingController
     from app.gui.recording_factory import build_recording_stack

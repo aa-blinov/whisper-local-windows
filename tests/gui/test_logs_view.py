@@ -24,6 +24,16 @@ def test_logs_view_textbox_is_read_only(qtbot):
     assert textbox.isReadOnly()
 
 
+def test_logs_view_wraps_long_lines(qtbot):
+    """Long log lines should wrap to widget width, not push a horizontal scrollbar."""
+    from app.gui.views.logs_view import LogsView
+
+    view = LogsView()
+    qtbot.addWidget(view)
+    textbox = view.findChild(QPlainTextEdit)
+    assert textbox.lineWrapMode() == QPlainTextEdit.WidgetWidth
+
+
 def test_append_line_adds_single_line(qtbot):
     from app.gui.views.logs_view import LogsView
 
