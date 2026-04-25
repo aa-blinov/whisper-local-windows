@@ -96,11 +96,12 @@ class Toast(QFrame):
         if host is None:
             return
         margin = 16
-        # Sit just below the topbar — its fixed height is 44, plus a
-        # touch of padding so it doesn't kiss the bottom border.
+        # Bottom-right corner so the banner never lands on top of the
+        # search bar / first-row content of whatever view is active.
+        # Same convention as Slack / Discord / VS Code notifications.
         x = host.width() - self.width() - margin
-        y = 60
-        self.move(max(margin, x), y)
+        y = host.height() - self.height() - margin
+        self.move(max(margin, x), max(0, y))
 
     # Re-anchor when the host resizes.
     def parentResized(self) -> None:  # pragma: no cover — convenience hook

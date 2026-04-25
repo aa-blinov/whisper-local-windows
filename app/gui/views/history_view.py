@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QDialog,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -199,14 +200,24 @@ class HistoryView(QWidget):
         self._proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self._proxy.setFilterKeyColumn(1)  # Text column
 
-        # Stack the table behind an empty-state placeholder; the
-        # controller swaps which one is showing when the entry count
-        # crosses zero.
+        # Wrap the table in a card so it reads as a defined surface
+        # against the view background instead of floating with no
+        # boundaries. The QStackedWidget swaps between the table card
+        # and the empty-state placeholder when the entry count crosses
+        # zero.
         self._stack = QStackedWidget(self)
 
-        self._table = QTableView(self._stack)
+        table_card = QFrame(self._stack)
+        table_card.setProperty("role", "card")
+        table_card.setFrameShape(QFrame.NoFrame)
+        card_layout = QVBoxLayout(table_card)
+        card_layout.setContentsMargins(2, 2, 2, 2)
+        card_layout.setSpacing(0)
+
+        self._table = QTableView(table_card)
         self._table.setObjectName("HistoryTable")
         self._table.setModel(self._proxy)
+        self._table.setFrameShape(QTableView.NoFrame)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -218,10 +229,13 @@ class HistoryView(QWidget):
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self._table.horizontalHeader().setStretchLastSection(False)
-        self._stack.addWidget(self._table)
+        card_layout.addWidget(self._table)
+        self._stack.addWidget(table_card)
 
-        empty = QWidget(self._stack)
+        empty = QFrame(self._stack)
         empty.setObjectName("HistoryEmptyState")
+        empty.setProperty("role", "card")
+        empty.setFrameShape(QFrame.NoFrame)
         empty_layout = QVBoxLayout(empty)
         empty_layout.setContentsMargins(40, 60, 40, 60)
         empty_layout.setSpacing(8)
@@ -242,6 +256,9 @@ class HistoryView(QWidget):
         empty_layout.addStretch(2)
         self._empty_state = empty
         self._stack.addWidget(empty)
+        # Pre-fetch the table-card reference so ``_update_empty_state``
+        # can swap between them by widget identity.
+        self._table_card = table_card
 
         root.addWidget(self._stack, 1)
         self._update_empty_state()
@@ -283,7 +300,7 @@ class HistoryView(QWidget):
         if self._source_model.rowCount() == 0:
             self._stack.setCurrentWidget(self._empty_state)
         else:
-            self._stack.setCurrentWidget(self._table)
+            self._stack.setCurrentWidget(self._table_card)
 
     def _on_copy_clicked(self) -> None:
         rows = self._table.selectionModel().selectedRows()

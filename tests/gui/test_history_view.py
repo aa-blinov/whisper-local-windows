@@ -332,4 +332,4 @@ def test_history_view_swaps_to_table_when_entries_arrive(qtbot):
     view = HistoryView()
     qtbot.addWidget(view)
     view.set_entries(_make_entries(2))
-    assert view._stack.currentWidget() is view._table
+    assert view._stack.currentWidget() is view._table_card
