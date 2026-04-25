@@ -93,10 +93,19 @@ def _install_tqdm_progress() -> None:
             # which auto-disables every bar huggingface_hub creates. Use
             # getattr so we still report progress instead of swallowing
             # an AttributeError silently.
+            total = int(getattr(self, "total", 0) or 0)
+            # Hugging Face spawns one tqdm bar per file (config.json,
+            # tokenizer.json, vocabulary.txt, model.bin, …). The small
+            # ones complete in milliseconds, so the user sees the bar
+            # bounce 0%→99%→0%→99%→0%→% as each file is touched. Skip
+            # bars whose total weight is trivial — only the actual
+            # weights file is worth surfacing in the UI.
+            if 0 < total < 1_000_000:
+                return
             try:
                 cb(
                     int(getattr(self, "n", 0) or 0),
-                    int(getattr(self, "total", 0) or 0),
+                    total,
                     str(getattr(self, "desc", "") or ""),
                 )
             except Exception:

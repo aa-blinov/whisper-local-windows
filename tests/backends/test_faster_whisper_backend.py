@@ -259,13 +259,15 @@ def test_tqdm_patch_fires_progress_callback_when_enabled():
     try:
         import tqdm.auto
 
-        bar = tqdm.auto.tqdm(total=100, desc="model.bin", disable=False)
-        bar.update(50)
+        # Use bytes counts above the 1 MB filter threshold so the bar
+        # reaches the callback.
+        bar = tqdm.auto.tqdm(total=10_000_000, desc="model.bin", disable=False)
+        bar.update(5_000_000)
         bar.close()
     finally:
         FasterWhisperBackend.set_progress_callback(None)
 
-    assert any(c == 50 and t == 100 for (c, t, _) in captured), captured
+    assert any(c == 5_000_000 and t == 10_000_000 for (c, t, _) in captured), captured
 
 
 def test_tqdm_patch_fires_progress_callback_even_when_disabled():
@@ -288,9 +290,9 @@ def test_tqdm_patch_fires_progress_callback_even_when_disabled():
     try:
         import tqdm.auto
 
-        bar = tqdm.auto.tqdm(total=100, desc="model.bin", disable=True)
-        bar.update(50)
-        bar.update(25)
+        bar = tqdm.auto.tqdm(total=10_000_000, desc="model.bin", disable=True)
+        bar.update(5_000_000)
+        bar.update(2_500_000)
         bar.close()
     finally:
         FasterWhisperBackend.set_progress_callback(None)
@@ -299,7 +301,48 @@ def test_tqdm_patch_fires_progress_callback_even_when_disabled():
     # the UI thinks 0 bytes have arrived.
     assert any(c > 0 for (c, _, _) in captured), captured
     # Final cumulative count should reach the bytes we fed in.
-    assert any(c == 75 and t == 100 for (c, t, _) in captured), captured
+    assert any(c == 7_500_000 and t == 10_000_000 for (c, t, _) in captured), captured
+
+
+def test_tqdm_patch_skips_trivial_bars_to_avoid_jumps():
+    """Hugging Face creates a separate tqdm bar per file in a snapshot
+    download (config.json, tokenizer.json, vocabulary.txt, model.bin,
+    …). The small ones flash 0%→99% in milliseconds; if we report
+    every bar, the UI sees the percentage drop back to 0% each time a
+    new file starts. Skip bars whose total is below the trivial-file
+    threshold so only the actual weights show up."""
+    from app.backends.faster_whisper_backend import (
+        FasterWhisperBackend,
+        _install_tqdm_progress,
+    )
+
+    _install_tqdm_progress()
+
+    captured: list[tuple[int, int, str]] = []
+    FasterWhisperBackend.set_progress_callback(
+        lambda current, total, desc: captured.append((current, total, desc))
+    )
+    try:
+        import tqdm.auto
+
+        # Tiny bar (5 KB) — should be ignored.
+        tiny = tqdm.auto.tqdm(total=5_000, desc="config.json", disable=True)
+        tiny.update(2_500)
+        tiny.update(2_500)
+        tiny.close()
+
+        # Real weights bar (75 MB) — must fire.
+        weights = tqdm.auto.tqdm(total=75_000_000, desc="model.bin", disable=True)
+        weights.update(15_000_000)
+        weights.close()
+    finally:
+        FasterWhisperBackend.set_progress_callback(None)
+
+    totals = {t for (_, t, _) in captured}
+    # Small bar must not have produced any callback (no 5_000 entry).
+    assert 5_000 not in totals
+    # Large bar must have fired.
+    assert 75_000_000 in totals
 
 
 # ---- Shutdown --------------------------------------------------------------
