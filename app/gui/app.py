@@ -13,7 +13,7 @@ from app.gui.controllers.app_controller import AppController
 from app.gui.log_bridge import QtLogBridge
 from app.gui.main_window import MainWindow
 from app.gui.theme import apply_theme
-from app.utils import resolve_asset_path
+from app.utils import is_model_cached, resolve_asset_path
 
 
 def _load_app_icon() -> QIcon:
@@ -268,10 +268,21 @@ def main() -> int:
         )
 
     if backend is not None:
-        # Kick off background model load right away so the UI status pill
-        # transitions from "Loading model…" to "Model ready" without waiting
-        # for the user's first keypress.
-        backend.load()
+        # Auto-load only models whose weights are already cached on disk.
+        # Triggering a fresh download silently on startup is a UX
+        # foot-gun — the user just sees the spinner stuck on
+        # "Loading model…" with no idea that 1.5 GB are coming over
+        # the wire. Force a deliberate click on a Download button in
+        # that case so progress is visible and consensual.
+        canonical = backend.current_model()
+        if is_model_cached(canonical):
+            backend.load()
+        else:
+            logging.getLogger(__name__).info(
+                "Persisted model %s is not cached — skipping auto-load. "
+                "Waiting for the user to pick a model.",
+                canonical,
+            )
 
     history = state_manager.history_manager if state_manager is not None else None
     backend_status_fetcher = backend.status if backend is not None else None

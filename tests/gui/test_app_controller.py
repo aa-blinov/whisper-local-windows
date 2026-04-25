@@ -2,6 +2,8 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 
+import pytest
+
 
 class FakeConfig:
     """Minimal stand-in for ConfigManager used in controller tests."""
@@ -18,6 +20,20 @@ class FakeConfig:
     def update_user_setting(self, section: str, key: str, value: Any) -> None:
         self._data.setdefault(section, {})[key] = value
         self.writes.append((section, key, value))
+
+
+@pytest.fixture(autouse=True)
+def _assume_cached(monkeypatch):
+    """The controller now consults ``is_model_cached`` before restoring
+    the persisted active card so a fresh install / cleared cache doesn't
+    silently kick off a multi-gigabyte download. The bulk of the existing
+    tests assume the persisted model is on disk; default the mock to True
+    here and let the dedicated uncached-model test override it.
+    """
+    monkeypatch.setattr(
+        "app.gui.controllers.app_controller.is_model_cached",
+        lambda canonical: True,
+    )
 
 
 # ---- Init from config -------------------------------------------------------
@@ -75,6 +91,33 @@ def test_controller_handles_missing_model_in_config(qtbot):
     AppController(config=config, window=window)
 
     assert window.models_view.active_alias() is None
+
+
+def test_controller_skips_active_when_persisted_model_is_not_cached(
+    qtbot, monkeypatch
+):
+    """If the persisted model isn't on disk yet (fresh install / cleared
+    cache), don't restore it as Active — the green pill would advertise
+    a ready state while the backend is empty, AND the Select/Download
+    button stays hidden, leaving the user stuck. Force a deliberate
+    Download click so progress is visible."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setattr(
+        "app.gui.controllers.app_controller.is_model_cached",
+        lambda canonical: False,
+    )
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+
+    AppController(config=config, window=window)
+
+    assert window.models_view.active_alias() is None
+    # Topbar should also reflect the no-model state.
+    assert "No model" in window.topbar._model_pill.text() or window.topbar._model_pill.text() == "No model"
 
 
 # ---- Selection ↔ persistence ------------------------------------------------
