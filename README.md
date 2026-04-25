@@ -40,8 +40,8 @@ Cloud APIs are not involved.
 Requires Windows 10/11, Python 3.12, Docker Desktop, and a microphone.
 
 ```powershell
-git clone https://github.com/aa-blinov/whisper-local-windows.git
-cd whisper-local-windows
+git clone https://github.com/aa-blinov/lazy-to-text.git
+cd lazy-to-text
 
 # uv handles the venv and the lock-file pinned dependencies
 uv sync
