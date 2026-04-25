@@ -183,8 +183,8 @@ def test_model_url_for_gigaam_points_at_github():
     project's GitHub README, so all GigaAM cards link there."""
     from app.model_mapping import get_model, model_url
 
-    info = get_model("gigaam-v2-ctc")
+    info = get_model("gigaam-v3-e2e-ctc")
     assert model_url(info) == "https://github.com/salute-developers/GigaAM"
 
-    info_rnnt = get_model("gigaam-v2-rnnt")
+    info_rnnt = get_model("gigaam-v3-e2e-rnnt")
     assert model_url(info_rnnt) == "https://github.com/salute-developers/GigaAM"

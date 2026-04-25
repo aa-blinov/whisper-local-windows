@@ -157,6 +157,83 @@ def test_transcribe_swallows_runtime_errors(monkeypatch):
     assert backend.transcribe(np.zeros(16000, dtype=np.float32)) is None
 
 
+def test_transcribe_routes_long_audio_through_longform(monkeypatch):
+    """Captures longer than ~25 s have to go through GigaAM's
+    ``transcribe_longform`` — plain ``transcribe`` is documented as
+    good only up to that threshold and would silently truncate."""
+    from app.backends.gigaam_backend import GigaamBackend
+
+    plain_calls: list[str] = []
+    longform_calls: list[str] = []
+
+    class _Segment:
+        def __init__(self, text: str) -> None:
+            self.text = text
+            self.start = 0
+            self.end = 1
+
+    def transcribe(_path):
+        plain_calls.append(_path)
+        return MagicMock(text="short result")
+
+    def transcribe_longform(path):
+        longform_calls.append(path)
+        return [_Segment("первый сегмент"), _Segment("второй сегмент")]
+
+    fake_model = MagicMock()
+    fake_model.transcribe.side_effect = transcribe
+    fake_model.transcribe_longform.side_effect = transcribe_longform
+
+    _install_fake_gigaam(
+        monkeypatch, load_model=MagicMock(return_value=fake_model)
+    )
+
+    backend = GigaamBackend(model="v3_e2e_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    # 30 seconds at 16 kHz mono.
+    long_audio = np.zeros(16000 * 30, dtype=np.float32)
+    text = backend.transcribe(long_audio, sample_rate=16000)
+
+    assert text == "первый сегмент второй сегмент"
+    assert len(longform_calls) == 1
+    assert plain_calls == []  # plain transcribe never called
+
+
+def test_transcribe_falls_back_to_plain_when_longform_raises(monkeypatch):
+    """If ``transcribe_longform`` blows up (deps missing or pyannote
+    gated model not accepted), drop back to plain ``transcribe`` so
+    the user gets at least a partial result rather than nothing."""
+    from app.backends.gigaam_backend import GigaamBackend
+
+    plain_calls: list[str] = []
+
+    def transcribe(path):
+        plain_calls.append(path)
+        return MagicMock(text="fallback text")
+
+    fake_model = MagicMock()
+    fake_model.transcribe.side_effect = transcribe
+    fake_model.transcribe_longform.side_effect = RuntimeError(
+        "pyannote/segmentation-3.0 not accepted"
+    )
+
+    _install_fake_gigaam(
+        monkeypatch, load_model=MagicMock(return_value=fake_model)
+    )
+
+    backend = GigaamBackend(model="v3_e2e_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    long_audio = np.zeros(16000 * 30, dtype=np.float32)
+    text = backend.transcribe(long_audio, sample_rate=16000)
+
+    assert text == "fallback text"
+    assert len(plain_calls) == 1
+
+
 def test_transcribe_writes_audio_to_wav_and_passes_path(monkeypatch, tmp_path):
     """GigaAM's ``transcribe`` only accepts a path on disk. The
     backend must spool the captured numpy buffer to a temp WAV

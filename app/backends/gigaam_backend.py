@@ -142,7 +142,18 @@ class GigaamBackend:
                 buf = buf.mean(axis=1)
             sf.write(tmp_path, buf, int(sample_rate), subtype="PCM_16")
 
-            result = model.transcribe(tmp_path)
+            duration_s = len(buf) / max(1, int(sample_rate))
+            # GigaAM's plain ``transcribe`` is documented as good up to
+            # 25 seconds. Longer clips have to go through
+            # ``transcribe_longform``, which uses pyannote VAD to
+            # split the audio into <25 s segments. Use a small
+            # safety margin so we never feed transcribe a buffer
+            # right at the edge.
+            if duration_s > 24.0:
+                text = self._transcribe_longform(model, tmp_path)
+            else:
+                result = model.transcribe(tmp_path)
+                text = self._extract_text(result)
         except Exception as exc:
             log.error("GigaAM transcription failed: %s", exc, exc_info=True)
             return None
@@ -153,16 +164,55 @@ class GigaamBackend:
                 except OSError:
                     pass
 
-        # ``transcribe`` returns ``TranscriptionResult`` with ``.text``
-        # and ``.words``; the legacy code path expected a plain string,
-        # so unwrap. Tolerate both shapes for safety.
-        text = getattr(result, "text", None)
-        if text is None and isinstance(result, str):
-            text = result
         if text is None:
             return None
         text = str(text).strip()
         return text or None
+
+    @staticmethod
+    def _extract_text(result) -> Optional[str]:
+        """``model.transcribe`` returns ``TranscriptionResult`` with
+        ``.text`` / ``.words``; the legacy fakes return a plain
+        string. Accept both."""
+        text = getattr(result, "text", None)
+        if text is None and isinstance(result, str):
+            text = result
+        return text
+
+    def _transcribe_longform(self, model, wav_path: str) -> Optional[str]:
+        """Route long captures through ``transcribe_longform``.
+
+        The method needs the ``gigaam[longform]`` extras
+        (``pyannote-audio``) installed AND the user has to have
+        accepted the gated ``pyannote/segmentation-3.0`` model on
+        Hugging Face with ``HF_TOKEN`` set. Falls back to plain
+        ``transcribe`` (which will likely truncate) if the longform
+        path isn't available — better partial output than nothing.
+        """
+        longform = getattr(model, "transcribe_longform", None)
+        if longform is None:
+            log.warning(
+                "GigaAM model has no transcribe_longform — falling "
+                "back to plain transcribe (audio may be truncated)."
+            )
+            return self._extract_text(model.transcribe(wav_path))
+        try:
+            segments = longform(wav_path)
+        except Exception as exc:
+            log.error(
+                "transcribe_longform failed (deps missing or "
+                "pyannote/segmentation-3.0 not accepted on HF?): %s",
+                exc,
+            )
+            return self._extract_text(model.transcribe(wav_path))
+        # Each segment exposes ``.text`` / ``.start`` / ``.end``;
+        # strings stay supported for fakes.
+        chunks: list[str] = []
+        for seg in segments or []:
+            piece = self._extract_text(seg)
+            if piece:
+                chunks.append(str(piece).strip())
+        return " ".join(c for c in chunks if c)
 
     def shutdown(self) -> None:
         with self._lock:

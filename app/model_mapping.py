@@ -197,29 +197,33 @@ MODELS: Tuple[ModelInfo, ...] = (
     # GigaAM has its own engine; ``backend_kind`` switches the routing
     # facade to ``gigaam.load_model`` instead of ``faster_whisper``.
     # ``canonical`` here is the GigaAM model id, not a HF repo path.
+    # We ship only the v3 end-to-end variants — they include
+    # punctuation / normalisation in the output, which matters for
+    # the clipboard-paste flow (we don't have a separate punctuator),
+    # and v3 was trained on 14× more data than v2.
     ModelInfo(
-        alias="gigaam-v2-ctc",
-        canonical="v2_ctc",
-        display_name="GigaAM v2 CTC",
-        size_mb=240,
+        alias="gigaam-v3-e2e-ctc",
+        canonical="v3_e2e_ctc",
+        display_name="GigaAM v3 CTC (e2e, punctuated)",
+        size_mb=260,
         vram_gb=2.0,
         speed="fast",
         quality="excellent",
         languages="Russian (only)",
-        description="Sber GigaAM v2 with CTC decoder — fast Russian transcription, smaller than Whisper.",
+        description="Sber GigaAM v3 end-to-end with CTC decoder — fast Russian transcription with built-in punctuation.",
         backend_kind="gigaam",
         family="GigaAM",
     ),
     ModelInfo(
-        alias="gigaam-v2-rnnt",
-        canonical="v2_rnnt",
-        display_name="GigaAM v2 RNN-T",
-        size_mb=270,
+        alias="gigaam-v3-e2e-rnnt",
+        canonical="v3_e2e_rnnt",
+        display_name="GigaAM v3 RNN-T (e2e, punctuated)",
+        size_mb=290,
         vram_gb=2.5,
         speed="medium",
         quality="excellent",
         languages="Russian (only)",
-        description="Sber GigaAM v2 with RNN-T decoder — best Russian quality, slightly slower than CTC.",
+        description="Sber GigaAM v3 end-to-end with RNN-T decoder — best Russian quality, built-in punctuation. Recommended.",
         backend_kind="gigaam",
         family="GigaAM",
     ),
