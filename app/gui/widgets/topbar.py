@@ -6,6 +6,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QSizePolicy,
@@ -14,6 +15,14 @@ from PySide6.QtWidgets import (
 
 from app.gui.widgets.resource_widget import ResourceWidget
 from app.gui.widgets.vu_meter import VUMeter
+
+
+# Sidebar's fixed width — duplicated here so the topbar can leave
+# the matching gap on its left edge and continue the sidebar's
+# right border line up through itself. Updating this without
+# updating ``Sidebar.setFixedWidth`` would visually misalign the
+# divider, so it's pinned alongside it.
+_SIDEBAR_WIDTH_PX = 200
 
 
 _STATUS_VALUES = ("running", "stopped", "error", "unknown", "hidden")
@@ -65,20 +74,36 @@ class TopBar(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(20, 10, 20, 10)
+        # Zero left margin so the spacer below lines up the divider
+        # exactly with the sidebar's right edge (sidebar starts at
+        # x=0). Right margin still padded for the pill cluster.
+        layout.setContentsMargins(0, 10, 20, 10)
         layout.setSpacing(12)
 
-        # Sidebar already highlights the active section name and the
-        # OS title bar shows "Lazy to Text", so the topbar's left
-        # area stays empty — duplicating the label was just visual
-        # noise.
-        layout.addStretch(1)
+        # ---- Sidebar-aligned blank zone -------------------------------
+        # Eats the same horizontal space as the sidebar so the
+        # divider that follows it visually extends the sidebar's
+        # right border up through the topbar.
+        left_gutter = QWidget(self)
+        left_gutter.setFixedWidth(_SIDEBAR_WIDTH_PX)
+        layout.addWidget(left_gutter)
 
-        # Resource stats — sits at the far left of the right cluster
-        # so it's always visible. Updated by the ``ResourceMonitor``
-        # the controller owns.
+        divider = QFrame(self)
+        divider.setObjectName("TopBarDivider")
+        divider.setFrameShape(QFrame.VLine)
+        divider.setFrameShadow(QFrame.Plain)
+        layout.addWidget(divider)
+
+        # Resource stats — first thing right of the divider so the
+        # ResourceWidget feels anchored to the body area's leading
+        # edge instead of competing with the right-side pill
+        # cluster for attention.
         self._resources = ResourceWidget(self)
         layout.addWidget(self._resources)
+
+        # Push the rest of the topbar (recording / model / status)
+        # to the right.
+        layout.addStretch(1)
 
         # Slim live-input meter — visible only while a recording is
         # in flight. Sits next to the recording pill so the eye
