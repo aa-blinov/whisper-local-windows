@@ -385,6 +385,7 @@ QComboBox QAbstractItemView {
 }
 
 QCheckBox {
+    background-color: transparent;
     spacing: 8px;
     color: {{color.text_primary}};
 }
