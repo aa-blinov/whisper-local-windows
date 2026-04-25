@@ -41,16 +41,19 @@ class _Tokens:
 
 TOKENS = _Tokens(
     colors={
-        "bg_primary": "#161616",
-        "bg_secondary": "#1f1f1f",
-        "bg_elevated": "#2a2a2a",
-        "accent": "#4a9eff",
-        "accent_hover": "#6cb1ff",
-        "text_primary": "#ffffff",
-        "text_secondary": "#b0b0b0",
-        "text_muted": "#7a7a7a",
-        "border": "#333333",
-        "border_focus": "#4a9eff",
+        # Slightly bluer, more saturated dark base — gives the surface
+        # a "designed" feel instead of pure neutral gray.
+        "bg_primary": "#0f1115",
+        "bg_secondary": "#1a1d24",
+        "bg_elevated": "#252932",
+        "bg_hover": "#2d323d",
+        "accent": "#5b8cff",
+        "accent_hover": "#7aa2ff",
+        "text_primary": "#f5f6f8",
+        "text_secondary": "#b8bcc6",
+        "text_muted": "#7d828d",
+        "border": "#2d3140",
+        "border_focus": "#5b8cff",
         "success": "#4ade80",
         "danger": "#ef4444",
         "warning": "#f59e0b",
@@ -63,14 +66,17 @@ TOKENS = _Tokens(
         "xl": 24,
     },
     radius={
-        "sm": 6,
-        "md": 10,
-        "lg": 14,
+        # Plumper rounded corners read as more modern. Cards float at
+        # ``lg``, primary surfaces at ``md``, badges and pills at ``sm``.
+        "sm": 8,
+        "md": 12,
+        "lg": 16,
+        "xl": 20,
     },
     fonts={
         "family": "Segoe UI",
-        "size_title": 20,
-        "size_heading": 16,
+        "size_title": 22,
+        "size_heading": 17,
         "size_body": 13,
         "size_small": 11,
     },

@@ -34,16 +34,20 @@ QLabel[role="muted"] {
     font-size: {{font.size_small}};
 }
 
+/* ---- Buttons ------------------------------------------------------------- */
+
 QPushButton {
     background-color: {{color.bg_elevated}};
     color: {{color.text_primary}};
     border: 1px solid {{color.border}};
     border-radius: {{radius.sm}};
-    padding: {{space.sm}} {{space.md}};
+    padding: 9px 18px;
+    font-weight: 500;
+    min-height: 16px;
 }
 
 QPushButton:hover {
-    background-color: {{color.border}};
+    background-color: {{color.bg_hover}};
     border-color: {{color.accent}};
 }
 
@@ -51,25 +55,48 @@ QPushButton:pressed {
     background-color: {{color.bg_secondary}};
 }
 
+QPushButton:disabled {
+    color: {{color.text_muted}};
+    background-color: {{color.bg_secondary}};
+    border-color: {{color.border}};
+}
+
 QPushButton[role="primary"] {
     background-color: {{color.accent}};
     color: {{color.text_primary}};
-    border: none;
+    border: 1px solid {{color.accent}};
+    font-weight: 600;
 }
 
 QPushButton[role="primary"]:hover {
     background-color: {{color.accent_hover}};
+    border-color: {{color.accent_hover}};
 }
+
+QPushButton[role="primary"]:disabled {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_muted}};
+    border-color: {{color.border}};
+}
+
+/* ---- Cards --------------------------------------------------------------- */
 
 QFrame[role="card"] {
     background-color: {{color.bg_secondary}};
     border: 1px solid {{color.border}};
-    border-radius: {{radius.md}};
+    border-radius: {{radius.lg}};
+}
+
+QFrame[role="card"]:hover {
+    border-color: {{color.accent_hover}};
 }
 
 QFrame[role="card"][active="true"] {
     border: 1px solid {{color.accent}};
+    background-color: {{color.bg_elevated}};
 }
+
+/* ---- Badges + pills ------------------------------------------------------ */
 
 QLabel[role="badge"] {
     background-color: {{color.bg_elevated}};
@@ -85,7 +112,7 @@ QLabel[role="pill-active"] {
     background-color: {{color.success}};
     color: {{color.bg_primary}};
     border-radius: {{radius.sm}};
-    padding: 2px {{space.sm}};
+    padding: 4px {{space.md}};
     font-size: {{font.size_small}};
     font-weight: 600;
 }
@@ -94,6 +121,8 @@ QLabel[role="pill-active"][state="loading"] {
     background-color: {{color.warning}};
     color: {{color.bg_primary}};
 }
+
+/* ---- TopBar -------------------------------------------------------------- */
 
 #TopBar {
     background-color: {{color.bg_secondary}};
@@ -109,7 +138,7 @@ QLabel[role="section-title"] {
 
 QLabel[role="status-pill"] {
     border-radius: {{radius.sm}};
-    padding: 2px {{space.sm}};
+    padding: 4px {{space.md}};
     font-size: {{font.size_small}};
     font-weight: 600;
     background-color: {{color.bg_elevated}};
@@ -138,7 +167,7 @@ QLabel[role="status-pill"][status="unknown"] {
 
 QLabel[role="recording-pill"] {
     border-radius: {{radius.sm}};
-    padding: 2px {{space.sm}};
+    padding: 4px {{space.md}};
     font-size: {{font.size_small}};
     font-weight: 600;
     background-color: {{color.bg_elevated}};
@@ -158,4 +187,151 @@ QLabel[role="recording-pill"][state="processing"] {
 QLabel[role="recording-pill"][state="model_loading"] {
     background-color: {{color.warning}};
     color: {{color.bg_primary}};
+}
+
+/* ---- Sidebar ------------------------------------------------------------- */
+
+#Sidebar {
+    background-color: {{color.bg_secondary}};
+    border-right: 1px solid {{color.border}};
+}
+
+#SidebarList {
+    background-color: transparent;
+    border: none;
+    outline: none;
+    padding: {{space.sm}} {{space.xs}};
+}
+
+#SidebarList::item {
+    padding: 10px 14px;
+    margin: 2px {{space.sm}};
+    border-radius: {{radius.sm}};
+    color: {{color.text_secondary}};
+}
+
+#SidebarList::item:hover {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_primary}};
+}
+
+#SidebarList::item:selected {
+    background-color: {{color.accent}};
+    color: {{color.text_primary}};
+}
+
+/* ---- Scrollbars ---------------------------------------------------------- */
+
+QScrollBar:vertical {
+    background-color: transparent;
+    width: 10px;
+    margin: 4px 2px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: {{color.border}};
+    border-radius: 4px;
+    min-height: 24px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: {{color.text_muted}};
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0;
+    background: none;
+}
+
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+QScrollBar:horizontal {
+    background-color: transparent;
+    height: 10px;
+    margin: 2px 4px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: {{color.border}};
+    border-radius: 4px;
+    min-width: 24px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: {{color.text_muted}};
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    width: 0;
+    background: none;
+}
+
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {
+    background: none;
+}
+
+/* ---- Form inputs --------------------------------------------------------- */
+
+QLineEdit,
+QPlainTextEdit,
+QTextEdit,
+QComboBox {
+    background-color: {{color.bg_secondary}};
+    color: {{color.text_primary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    padding: 6px 10px;
+    selection-background-color: {{color.accent}};
+}
+
+QLineEdit:focus,
+QPlainTextEdit:focus,
+QTextEdit:focus,
+QComboBox:focus {
+    border-color: {{color.accent}};
+}
+
+QComboBox QAbstractItemView {
+    background-color: {{color.bg_secondary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    selection-background-color: {{color.accent}};
+    selection-color: {{color.text_primary}};
+    padding: 4px;
+}
+
+QCheckBox {
+    spacing: 8px;
+    color: {{color.text_primary}};
+}
+
+/* ---- Tables -------------------------------------------------------------- */
+
+QTableView {
+    background-color: {{color.bg_secondary}};
+    alternate-background-color: {{color.bg_elevated}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    gridline-color: {{color.border}};
+    selection-background-color: {{color.accent}};
+}
+
+QHeaderView::section {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_secondary}};
+    padding: 6px 10px;
+    border: none;
+    border-right: 1px solid {{color.border}};
+    border-bottom: 1px solid {{color.border}};
+    font-weight: 600;
+}
+
+QHeaderView::section:last {
+    border-right: none;
 }

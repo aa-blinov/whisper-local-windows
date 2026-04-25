@@ -30,8 +30,8 @@ class ModelsView(QWidget):
         resolved: Sequence[ModelInfo] = tuple(models) if models is not None else MODELS
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 18)
-        root.setSpacing(10)
+        root.setContentsMargins(28, 22, 28, 22)
+        root.setSpacing(14)
 
         # Section title lives in the TopBar; a hint here is enough context.
         hint = QLabel(
@@ -53,8 +53,10 @@ class ModelsView(QWidget):
         content = QWidget(scroll)
         content.setObjectName("ModelsScrollContent")
         cards_layout = QVBoxLayout(content)
-        cards_layout.setContentsMargins(0, 0, 0, 0)
-        cards_layout.setSpacing(12)
+        # Outer padding so the drop shadow on each card has room to
+        # breathe instead of getting clipped at the scroll-area edge.
+        cards_layout.setContentsMargins(4, 4, 4, 4)
+        cards_layout.setSpacing(16)
 
         self._cards: Dict[str, ModelCard] = {}
         for info in resolved:

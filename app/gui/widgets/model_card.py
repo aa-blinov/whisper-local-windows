@@ -5,8 +5,10 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -82,9 +84,19 @@ class ModelCard(QFrame):
         self.setFrameShape(QFrame.NoFrame)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
+        # Soft drop shadow makes the card "float" off the dark surface
+        # — Qt QSS has no box-shadow so this is the only way to add
+        # depth. Keep blur generous and offset small so the effect is
+        # subtle, not theatrical.
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(24)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(0, 0, 0, 100))
+        self.setGraphicsEffect(shadow)
+
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 14)
-        root.setSpacing(8)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(10)
 
         header = QHBoxLayout()
         header.setSpacing(8)
