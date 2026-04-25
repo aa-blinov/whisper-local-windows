@@ -32,6 +32,7 @@ class AudioRecorder:
         self.audio_data = []
         self.recording_thread = None
         self.recording_start_time = None
+        self._capture_sample_rate: Optional[int] = None
         self.logger = logging.getLogger(__name__)
 
         self._test_microphone()
@@ -164,8 +165,23 @@ class AudioRecorder:
             self.logger.warning("No audio data recorded!", extra={'user_message': True})
             return None
 
-        # Convert list of audio chunks into a single numpy array
+        # Convert list of audio chunks into a single numpy array (still at
+        # the device's native sample rate at this point).
         audio_array = np.concatenate(self.audio_data, axis=0)
+
+        # Whisper expects 16 kHz mono float32. Resample if the device gave
+        # us anything else (typically 44.1 / 48 kHz on WASAPI).
+        capture_sr = self._capture_sample_rate or self.WHISPER_SAMPLE_RATE
+        if capture_sr != self.WHISPER_SAMPLE_RATE:
+            audio_array = self._resample_to(audio_array, capture_sr, self.WHISPER_SAMPLE_RATE)
+
+        # If the recorder ran in stereo, average to mono so Whisper sees a
+        # 1-D buffer.
+        if audio_array.ndim == 2 and audio_array.shape[1] > 1:
+            audio_array = audio_array.mean(axis=1)
+        elif audio_array.ndim == 2:
+            audio_array = audio_array[:, 0]
+
         duration = self.get_audio_duration(audio_array)
         # Peak / RMS amplitude is the cheapest "did the mic actually pick
         # anything up?" check. Whisper returning empty on a quiet recording
@@ -177,8 +193,8 @@ class AudioRecorder:
             peak = 0.0
             rms = 0.0
         self.logger.info(
-            "Recorded %.2f seconds of audio (peak=%.3f, rms=%.4f)",
-            duration, peak, rms,
+            "Recorded %.2f seconds of audio (peak=%.3f, rms=%.4f, captured @ %d Hz)",
+            duration, peak, rms, capture_sr,
         )
         if peak < 0.01:
             self.logger.warning(
@@ -187,6 +203,33 @@ class AudioRecorder:
                 extra={'user_message': True},
             )
         return audio_array
+
+    @staticmethod
+    def _resample_to(audio: np.ndarray, source_sr: int, target_sr: int) -> np.ndarray:
+        """Resample a numpy audio buffer to ``target_sr`` using linear
+        interpolation. Quality is acceptable for STT — Whisper handles a
+        wide range of input. Avoids pulling scipy in just for this."""
+        if source_sr == target_sr or len(audio) == 0:
+            return audio.astype(np.float32)
+        # If stereo (or multi-channel), resample each channel independently
+        # then average — keeps things simple and Whisper-friendly.
+        if audio.ndim == 2:
+            channels = [
+                AudioRecorder._resample_to(audio[:, c], source_sr, target_sr)
+                for c in range(audio.shape[1])
+            ]
+            return np.mean(np.stack(channels, axis=1), axis=1).astype(np.float32)
+
+        ratio = target_sr / source_sr
+        target_len = int(round(len(audio) * ratio))
+        if target_len <= 0:
+            return audio.astype(np.float32)
+        # np.interp with floating positions performs linear interpolation.
+        x_old = np.arange(len(audio), dtype=np.float64)
+        x_new = np.linspace(
+            0, len(audio) - 1, num=target_len, endpoint=True, dtype=np.float64,
+        )
+        return np.interp(x_new, x_old, audio).astype(np.float32)
     
     def cancel_recording(self):
         if not self.is_recording:
@@ -200,25 +243,45 @@ class AudioRecorder:
     
     def _record_audio(self):
         try:
-            def audio_callback(audio_data, frames, time, status):                
+            def audio_callback(audio_data, frames, time, status):
                 if self.is_recording:
                     self.audio_data.append(audio_data.copy())
 
                 if status:
                     self.logger.debug(f"Audio callback status: {status}")
-            
-            with sd.InputStream(samplerate=self.sample_rate,
+
+            # Many devices (especially WASAPI) only support their native rate
+            # — opening at 16 kHz raises ``Invalid sample rate`` (PaErrorCode
+            # -9997). Probe the device's default rate, capture there, and
+            # resample to Whisper's 16 kHz in ``_process_audio_data``.
+            try:
+                if self.device is not None:
+                    info = sd.query_devices(self.device)
+                else:
+                    info = sd.query_devices(kind="input")
+                native_sr = int(info.get("default_samplerate", self.WHISPER_SAMPLE_RATE))
+            except Exception:
+                native_sr = self.WHISPER_SAMPLE_RATE
+            if native_sr <= 0:
+                native_sr = self.WHISPER_SAMPLE_RATE
+            self._capture_sample_rate = native_sr
+            self.logger.info(
+                "Capturing at %d Hz (target: %d Hz)",
+                native_sr, self.WHISPER_SAMPLE_RATE,
+            )
+
+            with sd.InputStream(samplerate=native_sr,
                                 channels=self.channels,
                                 callback=audio_callback,
                                 dtype=self.STREAM_DTYPE,
                                 device=self.device):
-                
+
                 while self.is_recording:
                     if self._check_max_duration_exceeded():
                         break
-                    
+
                     sd.sleep(self.RECORDING_SLEEP_INTERVAL)
-                
+
         except Exception as e:
             self.logger.error(f"Error during audio recording: {e}")
             self.is_recording = False
