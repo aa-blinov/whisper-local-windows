@@ -1,24 +1,23 @@
 import logging
 import time
 import threading
-from typing import Optional
+from typing import Any, Optional
 
 from app.audio_recorder import AudioRecorder
 from app.whisper_engine import WhisperEngine
 from app.clipboard_manager import ClipboardManager
-from app.system_tray import SystemTray
 from app.config_manager import ConfigManager
 from app.audio_feedback import AudioFeedback
 from app.utils import OptionalComponent
 from app.history_manager import HistoryManager
 
 class StateManager:
-    def __init__(self, 
+    def __init__(self,
                  audio_recorder: AudioRecorder,
                  whisper_engine: WhisperEngine,
                  clipboard_manager: ClipboardManager,
                  config_manager: ConfigManager,
-                 system_tray: Optional[SystemTray] = None,
+                 system_tray: Optional[Any] = None,
                  audio_feedback: Optional[AudioFeedback] = None,
                  docker_backend_manager = None):
 

@@ -44,11 +44,11 @@ if config_path.exists():
 import importlib.util
 
 requested_hiddenimports = [
-    'customtkinter',
-    'PIL._tkinter_finder',  # may not exist in newer Pillow; filtered below
-    'pystray._win32',       # pystray platform helper (optional)
     'win32timezone',        # pywin32 timezone helper
     'global_hotkeys',       # ensure hotkey library + submodules bundled
+    'PySide6.QtCore',
+    'PySide6.QtGui',
+    'PySide6.QtWidgets',
 ]
 
 hiddenimports = [m for m in requested_hiddenimports if importlib.util.find_spec(m) is not None]

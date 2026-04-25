@@ -1,10 +1,13 @@
+"""Single-instance guard via a Windows named mutex."""
+
+from __future__ import annotations
+
 import logging
-import sys
-import time
 from typing import Optional
 
 import win32api
 import win32event
+
 
 logger = logging.getLogger(__name__)
 
@@ -34,25 +37,3 @@ def try_acquire_single_instance(app_name: str = "LazyToTextLocal") -> Optional[o
 
     logger.info("Primary instance acquired mutex %s", mutex_name)
     return handle
-
-
-def guard_against_multiple_instances(app_name: str = "LazyToTextLocal"):
-    """Legacy entry point: detects duplicate instances and exits the
-    process after a short countdown. Kept for the old tk UI; new code
-    should use ``try_acquire_single_instance`` instead.
-    """
-    handle = try_acquire_single_instance(app_name)
-    if handle is None:
-        _exit_to_prevent_duplicate()
-    return handle
-
-
-def _exit_to_prevent_duplicate():
-    logger.info("Lazy to text is already running!", extra={'user_message': True})
-    logger.info("This app will close in 3 seconds...", extra={'user_message': True})
-
-    for i in range(3, 0, -1):
-        time.sleep(1)
-
-    logger.info("Goodbye!", extra={'user_message': True})
-    sys.exit(0)

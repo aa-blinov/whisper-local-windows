@@ -56,12 +56,13 @@ if ($OneFile) {
     '--name', 'LazyToText',
     '--icon', 'app\assets\tray_idle.ico',
     '--add-data', 'app\assets;assets',
+    '--add-data', 'app\gui\styles;gui\styles',
     '--add-data', 'config.yaml;.',
-    '--hidden-import', 'customtkinter',
-    '--hidden-import', 'PIL._tkinter_finder',
-    '--hidden-import', 'pystray._win32',
     '--hidden-import', 'win32timezone',
     '--hidden-import', 'global_hotkeys',
+    '--hidden-import', 'PySide6.QtCore',
+    '--hidden-import', 'PySide6.QtGui',
+    '--hidden-import', 'PySide6.QtWidgets',
     'lazy-to-text-ui.py'
   )
   & $Uv @pyinstallerArgs
