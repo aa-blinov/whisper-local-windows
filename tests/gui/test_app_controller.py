@@ -330,7 +330,11 @@ def test_controller_drives_topbar_status_from_fetcher(qtbot):
         backend_status_fetcher=lambda: "running",
     )
 
-    assert window.topbar._status_pill.property("status") == "running"
+    # Polling is async (worker thread), so wait for the topbar to update.
+    qtbot.waitUntil(
+        lambda: window.topbar._status_pill.property("status") == "running",
+        timeout=2000,
+    )
 
 
 def test_controller_without_backend_fetcher_leaves_status_unknown(qtbot):

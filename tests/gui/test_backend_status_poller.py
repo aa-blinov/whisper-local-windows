@@ -18,9 +18,14 @@ def test_tick_dedupes_unchanged_status(qtbot):
     emissions: list[tuple[str, str]] = []
     poller.status_changed.connect(lambda s, l: emissions.append((s, l)))
 
+    with qtbot.waitSignal(poller.status_changed, timeout=1000):
+        poller.tick()
+
+    # Second and third ticks return the same value — no further emission.
     poller.tick()
+    qtbot.wait(150)
     poller.tick()
-    poller.tick()
+    qtbot.wait(150)
 
     assert len(emissions) == 1
 
@@ -33,11 +38,83 @@ def test_tick_emits_when_status_changes(qtbot):
     emissions: list[str] = []
     poller.status_changed.connect(lambda s, _l: emissions.append(s))
 
+    with qtbot.waitSignal(poller.status_changed, timeout=1000):
+        poller.tick()
     poller.tick()
-    poller.tick()
-    poller.tick()
+    qtbot.wait(150)
+    with qtbot.waitSignal(poller.status_changed, timeout=1000):
+        poller.tick()
 
     assert emissions == ["running", "stopped"]
+
+
+def test_tick_runs_fetcher_off_main_thread(qtbot):
+    """The fetcher must execute on a worker thread, not the UI thread."""
+    import threading
+
+    from app.gui.controllers.backend_status_poller import BackendStatusPoller
+
+    main_thread = threading.current_thread()
+    seen_thread: list[threading.Thread] = []
+
+    def probe() -> str:
+        seen_thread.append(threading.current_thread())
+        return "running"
+
+    poller = BackendStatusPoller(fetcher=probe)
+    with qtbot.waitSignal(poller.status_changed, timeout=1000):
+        poller.tick()
+
+    assert seen_thread, "fetcher was never called"
+    assert seen_thread[0] is not main_thread
+
+
+def test_slow_fetcher_does_not_block_ui_thread(qtbot):
+    """A long fetcher call must not freeze the event loop between ticks."""
+    import time
+
+    from app.gui.controllers.backend_status_poller import BackendStatusPoller
+
+    def slow_fetcher() -> str:
+        time.sleep(0.4)
+        return "running"
+
+    poller = BackendStatusPoller(fetcher=slow_fetcher)
+    poller.tick()
+
+    # While the fetcher is sleeping, the UI thread should still process events.
+    start = time.monotonic()
+    qtbot.wait(50)
+    elapsed = time.monotonic() - start
+    # 50 ms wait must not balloon (would happen if tick blocked the thread)
+    assert elapsed < 0.2
+
+    # Drain the eventual signal so the poller cleans up.
+    qtbot.waitSignal(poller.status_changed, timeout=1500).wait()
+
+
+def test_overlapping_ticks_do_not_pile_up(qtbot):
+    """A second tick fired while a fetch is in flight must be a no-op."""
+    import time
+
+    from app.gui.controllers.backend_status_poller import BackendStatusPoller
+
+    call_count = {"n": 0}
+
+    def slow_fetcher() -> str:
+        call_count["n"] += 1
+        time.sleep(0.2)
+        return "running"
+
+    poller = BackendStatusPoller(fetcher=slow_fetcher)
+    poller.tick()
+    poller.tick()  # should be skipped — previous still running
+    poller.tick()
+
+    qtbot.waitSignal(poller.status_changed, timeout=2000).wait()
+    qtbot.wait(100)
+
+    assert call_count["n"] == 1
 
 
 def test_map_docker_not_found_becomes_stopped(qtbot):
