@@ -33,6 +33,10 @@ class AudioRecorder:
         self.recording_thread = None
         self.recording_start_time = None
         self._capture_sample_rate: Optional[int] = None
+        # Updated from the audio callback on the recording thread; read
+        # by the UI poller. Plain float assignment is atomic under the
+        # GIL — no lock needed for the worst-case stale-by-one-tick read.
+        self._current_input_level: float = 0.0
         self.logger = logging.getLogger(__name__)
 
         self._test_microphone()
@@ -198,11 +202,23 @@ class AudioRecorder:
     def stop_recording(self) -> Optional[np.ndarray]:
         if not self.is_recording:
             return None
-        
+
         self.is_recording = False
         self._wait_for_thread_finish()
-        
+        # Reset the live level so the UI's VU meter doesn't keep
+        # showing the last chunk's reading after the user lets go.
+        self._current_input_level = 0.0
+
         return self._process_audio_data()
+
+    def current_input_level(self) -> float:
+        """Most-recent RMS amplitude (0..1) of the live audio stream.
+
+        Updated from the recording callback while ``is_recording`` is
+        True; reset to 0 on stop. Polled by the UI's VU meter at a
+        few dozen Hz.
+        """
+        return self._current_input_level
     
     def _process_audio_data(self) -> Optional[np.ndarray]:
         if len(self.audio_data) == 0:
@@ -290,6 +306,18 @@ class AudioRecorder:
             def audio_callback(audio_data, frames, time, status):
                 if self.is_recording:
                     self.audio_data.append(audio_data.copy())
+
+                # Compute RMS amplitude of this chunk for the live VU
+                # meter. Cheap (numpy on a few hundred samples) and
+                # decoupled from the UI thread that polls the value.
+                try:
+                    flat = np.asarray(audio_data).flatten()
+                    if flat.size:
+                        self._current_input_level = float(
+                            np.sqrt(np.mean(flat ** 2))
+                        )
+                except Exception:
+                    pass
 
                 if status:
                     self.logger.debug(f"Audio callback status: {status}")

@@ -259,3 +259,33 @@ def test_topbar_back_to_idle_clears_elapsed_state(qtbot):
     bar.set_recording_state("model_loading")
     text = _recording_pill(bar).text()
     assert "8" not in text
+
+
+def test_topbar_vu_meter_only_visible_in_recording_state(qtbot):
+    """The VU meter is meaningless outside the ``recording`` state —
+    show it only while audio is actually being captured."""
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.show()
+
+    # idle on construction → hidden.
+    assert not bar._vu_meter.isVisible()
+
+    bar.set_recording_state("recording")
+    assert bar._vu_meter.isVisibleTo(bar)
+
+    bar.set_recording_state("processing")
+    # Past recording — back to hidden.
+    assert not bar._vu_meter.isVisibleTo(bar) or bar._vu_meter.isHidden()
+
+
+def test_topbar_set_input_level_forwards_to_meter(qtbot):
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.set_recording_state("recording")
+    bar.set_input_level(0.6)
+    assert bar._vu_meter.current_level() == 0.6

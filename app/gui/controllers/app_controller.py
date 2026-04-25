@@ -79,6 +79,12 @@ class AppController(QObject):
         self._mic_test_in_progress = False
         self._mic_test_completed.connect(self._on_mic_test_completed)
         self._mic_test_failed.connect(self._on_mic_test_failed)
+        # Polls the live audio level for the topbar VU meter while the
+        # recording pipeline is in the ``recording`` state. ~30 Hz feels
+        # alive without burning CPU.
+        self._vu_timer = QTimer(self)
+        self._vu_timer.setInterval(33)
+        self._vu_timer.timeout.connect(self._on_vu_tick)
         self._wire_models()
         self._wire_shortcuts()
         self._wire_history()
@@ -326,6 +332,17 @@ class AppController(QObject):
             pass
 
     def _on_recording_state_changed(self, state: str) -> None:
+        # Live VU meter follows the recording state — start polling as
+        # soon as we enter "recording", stop the moment we leave.
+        if state == "recording":
+            if not self._vu_timer.isActive():
+                self._vu_timer.start()
+        else:
+            self._vu_timer.stop()
+            try:
+                self._window.topbar.set_input_level(0.0)
+            except Exception:  # pragma: no cover — defensive
+                pass
         # Block destructive interactions while not idle.
         self._window.models_view.set_locked(state != "idle")
         # Reflect the model-loading state on the active card's pill so it
@@ -351,6 +368,22 @@ class AppController(QObject):
                 pass
         if self._tray is not None:
             self._tray.set_state(state)
+
+    def _on_vu_tick(self) -> None:
+        recorder = self._resolve_audio_recorder()
+        if recorder is None:
+            return
+        getter = getattr(recorder, "current_input_level", None)
+        if getter is None:
+            return
+        try:
+            level = float(getter())
+        except Exception:  # pragma: no cover — defensive
+            return
+        try:
+            self._window.topbar.set_input_level(level)
+        except Exception:  # pragma: no cover — defensive
+            pass
 
     def _on_loading_tick(self) -> None:
         self._loading_elapsed_s += 1

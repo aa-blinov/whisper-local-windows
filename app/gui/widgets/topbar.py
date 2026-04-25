@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.widgets.vu_meter import VUMeter
+
 
 _STATUS_VALUES = ("running", "stopped", "error", "unknown", "hidden")
 _STATUS_DEFAULT_LABELS = {
@@ -71,6 +73,13 @@ class TopBar(QWidget):
         layout.addWidget(self._section_title)
 
         layout.addStretch(1)
+
+        # Slim live-input meter — visible only while a recording is in
+        # flight. Sits next to the recording pill so the eye associates
+        # the two.
+        self._vu_meter = VUMeter(self)
+        self._vu_meter.setVisible(False)
+        layout.addWidget(self._vu_meter)
 
         self._recording_pill = QLabel("", self)
         self._recording_pill.setObjectName("TopBarRecordingPill")
@@ -157,6 +166,18 @@ class TopBar(QWidget):
         self._recording_pill.style().unpolish(self._recording_pill)
         self._recording_pill.style().polish(self._recording_pill)
         self._recording_state = state
+        # VU meter only matters while audio is actively flowing in.
+        if state == "recording":
+            self._vu_meter.setVisible(True)
+        else:
+            self._vu_meter.setVisible(False)
+            self._vu_meter.reset()
+
+    def set_input_level(self, level: float) -> None:
+        """Push a fresh amplitude reading into the VU meter — called
+        from a Qt-side polling timer that reads
+        ``AudioRecorder.current_input_level`` while recording."""
+        self._vu_meter.set_level(level)
 
     def set_loading_progress(self, current: int, total: int) -> None:
         """Update the loading-state pill with download progress.
