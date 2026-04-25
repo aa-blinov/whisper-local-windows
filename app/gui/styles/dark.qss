@@ -170,6 +170,30 @@ QFrame[role="inference-panel"] QDoubleSpinBox:focus {
     border-color: {{color.accent}};
 }
 
+/* Belt-and-braces with ``setButtonSymbols(NoButtons)``: when a
+   spinbox is otherwise styled via QSS, Qt on Windows can still
+   render the native up/down sub-controls. Collapse the
+   sub-controls to zero size so the body of the field stays a
+   clean rounded rectangle that matches the other inputs. */
+QFrame[role="inference-panel"] QSpinBox::up-button,
+QFrame[role="inference-panel"] QSpinBox::down-button,
+QFrame[role="inference-panel"] QDoubleSpinBox::up-button,
+QFrame[role="inference-panel"] QDoubleSpinBox::down-button {
+    width: 0;
+    height: 0;
+    border: none;
+    background: transparent;
+}
+
+QFrame[role="inference-panel"] QSpinBox::up-arrow,
+QFrame[role="inference-panel"] QSpinBox::down-arrow,
+QFrame[role="inference-panel"] QDoubleSpinBox::up-arrow,
+QFrame[role="inference-panel"] QDoubleSpinBox::down-arrow {
+    width: 0;
+    height: 0;
+    image: none;
+}
+
 /* ---- Family chip on model cards ----------------------------------------- */
 
 QLabel[role="family-chip"] {
