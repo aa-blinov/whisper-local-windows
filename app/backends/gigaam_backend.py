@@ -17,6 +17,8 @@ State machine matches the rest of the backends::
 from __future__ import annotations
 
 import logging
+import os
+import tempfile
 import threading
 from typing import Callable, Optional
 
@@ -115,12 +117,48 @@ class GigaamBackend:
                 return None
             model = self._model
 
+        # GigaAM's ``transcribe`` only accepts a path on disk — it
+        # internally re-reads the WAV with ``soundfile`` to a tensor.
+        # Spool the captured numpy buffer to a temp file, hand the
+        # path over, then clean up. ``delete=False`` is mandatory on
+        # Windows: NamedTemporaryFile holds an open handle that
+        # ``soundfile`` would fail to re-open.
         try:
-            text = model.transcribe(audio)
+            import soundfile as sf  # provided as a gigaam dep
+        except ImportError as exc:
+            log.error("soundfile is required for GigaAM transcribe: %s", exc)
+            return None
+
+        tmp_path: Optional[str] = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                suffix=".wav", delete=False
+            ) as tmp:
+                tmp_path = tmp.name
+            # Cast to float32 mono in case the recorder handed us
+            # something else; gigaam expects 16 kHz PCM.
+            buf = np.asarray(audio, dtype=np.float32)
+            if buf.ndim > 1:
+                buf = buf.mean(axis=1)
+            sf.write(tmp_path, buf, int(sample_rate), subtype="PCM_16")
+
+            result = model.transcribe(tmp_path)
         except Exception as exc:
             log.error("GigaAM transcription failed: %s", exc, exc_info=True)
             return None
+        finally:
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
+        # ``transcribe`` returns ``TranscriptionResult`` with ``.text``
+        # and ``.words``; the legacy code path expected a plain string,
+        # so unwrap. Tolerate both shapes for safety.
+        text = getattr(result, "text", None)
+        if text is None and isinstance(result, str):
+            text = result
         if text is None:
             return None
         text = str(text).strip()

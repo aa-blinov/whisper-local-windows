@@ -157,6 +157,47 @@ def test_transcribe_swallows_runtime_errors(monkeypatch):
     assert backend.transcribe(np.zeros(16000, dtype=np.float32)) is None
 
 
+def test_transcribe_writes_audio_to_wav_and_passes_path(monkeypatch, tmp_path):
+    """GigaAM's ``transcribe`` only accepts a path on disk. The
+    backend must spool the captured numpy buffer to a temp WAV
+    first, hand the path over, then clean up."""
+    from app.backends.gigaam_backend import GigaamBackend
+
+    captured_paths: list[str] = []
+
+    class _Result:
+        text = "тестовый текст"
+        words = []
+
+    def model_transcribe(wav_file):
+        captured_paths.append(wav_file)
+        # Confirm the file actually exists at the time of the call.
+        import os
+
+        assert os.path.isfile(wav_file)
+        return _Result()
+
+    fake_model = MagicMock()
+    fake_model.transcribe.side_effect = model_transcribe
+    _install_fake_gigaam(
+        monkeypatch, load_model=MagicMock(return_value=fake_model)
+    )
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    audio = np.zeros(16000, dtype=np.float32)
+    text = backend.transcribe(audio, sample_rate=16000)
+
+    assert text == "тестовый текст"
+    assert len(captured_paths) == 1
+    # Cleanup happened — the file is gone after transcribe returns.
+    import os
+
+    assert not os.path.exists(captured_paths[0])
+
+
 # ---- Model swap ------------------------------------------------------------
 
 
