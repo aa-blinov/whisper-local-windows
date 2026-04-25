@@ -125,6 +125,14 @@ class ModelCard(QFrame):
         self._select_btn = QPushButton("Select", self)
         self._select_btn.setObjectName("SelectButton")
         self._select_btn.setProperty("role", "primary")
+        # Without NoFocus, clicking puts keyboard focus on the button.
+        # When the card transitions to Active immediately afterwards,
+        # the button is hidden — Qt then chases focus to the next
+        # focusable widget (the Download button on the card below) and
+        # the QScrollArea scrolls to bring it into view, jumping the
+        # entire models list. NoFocus keeps clicks working but stops
+        # the focus dance.
+        self._select_btn.setFocusPolicy(Qt.NoFocus)
         self._select_btn.clicked.connect(
             lambda: self.select_requested.emit(self._info.alias)
         )

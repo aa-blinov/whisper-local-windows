@@ -142,6 +142,26 @@ def test_model_card_active_loading_swaps_pill_text(qtbot):
     assert card._active_pill.property("state") == "ready"
 
 
+def test_model_card_select_button_does_not_grab_focus(qtbot):
+    """Clicking Download/Select must not put focus on the button.
+
+    The card hides the Select button as soon as the model becomes
+    active, and Qt moves focus to the next button in the tab order
+    (the Download button on the next card). The scroll area then
+    scrolls to keep that newly-focused button visible — i.e. clicking
+    Download on the first card jumps the whole list downwards. Stopping
+    the button from grabbing focus on click prevents the chase entirely."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+
+    select_btn = next(
+        b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
+    )
+    assert select_btn.focusPolicy() == Qt.NoFocus
+
+
 def test_model_card_loading_progress_updates_pill_text(qtbot):
     """While loading, the active pill should show download progress as a
     percentage so the user can see the model fetch advancing."""
