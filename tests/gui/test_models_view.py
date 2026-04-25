@@ -90,3 +90,54 @@ def test_models_view_starts_with_no_active(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
     assert view.active_alias() is None
+
+
+# ---- Lock state ------------------------------------------------------------
+
+
+def test_models_view_starts_unlocked(qtbot):
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+    assert view.is_locked() is False
+
+
+def test_set_locked_disables_all_select_buttons(qtbot):
+    from app.gui.views.models_view import ModelsView
+    from app.gui.widgets.model_card import ModelCard
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    view.set_locked(True)
+    assert view.is_locked() is True
+
+    for card in view.findChildren(ModelCard):
+        select_btn = next(
+            b for b in card.findChildren(__import__('PySide6.QtWidgets', fromlist=['QPushButton']).QPushButton)
+            if b.objectName() == "SelectButton"
+        )
+        assert not select_btn.isEnabled()
+
+
+def test_set_locked_false_re_enables_buttons_for_inactive_cards(qtbot):
+    from app.gui.views.models_view import ModelsView
+    from app.gui.widgets.model_card import ModelCard
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+    view.set_active("large-v3")
+
+    view.set_locked(True)
+    view.set_locked(False)
+
+    cards = {c.alias(): c for c in view.findChildren(ModelCard)}
+    # Active card's Select stays hidden/disabled (active state).
+    assert cards["large-v3"].is_active() is True
+    # Inactive cards must be clickable again.
+    select_btn = next(
+        b for b in cards["tiny"].findChildren(__import__('PySide6.QtWidgets', fromlist=['QPushButton']).QPushButton)
+        if b.objectName() == "SelectButton"
+    )
+    assert select_btn.isEnabled()

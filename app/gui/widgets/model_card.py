@@ -31,6 +31,7 @@ class ModelCard(QFrame):
         super().__init__(parent)
         self._info = info
         self._active = False
+        self._locked = False
 
         self.setObjectName("ModelCard")
         self.setProperty("role", "card")
@@ -104,6 +105,13 @@ class ModelCard(QFrame):
         self.setProperty("active", self._active)
         self._active_pill.setVisible(self._active)
         self._select_btn.setVisible(not self._active)
-        self._select_btn.setEnabled(not self._active)
+        self._select_btn.setEnabled(not self._active and not self._locked)
         self.style().unpolish(self)
         self.style().polish(self)
+
+    def set_locked(self, locked: bool) -> None:
+        self._locked = bool(locked)
+        # Active cards keep Select hidden regardless; for inactive ones,
+        # locking disables the button.
+        if not self._active:
+            self._select_btn.setEnabled(not self._locked)

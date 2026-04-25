@@ -68,6 +68,7 @@ class ModelsView(QWidget):
         root.addWidget(scroll, 1)
 
         self._active_alias: Optional[str] = None
+        self._locked = False
 
     def active_alias(self) -> Optional[str]:
         return self._active_alias
@@ -78,3 +79,11 @@ class ModelsView(QWidget):
         for card_alias, card in self._cards.items():
             card.set_active(card_alias == alias)
         self._active_alias = alias
+
+    def is_locked(self) -> bool:
+        return self._locked
+
+    def set_locked(self, locked: bool) -> None:
+        self._locked = bool(locked)
+        for card in self._cards.values():
+            card.set_locked(self._locked)

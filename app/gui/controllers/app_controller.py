@@ -137,7 +137,12 @@ class AppController(QObject):
 
     def _wire_recording(self, recording: _RecordingLike) -> None:
         recording.state_changed.connect(self._window.topbar.set_recording_state)
+        recording.state_changed.connect(self._on_recording_state_changed)
         recording.history_updated.connect(self._on_history_updated_signal)
+
+    def _on_recording_state_changed(self, state: str) -> None:
+        # Block destructive interactions while not idle.
+        self._window.models_view.set_locked(state != "idle")
 
     def _on_history_updated_signal(self) -> None:
         if self._history is None:

@@ -446,3 +446,27 @@ def test_controller_skips_recording_call_when_recording_absent(qtbot):
 
     # Should still write config and not crash.
     assert ("whisper", "model", "tiny") in config.writes
+
+
+def test_controller_locks_models_view_when_state_not_idle(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+
+    rec.state_changed.emit("recording")
+    assert window.models_view.is_locked() is True
+
+    rec.state_changed.emit("processing")
+    assert window.models_view.is_locked() is True
+
+    rec.state_changed.emit("model_loading")
+    assert window.models_view.is_locked() is True
+
+    rec.state_changed.emit("idle")
+    assert window.models_view.is_locked() is False
