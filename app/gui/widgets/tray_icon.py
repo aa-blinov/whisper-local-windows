@@ -15,7 +15,8 @@ recording/processing does not change behaviour.
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+import os
+from typing import Dict, List, Optional
 
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QIcon
@@ -25,13 +26,24 @@ from app.utils import resolve_asset_path
 
 
 _STATES = ("idle", "recording", "processing", "model_loading")
-_STATE_ASSETS = {
-    "idle": "assets/tray_idle.png",
-    "recording": "assets/tray_recording.png",
-    "processing": "assets/tray_processing.png",
+# Multiple paths per state — we add them all to the QIcon so Windows can
+# pick the right resolution / format for the tray (.ico supports multi-size).
+_STATE_ASSETS: Dict[str, List[str]] = {
+    "idle": ["assets/tray_idle.ico", "assets/tray_idle.png"],
+    "recording": ["assets/tray_recording.png"],
+    "processing": ["assets/tray_processing.png"],
     # No dedicated icon for model_loading yet — share the processing one.
-    "model_loading": "assets/tray_processing.png",
+    "model_loading": ["assets/tray_processing.png"],
 }
+
+
+def _load_state_icon(paths: List[str]) -> QIcon:
+    icon = QIcon()
+    for asset in paths:
+        path = resolve_asset_path(asset)
+        if path and os.path.isfile(path):
+            icon.addFile(path)
+    return icon
 
 
 class AppTrayIcon(QSystemTrayIcon):
@@ -43,8 +55,8 @@ class AppTrayIcon(QSystemTrayIcon):
         self.setToolTip("Lazy to Text")
 
         self._icons: Dict[str, QIcon] = {
-            state: QIcon(resolve_asset_path(path))
-            for state, path in _STATE_ASSETS.items()
+            state: _load_state_icon(paths)
+            for state, paths in _STATE_ASSETS.items()
         }
         self._state = "idle"
         self.setIcon(self._icons[self._state])

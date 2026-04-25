@@ -33,6 +33,13 @@ class _RecordingLike(Protocol):
     def request_model_change(self, canonical: str) -> bool: ...
 
 
+class _TrayLike(Protocol):
+    show_requested: Any
+    quit_requested: Any
+
+    def set_state(self, state: str) -> None: ...
+
+
 class AppController(QObject):
     def __init__(
         self,
@@ -41,12 +48,14 @@ class AppController(QObject):
         history: Optional[_HistoryLike] = None,
         backend_status_fetcher: Optional[Callable[[], str]] = None,
         recording: Optional[_RecordingLike] = None,
+        tray: Optional[_TrayLike] = None,
     ) -> None:
         super().__init__(parent=window)
         self._config = config
         self._window = window
         self._history = history
         self._recording = recording
+        self._tray = tray
         self._poller: Optional[BackendStatusPoller] = None
         self._wire_models()
         self._wire_shortcuts()
@@ -55,6 +64,8 @@ class AppController(QObject):
             self._wire_backend_status(backend_status_fetcher)
         if recording is not None:
             self._wire_recording(recording)
+        if tray is not None:
+            self._wire_tray(tray)
 
     def _wire_models(self) -> None:
         view = self._window.models_view
@@ -165,6 +176,21 @@ class AppController(QObject):
     def _on_recording_state_changed(self, state: str) -> None:
         # Block destructive interactions while not idle.
         self._window.models_view.set_locked(state != "idle")
+        if self._tray is not None:
+            self._tray.set_state(state)
+
+    def _wire_tray(self, tray: _TrayLike) -> None:
+        self._window.set_close_to_tray(True)
+        tray.show_requested.connect(self._on_tray_show)
+        tray.quit_requested.connect(self._on_tray_quit)
+
+    def _on_tray_show(self) -> None:
+        self._window.show()
+        self._window.raise_()
+        self._window.activateWindow()
+
+    def _on_tray_quit(self) -> None:
+        self._window.request_quit()
 
     def _on_history_updated_signal(self) -> None:
         if self._history is None:

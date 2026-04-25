@@ -546,3 +546,112 @@ def test_controller_locks_models_view_when_state_not_idle(qtbot):
 
     rec.state_changed.emit("idle")
     assert window.models_view.is_locked() is False
+
+
+# ---- Tray wiring ----------------------------------------------------------
+
+
+class FakeTrayIcon:
+    """Stand-in exposing the surface AppController consumes."""
+
+    def __init__(self) -> None:
+        from PySide6.QtCore import QObject, Signal
+
+        class _Bus(QObject):
+            show_requested = Signal()
+            quit_requested = Signal()
+
+        self._bus = _Bus()
+        self.show_requested = self._bus.show_requested
+        self.quit_requested = self._bus.quit_requested
+        self.states: list[str] = []
+        self.shown = False
+
+    def setVisible(self, visible: bool) -> None:
+        self.shown = bool(visible)
+
+    def set_state(self, state: str) -> None:
+        self.states.append(state)
+
+
+def test_controller_with_tray_enables_close_to_tray_on_window(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    tray = FakeTrayIcon()
+
+    AppController(config=config, window=window, tray=tray)
+
+    assert window._close_to_tray is True
+
+
+def test_controller_show_requested_brings_window_back(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    qtbot.waitExposed(window)
+    window.hide()
+    assert not window.isVisible()
+
+    config = FakeConfig()
+    tray = FakeTrayIcon()
+    AppController(config=config, window=window, tray=tray)
+
+    tray.show_requested.emit()
+    assert window.isVisible()
+
+
+def test_controller_quit_requested_calls_request_quit(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    tray = FakeTrayIcon()
+
+    quit_calls: list[None] = []
+    original = window.request_quit
+    window.request_quit = lambda: quit_calls.append(None) or original()
+
+    AppController(config=config, window=window, tray=tray)
+    tray.quit_requested.emit()
+
+    assert quit_calls == [None]
+
+
+def test_controller_forwards_recording_state_to_tray(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    rec = FakeRecordingController()
+    tray = FakeTrayIcon()
+
+    AppController(config=config, window=window, recording=rec, tray=tray)
+
+    rec.state_changed.emit("recording")
+    rec.state_changed.emit("processing")
+    rec.state_changed.emit("idle")
+
+    assert tray.states == ["recording", "processing", "idle"]
+
+
+def test_controller_without_tray_does_not_enable_close_to_tray(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+
+    AppController(config=config, window=window)
+    assert window._close_to_tray is False

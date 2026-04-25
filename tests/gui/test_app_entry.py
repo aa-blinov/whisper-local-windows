@@ -90,3 +90,14 @@ def test_build_application_installs_log_bridge_when_requested(qapp, qtbot):
         assert "bridge works" in blocker.args[0]
     finally:
         bridge.uninstall()
+
+
+def test_build_application_sets_window_icon(qapp):
+    from app.gui.app import build_application
+
+    app, window = build_application()
+    # The QApplication-level icon propagates to all windows on Windows so the
+    # title bar / taskbar / Alt-Tab show the app's branding.
+    assert not app.windowIcon().isNull()
+    # MainWindow inherits the app icon by default.
+    assert not window.windowIcon().isNull()
