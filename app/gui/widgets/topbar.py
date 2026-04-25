@@ -81,6 +81,7 @@ class TopBar(QWidget):
         layout.addWidget(self._recording_pill)
         self._recording_state = "idle"
         self._loading_progress_text = ""
+        self._loading_elapsed_s = 0
 
         self._model_pill = QLabel(_NO_MODEL_TEXT, self)
         self._model_pill.setObjectName("TopBarModelPill")
@@ -102,8 +103,12 @@ class TopBar(QWidget):
 
     def _compose_label(self, state: str) -> str:
         base = _RECORDING_LABELS.get(state, "")
-        if state == "model_loading" and self._loading_progress_text:
+        if state != "model_loading":
+            return base
+        if self._loading_progress_text:
             return f"{base} {self._loading_progress_text}"
+        if self._loading_elapsed_s > 0:
+            return f"{base} {self._loading_elapsed_s}s"
         return base
 
     def set_active_model(self, display_name: Optional[str]) -> None:
@@ -139,7 +144,13 @@ class TopBar(QWidget):
             self._recording_pill.setVisible(False)
             self._recording_pill.setProperty("state", "idle")
             self._loading_progress_text = ""
+            self._loading_elapsed_s = 0
         else:
+            if state != "model_loading":
+                # Reset loading state inputs when the pill is repurposed
+                # for a non-loading mode (recording / processing).
+                self._loading_progress_text = ""
+                self._loading_elapsed_s = 0
             self._recording_pill.setText(self._compose_label(state))
             self._recording_pill.setProperty("state", state)
             self._recording_pill.setVisible(True)
@@ -156,5 +167,17 @@ class TopBar(QWidget):
         currently in ``model_loading`` state.
         """
         self._loading_progress_text = _format_progress(current, total)
+        if self._recording_state == "model_loading":
+            self._recording_pill.setText(self._compose_label("model_loading"))
+
+    def set_loading_elapsed(self, seconds: int) -> None:
+        """Update the loading pill with elapsed seconds.
+
+        Used as a fallback when the backend is in ``model_loading`` but
+        no tqdm progress has fired (cached-model deserialisation).
+        Bytes-based progress, when available, takes priority over
+        elapsed time inside ``_compose_label``.
+        """
+        self._loading_elapsed_s = max(0, int(seconds))
         if self._recording_state == "model_loading":
             self._recording_pill.setText(self._compose_label("model_loading"))

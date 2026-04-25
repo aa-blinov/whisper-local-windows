@@ -182,6 +182,62 @@ def test_model_card_loading_progress_updates_pill_text(qtbot):
     assert "35%" in card._active_pill.text()
 
 
+def test_model_card_loading_elapsed_shows_seconds_when_no_progress(qtbot):
+    """Cached model loads (CTranslate2 deserialisation) take ~15 seconds
+    without ever firing a tqdm progress event. Without an elapsed
+    counter the pill just sits at 'Loading…' and looks frozen — show
+    seconds instead so the user can see the wait advancing."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.set_active(True)
+    card.set_loading(True)
+
+    card.set_loading_elapsed(5)
+    text = card._active_pill.text()
+    assert "5" in text and ("s" in text.lower() or "сек" in text.lower())
+
+    card.set_loading_elapsed(12)
+    assert "12" in card._active_pill.text()
+
+
+def test_model_card_loading_progress_takes_priority_over_elapsed(qtbot):
+    """Once download bytes start arriving, the percentage is more
+    informative than elapsed seconds — the pill should show '%' even
+    if the elapsed counter is also being pushed."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.set_active(True)
+    card.set_loading(True)
+
+    card.set_loading_elapsed(7)
+    card.set_loading_progress(50, 100)
+    assert "50%" in card._active_pill.text()
+    assert "7" not in card._active_pill.text()
+
+
+def test_model_card_set_loading_false_clears_elapsed(qtbot):
+    """Returning to ready state must wipe both progress and elapsed
+    state, not just the progress text."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.set_active(True)
+    card.set_loading(True)
+    card.set_loading_elapsed(7)
+
+    card.set_loading(False)
+    assert card._active_pill.text() == "Active"
+
+    card.set_loading(True)
+    # Re-entering loading must not resurrect the stale elapsed text.
+    assert card._active_pill.text() == "Loading\u2026"
+
+
 def test_model_card_loading_progress_falls_back_to_size(qtbot):
     """When the total file size is unknown (Hugging Face streaming bars
     sometimes have total=0), fall back to a byte counter so the user

@@ -123,6 +123,32 @@ def test_controller_skips_active_when_persisted_model_is_not_cached(
 # ---- Selection ↔ persistence ------------------------------------------------
 
 
+def test_controller_marks_view_loading_immediately_on_select(qtbot):
+    """Clicking Download must paint the orange Loading pill on the
+    card right away — without it, the user briefly sees the green
+    Active pill (200 ms until the next state poll) before it flips
+    to Loading, which looks like a flicker."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})
+
+    AppController(config=config, window=window)
+    window.models_view.model_selected.emit("turbo")
+
+    cards = {
+        c.alias(): c
+        for c in window.models_view.findChildren(
+            __import__(
+                "app.gui.widgets.model_card", fromlist=["ModelCard"]
+            ).ModelCard
+        )
+    }
+    assert cards["turbo"].is_loading() is True
+
+
 def test_controller_persists_selection_back_to_config(qtbot):
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow

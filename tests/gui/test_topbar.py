@@ -212,3 +212,50 @@ def test_set_recording_state_rejects_unknown(qtbot):
     qtbot.addWidget(bar)
     with pytest.raises(ValueError):
         bar.set_recording_state("snoozing")
+
+
+def test_topbar_set_loading_elapsed_appends_seconds_when_no_progress(qtbot):
+    """While the backend is in model_loading state but no tqdm progress
+    has fired (cached model deserialisation), the elapsed-seconds
+    counter is the only signal that the wait is advancing."""
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.set_recording_state("model_loading")
+
+    bar.set_loading_elapsed(5)
+    text = _recording_pill(bar).text()
+    assert "5" in text and "s" in text.lower()
+
+
+def test_topbar_loading_progress_takes_priority_over_elapsed(qtbot):
+    """Once download bytes start arriving, the percentage is more
+    informative than the elapsed counter."""
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.set_recording_state("model_loading")
+
+    bar.set_loading_elapsed(7)
+    bar.set_loading_progress(35, 100)
+    text = _recording_pill(bar).text()
+    assert "35%" in text
+    assert "7s" not in text
+
+
+def test_topbar_back_to_idle_clears_elapsed_state(qtbot):
+    """Once loading ends, the elapsed counter must reset so the next
+    loading session doesn't start at a stale number."""
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.set_recording_state("model_loading")
+    bar.set_loading_elapsed(8)
+
+    bar.set_recording_state("idle")
+    bar.set_recording_state("model_loading")
+    text = _recording_pill(bar).text()
+    assert "8" not in text

@@ -70,6 +70,11 @@ class ModelCard(QFrame):
         self._active = False
         self._locked = False
         self._loading = False
+        # Pill-text inputs — both reset on every loading transition.
+        # ``_loading_progress_text`` wins when present (download %),
+        # ``_loading_elapsed_s`` is the fallback for cached loads.
+        self._loading_progress_text: str = ""
+        self._loading_elapsed_s: int = 0
 
         self.setObjectName("ModelCard")
         self.setProperty("role", "card")
@@ -181,6 +186,10 @@ class ModelCard(QFrame):
         """Reflect backend load state on the active pill — swap 'Active' for
         'Loading…' with a different colour while the model is loading."""
         self._loading = bool(loading)
+        # Both pill-text inputs reset every transition so a fresh load
+        # never inherits stale numbers from a previous one.
+        self._loading_progress_text = ""
+        self._loading_elapsed_s = 0
         if self._loading:
             self._active_pill.setText("Loading\u2026")
             self._active_pill.setProperty("state", "loading")
@@ -197,6 +206,30 @@ class ModelCard(QFrame):
         the green Active pill with stale byte counts."""
         if not self._loading:
             return
-        text = _format_loading_progress(int(current), int(total))
-        if text:
-            self._active_pill.setText(text)
+        self._loading_progress_text = _format_loading_progress(
+            int(current), int(total)
+        )
+        self._refresh_loading_pill()
+
+    def set_loading_elapsed(self, seconds: int) -> None:
+        """Update the elapsed-seconds counter shown in the loading pill
+        when no byte progress is available — used for cached model
+        loads where CTranslate2 deserialises weights silently."""
+        if not self._loading:
+            return
+        self._loading_elapsed_s = max(0, int(seconds))
+        self._refresh_loading_pill()
+
+    def _refresh_loading_pill(self) -> None:
+        """Recompute the loading pill text from progress + elapsed inputs.
+
+        Order of precedence: download percentage / bytes win over
+        elapsed seconds; both win over the static 'Loading…' marker."""
+        if not self._loading:
+            return
+        if self._loading_progress_text:
+            self._active_pill.setText(self._loading_progress_text)
+        elif self._loading_elapsed_s > 0:
+            self._active_pill.setText(f"Loading {self._loading_elapsed_s}s")
+        else:
+            self._active_pill.setText("Loading\u2026")

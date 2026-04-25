@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Optional, Protocol
 
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QApplication
 
 # QApplication is imported above for the clipboard helper; reuse it for
@@ -61,6 +61,13 @@ class AppController(QObject):
         self._recording = recording
         self._tray = tray
         self._poller: Optional[BackendStatusPoller] = None
+        # Drives the elapsed-seconds counter shown in the loading pill
+        # while the backend is in model_loading. Started/stopped from
+        # ``_on_recording_state_changed``.
+        self._loading_elapsed_s = 0
+        self._loading_timer = QTimer(self)
+        self._loading_timer.setInterval(1000)
+        self._loading_timer.timeout.connect(self._on_loading_tick)
         self._wire_models()
         self._wire_shortcuts()
         self._wire_history()
@@ -121,6 +128,12 @@ class AppController(QObject):
                 "whisper", "compute_type", info.compute_type
             )
         self._window.models_view.set_active(alias)
+        # Paint the Loading pill on the card immediately — otherwise
+        # there is a ~200 ms window where the green Active pill flashes
+        # before the recording-state poll catches up and switches it to
+        # Loading. The state poll's later set_loading(True) is
+        # idempotent.
+        self._window.models_view.set_loading(True)
         self._sync_topbar_model(info)
         if self._recording is not None:
             canonical = info.canonical if info else canonical_for(alias)
@@ -245,6 +258,16 @@ class AppController(QObject):
         # Reflect the model-loading state on the active card's pill so it
         # doesn't say "Active" while the topbar shows "Loading model…".
         self._window.models_view.set_loading(state == "model_loading")
+        # While loading, tick an elapsed-seconds counter so the pill has
+        # something to show even when no tqdm download progress fires
+        # (cached models deserialise silently for ~15 s).
+        if state == "model_loading":
+            self._loading_elapsed_s = 0
+            if not self._loading_timer.isActive():
+                self._loading_timer.start()
+        else:
+            self._loading_timer.stop()
+            self._loading_elapsed_s = 0
         # When the backend transitions back to idle, a download (if any)
         # has finished — refresh per-card cache state so the button on
         # the previously-undownloaded model switches to "Select".
@@ -255,6 +278,19 @@ class AppController(QObject):
                 pass
         if self._tray is not None:
             self._tray.set_state(state)
+
+    def _on_loading_tick(self) -> None:
+        self._loading_elapsed_s += 1
+        try:
+            self._window.topbar.set_loading_elapsed(self._loading_elapsed_s)
+        except Exception:  # pragma: no cover — defensive
+            pass
+        try:
+            self._window.models_view.set_loading_elapsed(
+                self._loading_elapsed_s
+            )
+        except Exception:  # pragma: no cover — defensive
+            pass
 
     def _wire_tray(self, tray: _TrayLike) -> None:
         self._window.set_close_to_tray(True)

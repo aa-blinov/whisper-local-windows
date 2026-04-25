@@ -121,6 +121,23 @@ def test_set_locked_disables_all_select_buttons(qtbot):
         assert not select_btn.isEnabled()
 
 
+def test_models_view_set_loading_elapsed_propagates_to_active_card(qtbot):
+    """Elapsed-seconds ticks should reach the active card so the user
+    sees the wait advancing during cached model loads."""
+    from app.gui.views.models_view import ModelsView
+    from app.gui.widgets.model_card import ModelCard
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+    view.set_active("turbo")
+    view.set_loading(True)
+
+    view.set_loading_elapsed(5)
+
+    cards = {c.alias(): c for c in view.findChildren(ModelCard)}
+    assert "5" in cards["turbo"]._active_pill.text()
+
+
 def test_models_view_set_loading_progress_propagates_to_active_card(qtbot):
     """Download progress events arriving from the backend should bubble
     down to whichever card is currently flagged as loading, so the
@@ -197,3 +214,17 @@ def test_set_locked_false_re_enables_buttons_for_inactive_cards(qtbot):
         if b.objectName() == "SelectButton"
     )
     assert select_btn.isEnabled()
+
+
+def test_models_view_uses_pixel_scroll_step(qtbot):
+    """The models scroll area should use a small wheel step so the
+    list scrolls pixel-by-pixel instead of jumping a whole card per
+    notch — matches the rest of the UI."""
+    from PySide6.QtWidgets import QScrollArea
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+    scroll = view.findChild(QScrollArea)
+    assert scroll is not None
+    assert scroll.verticalScrollBar().singleStep() <= 20

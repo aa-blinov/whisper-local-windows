@@ -46,6 +46,9 @@ class ModelsView(QWidget):
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # Smaller wheel step → smooth pixel-ish scrolling instead of a
+        # whole-card jump per notch.
+        scroll.verticalScrollBar().setSingleStep(20)
 
         content = QWidget(scroll)
         content.setObjectName("ModelsScrollContent")
@@ -97,6 +100,13 @@ class ModelsView(QWidget):
         so only the active-and-loading card actually repaints."""
         for card in self._cards.values():
             card.set_loading_progress(current, total)
+
+    def set_loading_elapsed(self, seconds: int) -> None:
+        """Forward the elapsed-seconds tick to every card. Used for
+        cached model loads where no tqdm progress fires; the active
+        card surfaces it so the user sees the wait advancing."""
+        for card in self._cards.values():
+            card.set_loading_elapsed(seconds)
 
     def refresh_cache_state(self) -> None:
         """Re-check the on-disk cache for every card. Called after a model
