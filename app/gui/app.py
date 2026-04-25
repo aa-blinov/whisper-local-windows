@@ -28,6 +28,63 @@ def _load_app_icon() -> QIcon:
     return icon
 
 
+def _force_window_icon(hwnd: int, ico_path: str) -> bool:
+    """Bypass Qt and tell Windows directly which icon to use for this hWnd.
+
+    Qt's setWindowIcon often fails to translate into a real WM_SETICON, so
+    the taskbar / Alt-Tab keep the python.exe icon. We load the .ico via
+    LoadImageW and push it through both WM_SETICON (per-window) AND
+    SetClassLongPtr (per-window-class) so taskbar, Alt-Tab, and the title
+    bar all pick up the same icon.
+    """
+    if sys.platform != "win32" or not hwnd or not ico_path:
+        return False
+    try:
+        import ctypes
+        from ctypes import c_void_p, c_wchar_p
+
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x00000010
+        WM_SETICON = 0x0080
+        ICON_SMALL = 0
+        ICON_BIG = 1
+        GCLP_HICON = -14
+        GCLP_HICONSM = -34
+
+        user32 = ctypes.windll.user32
+
+        # Set up types only for return values that cross 32/64 bits — keep
+        # parameters as Python ints to avoid sign-extension surprises.
+        user32.LoadImageW.restype = c_void_p
+        user32.SendMessageW.restype = c_void_p
+        user32.SetClassLongPtrW.restype = c_void_p
+
+        def load(size: int) -> int:
+            return user32.LoadImageW(
+                None,
+                c_wchar_p(ico_path),
+                IMAGE_ICON,
+                size,
+                size,
+                LR_LOADFROMFILE,
+            ) or 0
+
+        h_small = load(16)
+        h_big = load(32)
+        if not (h_small or h_big):
+            return False
+
+        if h_small:
+            user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, h_small)
+            user32.SetClassLongPtrW(hwnd, GCLP_HICONSM, h_small)
+        if h_big:
+            user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, h_big)
+            user32.SetClassLongPtrW(hwnd, GCLP_HICON, h_big)
+        return True
+    except Exception:
+        return False
+
+
 def _set_app_user_model_id(app_id: str = "LazyToText.App") -> int:
     """Tell Windows this process is its own app, not a hosted Python script.
 
@@ -195,6 +252,14 @@ def main() -> int:
         install_logs=True,
     )
     window.show()
+
+    # Qt's setWindowIcon doesn't reliably translate into Win32 WM_SETICON,
+    # which means the taskbar and Alt-Tab fall back to python.exe's icon.
+    # Push the icon explicitly via SendMessage(WM_SETICON) once the window
+    # has its native handle.
+    ico_path = resolve_asset_path("assets/tray_idle.ico")
+    if ico_path and os.path.isfile(ico_path):
+        _force_window_icon(int(window.winId()), ico_path)
 
     try:
         return app.exec()
