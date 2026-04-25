@@ -316,4 +316,18 @@ class AppController(QObject):
     def _on_history_updated_signal(self) -> None:
         if self._history is None:
             return
-        self._window.history_view.set_entries(self._history.get_entries())
+        entries = self._history.get_entries()
+        self._window.history_view.set_entries(entries)
+        # Pop a confirmation toast for the most recent entry — gives
+        # the user a visible "yes, the hotkey worked" moment that
+        # was missing from the silent clipboard-paste flow.
+        if entries:
+            try:
+                latest_text = getattr(entries[0], "text", "") or ""
+            except Exception:  # pragma: no cover — defensive
+                latest_text = ""
+            if latest_text:
+                try:
+                    self._window.toast.show_message(latest_text)
+                except Exception:  # pragma: no cover — defensive
+                    pass

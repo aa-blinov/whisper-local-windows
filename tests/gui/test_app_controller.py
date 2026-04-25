@@ -562,6 +562,32 @@ def test_controller_refreshes_history_on_history_updated(qtbot):
     assert window.history_view._source_model.rowCount() == 2
 
 
+def test_controller_shows_toast_on_history_updated(qtbot):
+    """A successful transcription is silent in the UI otherwise — the
+    text just appears on the clipboard. Surfacing a confirmation
+    toast with the latest entry's text gives the user a 'yes, the
+    hotkey worked' moment."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    window.resize(800, 600)
+    qtbot.addWidget(window)
+    window.show()
+
+    config = FakeConfig()
+    history = FakeHistory([])
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, history=history, recording=rec)
+
+    history._entries.append(FakeHistoryEntry("transcribed phrase"))
+    rec.history_updated.emit()
+
+    assert window.toast.isVisible()
+    assert "transcribed phrase" in window.toast._body.text()
+
+
 def test_controller_routes_model_select_through_recording_when_present(qtbot):
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow

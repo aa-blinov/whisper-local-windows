@@ -20,6 +20,7 @@ from app.gui.views.models_view import ModelsView
 from app.gui.views.placeholder import PlaceholderView
 from app.gui.views.shortcuts_view import ShortcutsView
 from app.gui.widgets.sidebar import Sidebar
+from app.gui.widgets.toast import Toast
 from app.gui.widgets.topbar import TopBar
 
 
@@ -85,6 +86,13 @@ class MainWindow(QMainWindow):
 
         self.sidebar.nav_selected.connect(self._on_nav_selected)
 
+        # Floating banner that shows after every successful
+        # transcription. Parented to the central widget so it sits
+        # above the views; positioned in the top-right by ``Toast``
+        # itself.
+        self.toast = Toast(parent=central)
+        central.installEventFilter(self)
+
     def get_view(self, key: str) -> QWidget:
         if key not in self._views:
             raise KeyError(key)
@@ -114,3 +122,12 @@ class MainWindow(QMainWindow):
         if key in self._views:
             self.stack.setCurrentWidget(self._views[key])
             self.topbar.set_section_title(self.sidebar.label_for(key))
+
+    def eventFilter(self, watched, event):  # noqa: N802 (Qt naming)
+        # Re-anchor the toast on resize so it sticks to the top-right
+        # corner regardless of window size.
+        from PySide6.QtCore import QEvent
+
+        if event.type() == QEvent.Resize and watched is self.centralWidget():
+            self.toast.parentResized()
+        return super().eventFilter(watched, event)

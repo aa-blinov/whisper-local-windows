@@ -143,6 +143,25 @@ QLabel[role="pill-active"][state="loading"] {
     color: {{color.bg_primary}};
 }
 
+/* ---- Toast --------------------------------------------------------------- */
+
+QFrame[role="toast"] {
+    background-color: {{color.bg_elevated}};
+    border: 1px solid {{color.accent}};
+    border-radius: {{radius.md}};
+}
+
+QLabel[role="toast-title"] {
+    color: {{color.success}};
+    font-weight: 600;
+    font-size: {{font.size_small}};
+}
+
+QLabel[role="toast-body"] {
+    color: {{color.text_primary}};
+    font-size: {{font.size_body}};
+}
+
 /* ---- TopBar -------------------------------------------------------------- */
 
 #TopBar {
