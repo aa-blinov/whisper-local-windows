@@ -160,6 +160,25 @@ def build_application(
     return app, window
 
 
+def _apply_hf_token(configured: Optional[str]) -> bool:
+    """Mirror the user's HF token into the live process environment.
+
+    huggingface_hub and pyannote both read ``HF_TOKEN`` (alongside
+    ``HUGGING_FACE_HUB_TOKEN`` as a legacy alias). Setting just one
+    is enough — huggingface_hub treats them as equivalent.
+
+    Returns True iff a non-empty token was applied.
+    """
+    if configured and str(configured).strip():
+        token = str(configured).strip()
+        os.environ["HF_TOKEN"] = token
+        os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+        return True
+    os.environ.pop("HF_TOKEN", None)
+    os.environ.pop("HUGGING_FACE_HUB_TOKEN", None)
+    return False
+
+
 def _apply_storage_path(configured: Optional[str]) -> str:
     """Resolve and apply the user's chosen models directory to env vars.
 
@@ -202,6 +221,7 @@ def main() -> int:
     storage_root = _apply_storage_path(
         _early_config.get_setting("storage", "models_dir")
     )
+    _apply_hf_token(_early_config.get_setting("huggingface", "token"))
 
     from app.gui.controllers.recording_controller import RecordingController
     from app.gui.recording_factory import build_recording_stack

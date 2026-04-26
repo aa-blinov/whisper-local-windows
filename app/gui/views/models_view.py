@@ -198,6 +198,14 @@ class ModelsView(QWidget):
         if card is not None:
             card.set_inference_settings(settings)
 
+    def refresh_hf_token_state(self) -> None:
+        """Recompute the HF-token warning visibility on every card.
+        Called by the controller after the user pastes a token in
+        Settings — Whisper cards no-op (no warning widget), GigaAM
+        cards hide / show their warning based on the env vars."""
+        for card in self._cards.values():
+            card.refresh_hf_token_state()
+
     def refresh_cache_state(self) -> None:
         """Re-check the on-disk cache for every card. Called after a model
         finishes downloading so the freshly-downloaded card switches its

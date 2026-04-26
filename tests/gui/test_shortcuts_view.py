@@ -286,3 +286,75 @@ def test_reset_storage_button_disabled_when_already_on_default(qtbot):
 
     view.set_storage_path("D:/elsewhere", is_default=False)
     assert _reset_storage_btn(view).isEnabled()
+
+
+# ---- Hugging Face card -----------------------------------------------------
+
+
+def _hf_token_edit(view):
+    return view.findChild(QLineEdit, "HfTokenEdit")
+
+
+def test_shortcuts_view_has_hf_token_widgets(qtbot):
+    """Settings tab carries a Hugging Face card with a token field
+    so users don't have to set ``HF_TOKEN`` env var by hand for
+    GigaAM long-form."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    assert _hf_token_edit(view) is not None
+
+
+def test_hf_token_field_is_password_masked(qtbot):
+    """Tokens are sensitive — render as bullets, not plaintext, so
+    the value isn't shoulder-surfed during a screenshare."""
+    from PySide6.QtWidgets import QLineEdit
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    assert _hf_token_edit(view).echoMode() == QLineEdit.Password
+
+
+def test_set_hf_token_prefills_field(qtbot):
+    """The view's own setter — used by the controller on init to
+    paint the persisted value into the field without firing the
+    save signal back."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.set_hf_token("hf_persisted_value")
+    assert _hf_token_edit(view).text() == "hf_persisted_value"
+
+
+def test_hf_token_field_emits_signal_on_edit(qtbot):
+    """Edit → focus loss → controller saves. Same auto-save pattern
+    as the hotkey fields."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+
+    edit = _hf_token_edit(view)
+    edit.setText("hf_new_value")
+
+    with qtbot.waitSignal(view.hf_token_changed, timeout=1000) as blocker:
+        edit.editingFinished.emit()
+    assert blocker.args == ["hf_new_value"]
+
+
+def test_set_hf_token_does_not_re_emit(qtbot):
+    """Programmatic prefill via ``set_hf_token`` must not echo back
+    a signal — would cause an infinite save loop on init."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+
+    emissions: list = []
+    view.hf_token_changed.connect(emissions.append)
+    view.set_hf_token("hf_persisted_value")
+    assert emissions == []

@@ -60,6 +60,15 @@ QLabel[role="test-result-good"] {
     font-weight: 500;
 }
 
+QLabel[role="warning"] {
+    color: {{color.warning}};
+    font-size: {{font.size_small}};
+    background-color: rgba(245, 158, 11, 0.10);
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    border-radius: {{radius.md}};
+    padding: 8px 10px;
+}
+
 QLabel[role="test-result-warn"] {
     color: {{color.warning}};
     font-size: {{font.size_small}};

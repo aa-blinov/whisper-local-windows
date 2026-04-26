@@ -62,6 +62,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         # respectively.
         "models_dir": "",
     },
+    "huggingface": {
+        # Optional HF API token. Required ONLY for GigaAM long-form
+        # audio (>25 s) which routes through pyannote VAD; the
+        # underlying model ``pyannote/segmentation-3.0`` is gated and
+        # needs an authenticated download once. Empty = no token.
+        # Settings → "Hugging Face" card writes here.
+        "token": "",
+    },
 }
 
 

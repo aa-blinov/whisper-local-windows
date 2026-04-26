@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
@@ -16,6 +17,16 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+def _has_hf_token() -> bool:
+    """True if either ``HF_TOKEN`` or its legacy alias
+    ``HUGGING_FACE_HUB_TOKEN`` is set to a non-empty value."""
+    for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+        value = os.environ.get(name)
+        if value and value.strip():
+            return True
+    return False
 
 from app.gui.widgets.flow_layout import FlowLayout
 from app.gui.widgets.inference_settings_panel import InferenceSettingsPanel
@@ -224,6 +235,25 @@ class ModelCard(QFrame):
             )
             root.addWidget(self._settings_panel)
 
+        # HF-token warning — only on GigaAM cards, since GigaAM's
+        # long-form path (>25 s captures) routes through pyannote
+        # VAD which needs a token to download the gated
+        # ``pyannote/segmentation-3.0`` weights. Whisper's
+        # long-form is Silero VAD, no token required, so the
+        # widget is omitted entirely on faster_whisper cards.
+        self._hf_warning: Optional[QLabel] = None
+        if info.backend_kind == "gigaam":
+            self._hf_warning = QLabel(
+                "⚠ Long-form audio (>25 s) needs a Hugging Face "
+                "token — set one in Settings → Hugging Face.",
+                self,
+            )
+            self._hf_warning.setObjectName("HfTokenWarning")
+            self._hf_warning.setProperty("role", "warning")
+            self._hf_warning.setWordWrap(True)
+            root.addWidget(self._hf_warning)
+            self.refresh_hf_token_state()
+
         footer = QHBoxLayout()
         footer.addStretch(1)
         # Delete sits to the LEFT of Select — destructive action stays
@@ -317,6 +347,15 @@ class ModelCard(QFrame):
 
     def is_loading(self) -> bool:
         return self._loading
+
+    def refresh_hf_token_state(self) -> None:
+        """Recompute warning visibility from the current process env.
+        Called by the controller after the user pastes a token in
+        Settings; no-op on cards that don't carry the warning
+        (Whisper)."""
+        if self._hf_warning is None:
+            return
+        self._hf_warning.setVisible(not _has_hf_token())
 
     def refresh_cache_state(self) -> None:
         """Recompute whether the underlying model is downloaded and update

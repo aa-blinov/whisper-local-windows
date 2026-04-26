@@ -905,6 +905,105 @@ def test_controller_storage_change_cancel_on_migration_aborts(
     assert config._data["storage"]["models_dir"] == "C:/initial"
 
 
+def test_controller_prefills_hf_token_from_config(qtbot, monkeypatch):
+    """The persisted token must paint the Settings field on first
+    render — without that the user can't edit it (the field shows
+    blank then gets overwritten by save) and shoulder-surfing risk
+    via screenshare looks identical."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setenv("HF_TOKEN", "")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"huggingface": {"token": "hf_persisted"}})
+
+    AppController(config=config, window=window)
+    assert window.shortcuts_view.hf_token() == "hf_persisted"
+
+
+def test_controller_writes_hf_token_to_config_and_env(qtbot, monkeypatch):
+    """User edits the token field → controller writes to
+    ``huggingface.token`` AND mirrors into ``HF_TOKEN`` /
+    ``HUGGING_FACE_HUB_TOKEN`` env vars so the next download picks
+    it up without a restart."""
+    import os
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setenv("HF_TOKEN", "")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"huggingface": {"token": ""}})
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.hf_token_changed.emit("hf_brand_new")
+
+    assert config._data["huggingface"]["token"] == "hf_brand_new"
+    assert os.environ.get("HF_TOKEN") == "hf_brand_new"
+    assert os.environ.get("HUGGING_FACE_HUB_TOKEN") == "hf_brand_new"
+
+
+def test_controller_clearing_hf_token_removes_env(qtbot, monkeypatch):
+    """Empty value in the field → drop env vars entirely so
+    huggingface_hub doesn't try to use a stale token."""
+    import os
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setenv("HF_TOKEN", "stale_value")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "stale_value")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"huggingface": {"token": "stale_value"}})
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.hf_token_changed.emit("")
+
+    assert config._data["huggingface"]["token"] == ""
+    assert "HF_TOKEN" not in os.environ
+    assert "HUGGING_FACE_HUB_TOKEN" not in os.environ
+
+
+def test_controller_hf_token_change_refreshes_model_cards(qtbot, monkeypatch):
+    """After a token change every GigaAM card needs its warning
+    state recomputed — otherwise the user pastes a token and the
+    big yellow warning sits there until they restart."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setenv("HF_TOKEN", "")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    config = FakeConfig({"huggingface": {"token": ""}})
+
+    AppController(config=config, window=window)
+
+    # Locate one GigaAM card and verify its warning is visible.
+    gigaam_cards = [
+        c for c in window.models_view.findChildren(ModelCard)
+        if c.info().backend_kind == "gigaam"
+    ]
+    assert gigaam_cards, "expected at least one GigaAM card"
+    warn = gigaam_cards[0].findChild(type(gigaam_cards[0]._hf_warning), "HfTokenWarning")
+    assert warn.isVisible()
+
+    window.shortcuts_view.hf_token_changed.emit("hf_token_now_set")
+
+    # Warning should be hidden after the env var is set + cards
+    # refreshed.
+    assert not warn.isVisible()
+
+
 def test_controller_storage_reset_clears_config_and_updates_env(
     qtbot, monkeypatch,
 ):

@@ -65,6 +65,9 @@ class ShortcutsView(QWidget):
     # QFileDialog stays out of the widget code (cleaner tests).
     storage_path_change_requested = Signal()
     storage_reset_requested = Signal()
+    # Hugging Face card — fired on focus loss after the user edits
+    # the token field. Controller persists + applies to env.
+    hf_token_changed = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -247,6 +250,52 @@ class ShortcutsView(QWidget):
         storage_v.addWidget(storage_hint)
         root.addWidget(storage_card)
 
+        # ---- Hugging Face card ------------------------------------------
+        # Optional API token, only relevant for GigaAM long-form
+        # audio (>25 s) which routes through pyannote VAD —
+        # ``pyannote/segmentation-3.0`` is gated and needs an HF
+        # account that's accepted the model card. Built by hand
+        # rather than via ``_make_section_card`` for the same
+        # reason as the Storage card (form-row layout + helper
+        # widgets clash on spanning rows).
+        hf_card = QFrame(self)
+        hf_card.setObjectName("HfCard")
+        hf_card.setProperty("role", "card")
+        hf_v = QVBoxLayout(hf_card)
+        hf_v.setContentsMargins(20, 16, 20, 16)
+        hf_v.setSpacing(10)
+
+        hf_header = QLabel("Hugging Face", hf_card)
+        hf_header.setProperty("role", "section-header")
+        hf_v.addWidget(hf_header)
+
+        hf_row = QHBoxLayout()
+        hf_row.setSpacing(16)
+        hf_caption = QLabel("API token", hf_card)
+        hf_row.addWidget(hf_caption)
+        self._hf_token_edit = QLineEdit(hf_card)
+        self._hf_token_edit.setObjectName("HfTokenEdit")
+        self._hf_token_edit.setEchoMode(QLineEdit.Password)
+        self._hf_token_edit.setPlaceholderText("hf_…")
+        self._hf_token_edit.setClearButtonEnabled(True)
+        self._hf_token_edit.editingFinished.connect(self._on_hf_token_finished)
+        hf_row.addWidget(self._hf_token_edit, 1)
+        hf_v.addLayout(hf_row)
+
+        hf_hint = QLabel(
+            "Optional. Used when downloading gated or private "
+            "Hugging Face models — the app passes it to "
+            "huggingface_hub on every fetch.\n"
+            "Get one at https://huggingface.co/settings/tokens.",
+            hf_card,
+        )
+        hf_hint.setObjectName("HfHint")
+        hf_hint.setProperty("role", "muted")
+        hf_hint.setWordWrap(True)
+        hf_hint.setOpenExternalLinks(True)
+        hf_v.addWidget(hf_hint)
+        root.addWidget(hf_card)
+
         footer = QHBoxLayout()
         footer.addStretch(1)
         self._reset_btn = QPushButton("Reset to defaults", self)
@@ -309,6 +358,24 @@ class ShortcutsView(QWidget):
 
     def device_index(self) -> Optional[int]:
         return self._device_combo.currentData()
+
+    def set_hf_token(self, token: str) -> None:
+        """Programmatic prefill of the HF token field — used by the
+        controller on init. Won't echo a ``hf_token_changed`` signal
+        back so we don't re-save what we just loaded."""
+        self._suspend_emit = True
+        try:
+            self._hf_token_edit.setText(token or "")
+        finally:
+            self._suspend_emit = False
+
+    def hf_token(self) -> str:
+        return self._hf_token_edit.text().strip()
+
+    def _on_hf_token_finished(self) -> None:
+        if self._suspend_emit:
+            return
+        self.hf_token_changed.emit(self.hf_token())
 
     def set_storage_path(self, path: str, is_default: bool) -> None:
         """Update the Storage card's path display.

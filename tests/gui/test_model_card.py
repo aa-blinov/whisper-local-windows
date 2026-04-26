@@ -583,3 +583,111 @@ def test_model_card_refresh_cache_state_toggles_delete_visibility(qtbot, monkeyp
     cache_status["cached"] = False
     card.refresh_cache_state()
     assert not _delete_btn(card).isVisible()
+
+
+# ---- HF token warning (GigaAM only) ----------------------------------------
+
+
+def _make_gigaam_info():
+    from app.model_mapping import ModelInfo
+
+    return ModelInfo(
+        alias="gigaam-v3-e2e-ctc",
+        canonical="v3_e2e_ctc",
+        display_name="GigaAM v3 CTC (e2e, punctuated)",
+        size_mb=260,
+        vram_gb=2.0,
+        speed="fast",
+        quality="excellent",
+        languages="Russian (only)",
+        description="Sber GigaAM v3 with CTC decoder.",
+        backend_kind="gigaam",
+        family="GigaAM",
+    )
+
+
+def _hf_warning(card):
+    from PySide6.QtWidgets import QLabel
+
+    return card.findChild(QLabel, "HfTokenWarning")
+
+
+def test_gigaam_card_has_hf_token_warning_widget(qtbot):
+    """Every GigaAM card carries a warning label that surfaces when
+    no HF token is configured — long-form audio (>25 s) routes
+    through pyannote VAD which needs a token to download
+    ``pyannote/segmentation-3.0`` (gated)."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_gigaam_info())
+    qtbot.addWidget(card)
+    assert _hf_warning(card) is not None
+
+
+def test_whisper_card_has_no_hf_token_warning(qtbot):
+    """Whisper long-form goes through Silero VAD — no HF token
+    needed — so the warning widget is omitted entirely on
+    ``faster_whisper`` cards."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    assert _hf_warning(card) is None
+
+
+def test_gigaam_card_warning_visible_when_no_token(qtbot, monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_gigaam_info())
+    qtbot.addWidget(card)
+    card.show()
+    assert _hf_warning(card).isVisible()
+
+
+def test_gigaam_card_warning_hidden_when_token_set(qtbot, monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "hf_dummy_value")
+
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_gigaam_info())
+    qtbot.addWidget(card)
+    card.show()
+    assert not _hf_warning(card).isVisible()
+
+
+def test_gigaam_card_refresh_hf_token_state_updates_warning(qtbot, monkeypatch):
+    """After the user pastes a token in Settings, the controller
+    calls ``refresh_hf_token_state`` to re-evaluate every GigaAM
+    card's warning visibility without rebuilding the card tree."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_gigaam_info())
+    qtbot.addWidget(card)
+    card.show()
+    assert _hf_warning(card).isVisible()
+
+    monkeypatch.setenv("HF_TOKEN", "hf_dummy_value")
+    card.refresh_hf_token_state()
+    assert not _hf_warning(card).isVisible()
+
+
+def test_gigaam_card_warning_text_mentions_settings_and_25s(qtbot, monkeypatch):
+    """User-facing copy must explain WHY (long-form / 25 s cap) and
+    WHERE to fix (Settings tab) — otherwise the warning is just
+    noise."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_gigaam_info())
+    qtbot.addWidget(card)
+    text = _hf_warning(card).text().lower()
+    assert "25" in text
+    assert "settings" in text or "token" in text

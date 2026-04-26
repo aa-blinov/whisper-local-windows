@@ -31,6 +31,27 @@ from app.utils import (
 log = logging.getLogger(__name__)
 
 
+def _apply_hf_token_to_env(configured: Optional[str]) -> bool:
+    """Mirror the user's HF token into the live environment.
+
+    huggingface_hub reads ``HF_TOKEN`` (and the legacy alias
+    ``HUGGING_FACE_HUB_TOKEN``) on every download — setting them
+    here makes the change effective without a restart.
+
+    Returns True iff a non-empty token was applied.
+    """
+    import os as _os
+
+    if configured and str(configured).strip():
+        token = str(configured).strip()
+        _os.environ["HF_TOKEN"] = token
+        _os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+        return True
+    _os.environ.pop("HF_TOKEN", None)
+    _os.environ.pop("HUGGING_FACE_HUB_TOKEN", None)
+    return False
+
+
 def _apply_env_for_models_root(configured: str) -> str:
     """Mirror the user's chosen models root into the live process
     environment so the next ``WhisperModel(download_root=…)`` and
@@ -314,6 +335,13 @@ class AppController(QObject):
         view.storage_reset_requested.connect(self._on_storage_reset)
         self._refresh_storage_path()
 
+        # Hugging Face card — paint the persisted token + apply to
+        # env (in case ``app.py``'s startup hook missed something).
+        view.hf_token_changed.connect(self._on_hf_token_changed)
+        persisted_token = self._config.get_setting("huggingface", "token") or ""
+        view.set_hf_token(persisted_token)
+        _apply_hf_token_to_env(persisted_token)
+
     def _refresh_storage_path(self) -> None:
         """Push the resolved storage path into the Settings card. The
         view shows ``(default)`` after the path when nothing's been
@@ -451,6 +479,15 @@ class AppController(QObject):
                 "New downloads will land there immediately."
             ),
         )
+
+    def _on_hf_token_changed(self, token: str) -> None:
+        """Persist the new token, mirror into env, and re-evaluate
+        every GigaAM card's warning so the user gets immediate
+        feedback that the warning has cleared."""
+        token = (token or "").strip()
+        self._config.update_user_setting("huggingface", "token", token)
+        _apply_hf_token_to_env(token)
+        self._window.models_view.refresh_hf_token_state()
 
     def _on_shortcuts_save(self, payload: dict) -> None:
         self._config.update_user_setting(
