@@ -5,6 +5,17 @@
 import os
 from pathlib import Path
 
+# Build-time compatibility shims — must run BEFORE the
+# ``importlib.util.find_spec(...)`` probes below, otherwise PyInstaller's
+# hidden-imports analysis crashes during ``import nemo.collections.asr``
+# (NeMo's exp_manager touches the POSIX-only ``signal.SIGKILL`` at
+# class-definition time on Windows). Same shim is applied at runtime via
+# ``runtime_hooks`` so the frozen exe boots cleanly too.
+import signal as _spec_signal
+
+if not hasattr(_spec_signal, "SIGKILL"):
+    _spec_signal.SIGKILL = _spec_signal.SIGTERM  # type: ignore[attr-defined]
+
 block_cipher = None
 
 """PyInstaller spec for Lazy to text.
@@ -61,6 +72,7 @@ if styles_src.exists():
 # path in ConfigManager will pick it up automatically.
 
 import importlib.util
+from PyInstaller.utils.hooks import collect_submodules
 
 requested_hiddenimports = [
     'win32timezone',        # pywin32 timezone helper
@@ -68,17 +80,6 @@ requested_hiddenimports = [
     'PySide6.QtCore',
     'PySide6.QtGui',
     'PySide6.QtWidgets',
-    # NeMo's submodules are loaded via hydra config + dynamic
-    # ``importlib`` calls — PyInstaller's static analysis misses
-    # most of them, so list the ones the ASR path actually needs.
-    'nemo',
-    'nemo.collections',
-    'nemo.collections.asr',
-    'nemo.collections.asr.models',
-    'nemo.collections.asr.modules',
-    'nemo.collections.asr.parts',
-    'nemo.utils',
-    'lhotse',
 ]
 
 hiddenimports = [m for m in requested_hiddenimports if importlib.util.find_spec(m) is not None]
@@ -87,10 +88,33 @@ if len(hiddenimports) < len(requested_hiddenimports):
     missing = set(requested_hiddenimports) - set(hiddenimports)
     print(f"[spec] Skipping missing optional hidden imports: {', '.join(sorted(missing))}")
 
+# GigaAM / NeMo / lhotse load most of their internals via hydra
+# string-target configs (``_target_: gigaam.encoder.ConformerEncoder``
+# etc.) — PyInstaller's static analyser can't see those, so without
+# ``collect_submodules`` everything beyond the top-level package is
+# missing from the bundle and hydra raises:
+#
+#     Error locating target 'gigaam.encoder.ConformerEncoder',
+#     set env var HYDRA_FULL_ERROR=1 to see chained exception.
+#
+# Pull every submodule of these packages into the bundle so hydra can
+# resolve any string target it sees in a config. The size cost is
+# absorbed by the existing torch / lhotse footprint — nothing here
+# brings in net-new wheel weight.
+for _pkg in ('gigaam', 'nemo', 'lhotse'):
+    if importlib.util.find_spec(_pkg) is not None:
+        try:
+            hiddenimports.extend(collect_submodules(_pkg))
+        except Exception as _exc:
+            print(f"[spec] collect_submodules({_pkg!r}) failed: {_exc!r}")
+
 # Extra: sounddevice sometimes needs explicit PortAudio dynamic lib inclusion (PyInstaller usually detects)
 # If не подхватит, можно явно добавить binaries сюда позже.
 
 from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT
+
+_runtime_hook = project_root / 'scripts' / 'pyi_runtime_hook.py'
+runtime_hooks = [str(_runtime_hook)] if _runtime_hook.is_file() else []
 
 analysis = Analysis(
     ['lazy-to-text-ui.py'],
@@ -100,9 +124,19 @@ analysis = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=runtime_hooks,
     excludes=[],
-    noarchive=False,
+    # ``noarchive=True`` keeps the .py source files alongside the
+    # .pyc in ``_internal/`` instead of bundling them into the
+    # base_library.zip / .pyz archive. TorchScript's
+    # ``inspect.getsource`` needs to read the actual .py source for
+    # any ``@torch.jit.script`` decorated function (NeMo's RNNT
+    # decoder uses several — without source access the boot path
+    # dies with ``Can't get source for <function snake at ...>.
+    # TorchScript requires source access in order to carry out
+    # compilation``). The size cost is ~50-100 MB extra in
+    # ``_internal/``, mostly torch / nemo source.
+    noarchive=True,
 )
 
 pyz = PYZ(analysis.pure, analysis.zipped_data, cipher=block_cipher)

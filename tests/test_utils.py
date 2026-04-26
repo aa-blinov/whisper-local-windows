@@ -321,6 +321,46 @@ def test_get_models_root_returns_default_when_empty(tmp_path, monkeypatch):
     assert get_models_root("   ") == default
 
 
+def test_get_models_root_does_not_create_filesystem_entries(tmp_path, monkeypatch):
+    """Documented as 'doesn't touch the filesystem'. Caller passes a
+    fresh path that doesn't exist yet — the function must just echo
+    it back without ``mkdir``-ing anything. Otherwise the dev/test
+    workflow accidentally seeds empty ``models/`` directories all
+    over the place when probing config values."""
+    from app.utils import get_models_root
+
+    custom = tmp_path / "fresh-cache-dir"
+    assert not custom.exists()
+
+    result = get_models_root(str(custom))
+
+    assert result == str(custom)
+    assert not custom.exists(), (
+        "get_models_root must not create the configured path"
+    )
+
+
+def test_get_models_root_default_branch_does_not_create_dir(tmp_path, monkeypatch):
+    """Even on the default-fallback branch (no configured path) the
+    function should just resolve a string — directory creation is
+    the caller's responsibility, and HF Hub creates the cache dir
+    on first download anyway."""
+    from app import utils as utils_module
+
+    fake_root = tmp_path / "fake-default-models"
+    monkeypatch.setattr(
+        utils_module, "get_project_models_path", lambda: str(fake_root)
+    )
+    assert not fake_root.exists()
+
+    result = utils_module.get_models_root("")
+
+    assert result == str(fake_root)
+    assert not fake_root.exists(), (
+        "default-fallback branch must not pre-create the models dir"
+    )
+
+
 # ---- cached_models_size ----------------------------------------------------
 
 
@@ -560,7 +600,13 @@ def test_get_project_models_path_frozen_uses_local_appdata(
 
     result = Path(get_project_models_path())
     assert result == local_appdata / "LazyToText" / "models"
-    assert result.is_dir()
+    # ``get_project_models_path`` is a pure path-resolver now; the
+    # consumer (HF Hub / GigaAM / mover script) creates the directory
+    # on first download. The caller should NOT see a side-effect dir
+    # appear just from probing the configured path.
+    assert not result.exists(), (
+        "path resolver must not create the directory as a side effect"
+    )
 
 
 def test_get_project_models_path_frozen_falls_back_when_localappdata_missing(
@@ -578,4 +624,6 @@ def test_get_project_models_path_frozen_falls_back_when_localappdata_missing(
     result = Path(get_project_models_path())
     expected = tmp_path / "fake_home" / "AppData" / "Local" / "LazyToText" / "models"
     assert result == expected
-    assert result.is_dir()
+    assert not result.exists(), (
+        "path resolver must not create the directory as a side effect"
+    )

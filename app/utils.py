@@ -45,8 +45,14 @@ def _user_local_data_dir() -> Path:
 def _project_root_or_cwd() -> Path:
     """Walk up from this module to the nearest ``pyproject.toml``.
 
-    Returns CWD parent fallback if no marker found — preserves the
-    behaviour the dev path has had since day one.
+    On a normal source / wheel install the marker is two levels up
+    (``app/utils.py`` → ``<project>/pyproject.toml``) and that's
+    what gets returned. The fallback when no marker is found walks
+    three parents up from this module's directory — i.e. the
+    grandparent of the source root — which is a hangover from an
+    earlier layout. It's exotic enough to be effectively dead code
+    in normal runtimes; the spelling is preserved here so existing
+    builds aren't disturbed, but new callers should not rely on it.
     """
     current = Path(__file__).parent
     for p in [current, *current.parents]:
@@ -96,6 +102,13 @@ def get_project_models_path() -> str:
     huggingface_hub keep their downloads where ``is_model_cached``
     can find them. Settings → Storage card lets the user override
     this path; this is just the default when they haven't.
+
+    Pure path resolution — no filesystem side effects. ``HF_HOME``
+    consumers (huggingface_hub.snapshot_download, gigaam.load_model)
+    create the directory themselves on first download via their own
+    ``os.makedirs(..., exist_ok=True)``, so probing this function
+    from cache-status code shouldn't seed empty ``models/`` dirs as
+    a side effect.
     """
     if getattr(sys, "frozen", False):
         base = _user_local_data_dir()
@@ -103,9 +116,7 @@ def get_project_models_path() -> str:
         base = Path.cwd()
     else:
         base = _project_root_or_cwd()
-    models_dir = base / "models"
-    os.makedirs(models_dir, exist_ok=True)
-    return str(models_dir)
+    return str(base / "models")
 
 
 def cached_models_size(root: str) -> int:
@@ -228,9 +239,9 @@ def get_models_root(configured: Optional[str]) -> str:
     ``<exe-dir>/models`` when frozen).
 
     Used by ``app.py`` at startup to decide what to put into
-    ``HF_HOME`` and ``GIGAAM_MODELS_DIR``. Doesn't touch the
-    filesystem itself — both subdirs are created lazily by the
-    libraries on first download.
+    ``HF_HOME`` and ``GIGAAM_MODELS_DIR``. No filesystem side
+    effects — neither branch calls ``mkdir``; HF Hub /
+    GigaAM create the directory themselves on first download.
     """
     if configured and configured.strip():
         return configured

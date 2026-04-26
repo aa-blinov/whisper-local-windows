@@ -21,8 +21,23 @@ from __future__ import annotations
 # (a Whisper-only setup) still boot.
 try:  # noqa: SIM105 — keep the explicit comment + import-time placement
     import pyarrow  # noqa: F401  (warmup-only, value unused)
-except ImportError:
-    pass
+except Exception as _pyarrow_exc:  # noqa: BLE001 — boot-time resilience
+    # ImportError is the obvious case (pyarrow not installed in a
+    # Whisper-only setup), but binary wheels can also raise
+    # OSError / RuntimeError at import time when their DLL
+    # dependencies are missing or shadowed by a conflicting load.
+    # Letting any of those escape would crash the whole app at
+    # import time, which is exactly the failure mode this pre-
+    # import is supposed to prevent — fall through to stderr and
+    # let the rest of the app boot, NeMo will surface a real error
+    # later if it actually needed pyarrow.
+    import sys as _sys
+    print(
+        f"[lazy-to-text] pyarrow pre-import skipped: "
+        f"{type(_pyarrow_exc).__name__}: {_pyarrow_exc}",
+        file=_sys.stderr,
+    )
+    del _pyarrow_exc, _sys
 
 
 import os
@@ -107,6 +122,54 @@ def _force_window_icon(hwnd: int, ico_path: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def _register_aumid_icon(app_id: str = "LazyToText.App") -> None:
+    """Bind a real icon to our AppUserModelID in the user's registry.
+
+    Without an ``HKCU\\Software\\Classes\\AppUserModelId\\<id>`` entry
+    pointing at the actual executable, Windows falls back to a generic
+    document icon for taskbar / Alt-Tab entries grouped under our
+    AppUserModelID — even though the .exe itself carries the proper
+    icon resource and ``setWindowIcon`` was called on the Qt window.
+    Confirmed empirically on a fresh ``%LOCALAPPDATA%\\Programs\\...``
+    install: blank icon stayed blank across explorer restarts and
+    icon-cache flushes until this registry entry was written.
+
+    Frozen-only: source-run dev path uses python.exe as the host
+    process and shouldn't fight Windows for that icon binding.
+    Idempotent — overwrites stale values cheerfully on every launch
+    so a moved install picks up the new path next time. Failures
+    (locked HKCU under Group Policy, e.g.) are swallowed; falling
+    back to a generic icon is annoying but not fatal.
+    """
+    if sys.platform != "win32":
+        return
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        import winreg
+    except ImportError:  # pragma: no cover — winreg is std-lib on Windows
+        return
+    exe_path = sys.executable
+    try:
+        with winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER,
+            f"Software\\Classes\\AppUserModelId\\{app_id}",
+            0,
+            winreg.KEY_SET_VALUE,
+        ) as key:
+            winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "Lazy to Text")
+            winreg.SetValueEx(
+                key, "IconResource", 0, winreg.REG_EXPAND_SZ, f"{exe_path},0",
+            )
+            winreg.SetValueEx(
+                key, "IconUri", 0, winreg.REG_EXPAND_SZ, exe_path,
+            )
+    except OSError:
+        # Locked HKCU / Group Policy — fall through with the generic
+        # icon. Not worth crashing the app over.
+        return
 
 
 def _set_app_user_model_id(app_id: str = "LazyToText.App") -> int:
@@ -253,6 +316,10 @@ def main() -> int:
     # Distinct AppUserModelID before any window is created so Windows uses
     # our icon in the taskbar instead of the Python interpreter's.
     _set_app_user_model_id()
+    # Bind the AppUserModelID to our exe's icon resource in the user's
+    # registry — without this Windows shows a generic document icon
+    # for taskbar entries grouped under this AUMID on fresh installs.
+    _register_aumid_icon()
 
     instance_handle = try_acquire_single_instance("LazyToTextQt")
 
