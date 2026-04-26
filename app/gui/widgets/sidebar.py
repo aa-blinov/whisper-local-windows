@@ -70,12 +70,21 @@ class Sidebar(QWidget):
         layout.addWidget(self._list, 1)
 
         # Recording status slot pinned to the bottom-left of the
-        # sidebar — recording pill stacked over the live VU meter,
-        # always reserves its placeholder height even when idle.
-        # Lives here (not in the topbar) so it doesn't overlap the
-        # CPU / RAM / GPU resource graphs that occupy the topbar.
-        self.recording_status = RecordingStatusWidget(self)
-        layout.addWidget(self.recording_status)
+        # sidebar — chip-style card matching the topbar's resource
+        # widget, always shows its placeholder state even when idle.
+        # Wrapped in its own widget so the layout's contentsMargins
+        # handle the bottom-alignment with the ModelsView's
+        # ``setContentsMargins(28, 22, 28, 22)`` (QSS ``margin`` on
+        # the chip itself isn't reliable for plain QWidgets — Qt
+        # routes it through QStyle which doesn't always apply it).
+        chip_holder = QWidget(self)
+        chip_holder.setObjectName("RecordingStatusHolder")
+        chip_layout = QVBoxLayout(chip_holder)
+        chip_layout.setContentsMargins(12, 12, 12, 22)
+        chip_layout.setSpacing(0)
+        self.recording_status = RecordingStatusWidget(chip_holder)
+        chip_layout.addWidget(self.recording_status)
+        layout.addWidget(chip_holder)
 
         resolved = tuple(items) if items is not None else _DEFAULT_ITEMS
         for key, label in resolved:

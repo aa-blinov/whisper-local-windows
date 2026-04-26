@@ -412,13 +412,11 @@ QLabel[role="recording-pill"][state="model_loading"] {
     background-color: {{color.bg_elevated}};
     border: 1px solid {{color.border}};
     border-radius: {{radius.sm}};
-    /* Bottom = 22 px so the chip's lower edge lines up with the
-       Models view's content padding (``setContentsMargins(28, 22,
-       28, 22)`` in models_view.py). Without this the chip dangled
-       12 px below the last visible card on the right. Top margin
-       stays smaller — generous gap above is unnecessary, the nav
-       list already has its own row spacing. */
-    margin: 12px 12px 22px 12px;
+    /* Outer spacing lives on the parent ``RecordingStatusHolder``
+       widget (sidebar.py) — Qt's QStyle routes QSS ``margin`` for
+       plain QWidgets unreliably, so layout contentsMargins is the
+       safer source of truth for the bottom alignment with
+       ModelsView's content padding. */
 }
 
 QLabel[role="chip-label"] {
