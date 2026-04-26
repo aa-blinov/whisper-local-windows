@@ -226,11 +226,18 @@ class GigaamBackend:
     def set_progress_callback(
         callback: Optional[Callable[[int, int, str], None]],
     ) -> None:
-        """GigaAM doesn't expose a download progress hook — its loader
-        prints to stderr. Kept on the API for symmetry with
-        ``FasterWhisperBackend.set_progress_callback`` so the
-        ``RoutedBackend`` facade can forward callbacks blindly."""
-        del callback  # no-op
+        """GigaAM's own loader downloads from Sber's CDN via plain
+        ``urllib`` (no tqdm), so progress for the .ckpt fetch can't
+        flow through the shared hook either way. But pyannote's
+        long-form deps (downloaded on first long-audio capture) DO
+        use ``huggingface_hub`` + tqdm — forward to FasterWhisper's
+        module-level ``_progress_callback`` so those at least
+        surface in the UI. Same pattern as ``NemoBackend``."""
+        from app.backends.faster_whisper_backend import (
+            FasterWhisperBackend as _FW,
+        )
+
+        _FW.set_progress_callback(callback)
 
     # ---- internal -----------------------------------------------------------
 

@@ -294,6 +294,14 @@ def main() -> int:
     )
     _logging.getLogger().addHandler(_file_handler)
 
+    # Bridge ``warnings.warn(...)`` into the logging pipeline so
+    # NeMo / PyTorch / pyannote deprecation noise (and our own
+    # ``DeprecationWarning`` etc.) lands in the same place as
+    # everything else — both ``app.log`` and the Logs view.
+    # Without this, those warnings only print to stderr and
+    # disappear in a windowed build with no console.
+    _logging.captureWarnings(True)
+
     # Reuse the early config — re-creating it would re-read the YAML
     # and just produce identical state, but the early one was made
     # before the logging file handler was attached, so log messages

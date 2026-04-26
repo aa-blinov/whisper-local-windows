@@ -209,9 +209,18 @@ class NemoBackend:
     ) -> None:
         """NeMo defers HF downloads to ``huggingface_hub`` which the
         existing ``_install_tqdm_progress`` (faster-whisper backend)
-        already hooks. Kept for API parity with the other backends so
-        ``RoutedBackend`` can forward callbacks blindly."""
-        del callback  # no-op — progress flows through the shared tqdm hook
+        already hooks — but that hook fires through a *module-level*
+        ``_progress_callback`` in ``faster_whisper_backend``, which
+        only its own ``set_progress_callback`` updates. Forward our
+        registration through there so RoutedBackend's callback
+        actually reaches the patched tqdm subclass when the inner
+        is NeMo (otherwise progress for Parakeet downloads silently
+        no-ops)."""
+        from app.backends.faster_whisper_backend import (
+            FasterWhisperBackend as _FW,
+        )
+
+        _FW.set_progress_callback(callback)
 
     # ---- internal -----------------------------------------------------------
 
