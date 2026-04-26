@@ -388,9 +388,9 @@ def test_set_values_prefills_cancel_hotkey(qtbot):
         start_hotkey="ctrl+f2",
         stop_hotkey="ctrl+f3",
         auto_paste=True,
-        cancel_hotkey="ctrl+f4",
+        cancel_hotkey="ctrl+f6",
     )
-    assert _cancel_edit(view).text() == "ctrl+f4"
+    assert _cancel_edit(view).text() == "ctrl+f6"
 
 
 def test_cancel_hotkey_returns_via_getter(qtbot):
@@ -421,7 +421,7 @@ def test_save_payload_includes_cancel_hotkey(qtbot):
         start_hotkey="ctrl+f2",
         stop_hotkey="ctrl+f3",
         auto_paste=False,
-        cancel_hotkey="ctrl+f4",
+        cancel_hotkey="ctrl+f6",
     )
 
     edit = _cancel_edit(view)

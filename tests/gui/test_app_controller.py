@@ -1016,12 +1016,12 @@ def test_controller_prefills_cancel_hotkey_from_config(qtbot):
         "hotkey": {
             "start_recording_hotkey": "ctrl+f2",
             "stop_recording_hotkey": "ctrl+f3",
-            "cancel_recording_hotkey": "ctrl+f4",
+            "cancel_recording_hotkey": "ctrl+f6",
         },
     })
 
     AppController(config=config, window=window)
-    assert window.shortcuts_view.cancel_hotkey() == "ctrl+f4"
+    assert window.shortcuts_view.cancel_hotkey() == "ctrl+f6"
 
 
 def test_controller_persists_cancel_hotkey_on_save(qtbot):

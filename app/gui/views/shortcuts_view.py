@@ -188,7 +188,7 @@ class ShortcutsView(QWidget):
         # means no global key, the feature simply isn't bound.
         self._cancel_edit = QLineEdit(hotkeys_card)
         self._cancel_edit.setObjectName("CancelHotkeyEdit")
-        self._cancel_edit.setPlaceholderText("e.g. ctrl+f4 — leave empty to disable")
+        self._cancel_edit.setPlaceholderText("e.g. ctrl+f6 — leave empty to disable")
         self._cancel_edit.editingFinished.connect(self._emit_save)
         hotkeys_form.addRow("Cancel recording", self._cancel_edit)
 
