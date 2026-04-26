@@ -691,3 +691,80 @@ def test_gigaam_card_warning_text_mentions_settings_and_25s(qtbot, monkeypatch):
     text = _hf_warning(card).text().lower()
     assert "25" in text
     assert "settings" in text or "token" in text
+
+
+# ---- Backend-specific inference panel dispatch -----------------------------
+
+
+def _make_parakeet_info():
+    from app.model_mapping import ModelInfo
+
+    return ModelInfo(
+        alias="parakeet-tdt-v3",
+        canonical="nvidia/parakeet-tdt-0.6b-v3",
+        display_name="Parakeet TDT v3",
+        size_mb=1200,
+        vram_gb=2.0,
+        speed="fast",
+        quality="excellent",
+        languages="25 langs incl. Russian, Ukrainian",
+        description="NVIDIA Parakeet TDT 0.6B v3 — 25 European languages.",
+        backend_kind="nemo",
+        family="Parakeet",
+    )
+
+
+def test_whisper_card_uses_whisper_inference_panel(qtbot):
+    """Whisper-backed cards get the full 5-knob panel
+    (language / VAD / beam / temperature / prompt)."""
+    from app.gui.widgets.inference_settings_panel import InferenceSettingsPanel
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())  # _make_info() builds a Whisper card
+    qtbot.addWidget(card)
+    assert isinstance(card._settings_panel, InferenceSettingsPanel)
+
+
+def test_nemo_card_uses_nemo_inference_panel(qtbot):
+    """NeMo (Parakeet/Canary) cards get the minimal panel
+    — NeMo's API only exposes the ``timestamps`` toggle."""
+    from app.gui.widgets.model_card import ModelCard
+    from app.gui.widgets.nemo_inference_settings_panel import (
+        NemoInferenceSettingsPanel,
+    )
+
+    card = ModelCard(_make_parakeet_info())
+    qtbot.addWidget(card)
+    assert isinstance(card._settings_panel, NemoInferenceSettingsPanel)
+
+
+def test_gigaam_card_has_no_inference_panel(qtbot):
+    """GigaAM is end-to-end with no transcribe-time tunables —
+    the panel is omitted entirely so a disabled control group
+    doesn't look like a rendering bug."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_gigaam_info())
+    qtbot.addWidget(card)
+    assert card._settings_panel is None
+
+
+def test_nemo_card_panel_emits_through_card_signal(qtbot):
+    """The card forwards each panel's ``settings_changed`` to its
+    own ``inference_settings_changed`` so the controller listens at
+    a single point regardless of backend kind."""
+    from app.gui.widgets.model_card import ModelCard
+    from app.inference_settings import NemoInferenceSettings
+
+    card = ModelCard(_make_parakeet_info())
+    qtbot.addWidget(card)
+
+    with qtbot.waitSignal(card.inference_settings_changed, timeout=1000) as blocker:
+        card._settings_panel.settings_changed.emit(
+            NemoInferenceSettings(timestamps=True)
+        )
+
+    alias, settings = blocker.args
+    assert alias == "parakeet-tdt-v3"
+    assert isinstance(settings, NemoInferenceSettings)
+    assert settings.timestamps is True

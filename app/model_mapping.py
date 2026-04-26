@@ -31,17 +31,19 @@ _COMPUTE_VALUES = ("float32", "float16", "int8_float16", "int8")
 # Which inference backend should drive this model. ``faster_whisper`` is
 # the default CT2 path; ``gigaam`` routes through the Sber Russian-only
 # acoustic model. New engines plug in here.
-BACKEND_KINDS = ("faster_whisper", "gigaam")
+BACKEND_KINDS = ("faster_whisper", "gigaam", "nemo")
 # Visual grouping shown on the card. All faster-whisper-based models
 # stay anchored to "Whisper" so the lineage is honest — the variant
 # is part of the family name, not a parallel family of its own.
-# ``GigaAM`` is a separate engine entirely.
+# ``GigaAM`` (Sber) and ``Parakeet`` (NVIDIA NeMo) are separate
+# engines entirely.
 FAMILIES = (
     "Whisper",
     "Whisper Turbo",
     "Whisper Distil",
     "Whisper RU",
     "GigaAM",
+    "Parakeet",
 )
 
 
@@ -211,6 +213,29 @@ MODELS: Tuple[ModelInfo, ...] = (
         description="Sber GigaAM v3 end-to-end with RNN-T decoder — best Russian quality, built-in punctuation. Recommended.",
         backend_kind="gigaam",
         family="GigaAM",
+    ),
+    # ---- NVIDIA Parakeet (NeMo, multilingual) ------------------------------
+    # Parakeet TDT 0.6B v3 — 25 European languages including
+    # Russian and Ukrainian, auto language detection, optimised for
+    # speed (highest throughput multilingual ASR on the HF
+    # leaderboard at the time of writing). Ships fp32 in
+    # safetensors; ~1.2 GB on disk.
+    #
+    # Inference goes through ``nemo_toolkit[asr]`` → adds noticeable
+    # weight to the dependency tree but unlocks NVIDIA's recent
+    # speech families (Canary, future Parakeet siblings) for free.
+    ModelInfo(
+        alias="parakeet-tdt-v3",
+        canonical="nvidia/parakeet-tdt-0.6b-v3",
+        display_name="Parakeet TDT v3 (multilingual)",
+        size_mb=1200,
+        vram_gb=2.0,
+        speed="fast",
+        quality="excellent",
+        languages="25 langs incl. Russian, Ukrainian",
+        description="NVIDIA Parakeet TDT 0.6B v3 — 25 European languages with auto-detect, low-latency. The fastest multilingual ASR on Hugging Face's leaderboard.",
+        backend_kind="nemo",
+        family="Parakeet",
     ),
 )
 

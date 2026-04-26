@@ -68,6 +68,17 @@ requested_hiddenimports = [
     'PySide6.QtCore',
     'PySide6.QtGui',
     'PySide6.QtWidgets',
+    # NeMo's submodules are loaded via hydra config + dynamic
+    # ``importlib`` calls — PyInstaller's static analysis misses
+    # most of them, so list the ones the ASR path actually needs.
+    'nemo',
+    'nemo.collections',
+    'nemo.collections.asr',
+    'nemo.collections.asr.models',
+    'nemo.collections.asr.modules',
+    'nemo.collections.asr.parts',
+    'nemo.utils',
+    'lhotse',
 ]
 
 hiddenimports = [m for m in requested_hiddenimports if importlib.util.find_spec(m) is not None]

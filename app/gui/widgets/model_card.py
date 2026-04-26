@@ -30,7 +30,10 @@ def _has_hf_token() -> bool:
 
 from app.gui.widgets.flow_layout import FlowLayout
 from app.gui.widgets.inference_settings_panel import InferenceSettingsPanel
-from app.inference_settings import InferenceSettings
+from app.gui.widgets.nemo_inference_settings_panel import (
+    NemoInferenceSettingsPanel,
+)
+from app.inference_settings import InferenceSettings, NemoInferenceSettings
 from app.model_mapping import ModelInfo, model_url
 from app.utils import is_cached_for_info
 
@@ -86,10 +89,13 @@ class ModelCard(QFrame):
     # update.
     delete_requested = Signal(str)
     # Emitted when the user changes anything in the inline inference
-    # settings panel — args: ``(alias, InferenceSettings)`` so the
-    # controller can route to per-model config + push live to the
-    # backend without having to map widgets back to models.
-    inference_settings_changed = Signal(str, InferenceSettings)
+    # settings panel. Args: ``(alias, settings_object)``. The settings
+    # object is either ``InferenceSettings`` (faster-whisper cards)
+    # or ``NemoInferenceSettings`` (NeMo cards) — controller dispatches
+    # on the alias's backend kind. Declared as ``object`` because
+    # PySide signals can't express a sum type and the consumer only
+    # uses duck-typed ``.to_mapping()``.
+    inference_settings_changed = Signal(str, object)
 
     def __init__(self, info: ModelInfo, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -218,15 +224,21 @@ class ModelCard(QFrame):
             badges.addWidget(badge)
         root.addLayout(badges)
 
-        # Inline inference settings — only relevant for engines that
-        # actually accept transcribe-time tunables. GigaAM is
-        # end-to-end (Russian-only, deterministic, no prompt) so it
-        # gets no panel; inserting a greyed-out one looked like a
-        # rendering bug. faster-whisper-backed cards get the full
-        # panel, hidden until the card is active.
-        self._settings_panel: Optional[InferenceSettingsPanel] = None
-        if info.backend_kind != "gigaam":
+        # Inline inference settings — choice of panel keyed on
+        # backend kind:
+        #   - ``faster_whisper``: full 5-knob Whisper panel
+        #     (language, VAD, beam, temperature, prompt)
+        #   - ``nemo``: minimal Parakeet/Canary panel
+        #     (timestamps toggle — that's all NeMo's API exposes)
+        #   - ``gigaam``: no panel; the engine is end-to-end and
+        #     accepts no transcribe-time tunables. Inserting a
+        #     disabled panel looked like a rendering bug.
+        self._settings_panel: Optional[QWidget] = None
+        if info.backend_kind == "faster_whisper":
             self._settings_panel = InferenceSettingsPanel(self)
+        elif info.backend_kind == "nemo":
+            self._settings_panel = NemoInferenceSettingsPanel(self)
+        if self._settings_panel is not None:
             self._settings_panel.setVisible(False)
             self._settings_panel.settings_changed.connect(
                 lambda s: self.inference_settings_changed.emit(
@@ -325,15 +337,20 @@ class ModelCard(QFrame):
         self.style().unpolish(self)
         self.style().polish(self)
 
-    def set_inference_settings(self, settings: InferenceSettings) -> None:
+    def set_inference_settings(self, settings) -> None:
         """Pre-fill the inline panel from the controller (called when
         the card becomes active and the controller has loaded the
         per-alias overrides out of config). No-op on engines that
-        don't have a panel (GigaAM)."""
+        don't have a panel (GigaAM). ``settings`` is the dataclass
+        appropriate for this card's backend (Whisper /
+        NeMo) — caller is responsible for sending the right type."""
         if self._settings_panel is not None:
             self._settings_panel.set_settings(settings)
 
-    def inference_settings(self) -> Optional[InferenceSettings]:
+    def inference_settings(self):
+        """Return the panel's current values (``InferenceSettings``
+        for Whisper, ``NemoInferenceSettings`` for NeMo) or ``None``
+        on cards that don't have a panel."""
         if self._settings_panel is None:
             return None
         return self._settings_panel.values()

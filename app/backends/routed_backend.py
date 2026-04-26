@@ -48,6 +48,16 @@ def _build_gigaam(model: str, **kwargs) -> TranscriptionBackend:
     return GigaamBackend(model=model, **accepted)
 
 
+def _build_nemo(model: str, **kwargs) -> TranscriptionBackend:
+    from app.backends.nemo_backend import NemoBackend
+
+    # NemoBackend takes only ``device``; ``compute_type`` /
+    # ``beam_size`` / ``language`` are NeMo-internal or not
+    # exposed through the public transcribe API.
+    accepted = {k: v for k, v in kwargs.items() if k in ("device",)}
+    return NemoBackend(model=model, **accepted)
+
+
 class RoutedBackend:
     def __init__(
         self,
@@ -191,4 +201,6 @@ class RoutedBackend:
     def _build(self, canonical: str, kind: str) -> TranscriptionBackend:
         if kind == "gigaam":
             return _build_gigaam(canonical, **self._kwargs)
+        if kind == "nemo":
+            return _build_nemo(canonical, **self._kwargs)
         return _build_faster_whisper(canonical, **self._kwargs)

@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 # explicit ``quit()`` calls from tray actions.
 
 from app.gui.main_window import MainWindow
-from app.inference_settings import InferenceSettings
+from app.inference_settings import InferenceSettings, NemoInferenceSettings
 from app.model_mapping import MODELS, alias_for, canonical_for, get_model
 from app.utils import (
     cached_models_size,
@@ -619,21 +619,33 @@ class AppController(QObject):
         from app.model_mapping import aliases
         return aliases()
 
-    def _load_inference_settings(self, alias: str) -> InferenceSettings:
+    def _settings_class_for(self, alias: str):
+        """Pick the inference-settings dataclass that matches the
+        model's backend kind. Whisper → ``InferenceSettings`` (5
+        knobs); NeMo → ``NemoInferenceSettings`` (just
+        ``timestamps``); unknown alias defaults to Whisper since
+        that's the most common case for raw HF ids."""
+        try:
+            info = get_model(alias)
+        except KeyError:
+            return InferenceSettings
+        if info.backend_kind == "nemo":
+            return NemoInferenceSettings
+        return InferenceSettings
+
+    def _load_inference_settings(self, alias: str):
         try:
             raw = self._config.get_setting("model_overrides", alias)
         except Exception:
             raw = None
-        return InferenceSettings.from_mapping(raw)
+        return self._settings_class_for(alias).from_mapping(raw)
 
-    def _save_inference_settings(
-        self, alias: str, settings: InferenceSettings
-    ) -> None:
+    def _save_inference_settings(self, alias: str, settings) -> None:
         self._config.update_user_setting(
             "model_overrides", alias, settings.to_mapping()
         )
 
-    def _push_inference_to_backend(self, settings: InferenceSettings) -> None:
+    def _push_inference_to_backend(self, settings) -> None:
         if self._recording is None:
             return
         sm = getattr(self._recording, "state_manager", None)
@@ -646,9 +658,7 @@ class AppController(QObject):
         except Exception as exc:  # pragma: no cover — defensive
             log.warning("Live inference-settings push raised: %s", exc)
 
-    def _on_inference_settings_changed(
-        self, alias: str, settings: InferenceSettings
-    ) -> None:
+    def _on_inference_settings_changed(self, alias: str, settings) -> None:
         # Persist for next launch.
         self._save_inference_settings(alias, settings)
         # Live-apply only if the change was made on the *active*

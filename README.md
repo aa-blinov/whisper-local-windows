@@ -31,9 +31,10 @@ runs in-process and downloads from Hugging Face / Sber's CDN on first use.
   panel — language, VAD filter, beam size, temperature, initial prompt —
   persisted under `model_overrides.<alias>` and pushed live into the
   running backend without a restart.
-- **9 model presets.** Whisper Distil, Turbo (fp16/int8), Large v3
-  (fp16/int8), Russian fine-tunes (fp16/int8), GigaAM v3 e2e CTC + RNN-T.
-  Family chips on each card colour-code the lineage.
+- **10 model presets.** Whisper Distil, Turbo (fp16/int8), Large v3
+  (fp16/int8), Russian fine-tunes (fp16/int8), GigaAM v3 e2e CTC + RNN-T,
+  NVIDIA Parakeet TDT v3 (multilingual). Family chips on each card
+  colour-code the lineage.
 - **Long-form audio.** Captures over 25 s on GigaAM route through
   `transcribe_longform` with pyannote VAD; on faster-whisper they go
   through Silero VAD when the toggle is on.
