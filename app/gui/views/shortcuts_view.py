@@ -200,6 +200,11 @@ class ShortcutsView(QWidget):
         storage_btn_widget = QWidget(storage_card)
         storage_btn_widget.setObjectName("StorageButtonRow")
         storage_btn_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        # Without this the global ``QWidget { background-color:
+        # bg_primary }`` rule paints a dark slab around the buttons
+        # that's visibly different from the card's elevated bg —
+        # makes the row look like its own button-coloured strip.
+        storage_btn_widget.setStyleSheet("background: transparent;")
         storage_btn_row = QHBoxLayout(storage_btn_widget)
         storage_btn_row.setContentsMargins(0, 0, 0, 0)
         storage_btn_row.setSpacing(10)
