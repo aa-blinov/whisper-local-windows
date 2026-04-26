@@ -1,0 +1,121 @@
+name: Build Windows release
+
+# Triggers a PyInstaller build of the standalone Windows app.
+# - Tag push (``v*``) → build + attach artifact to a GitHub Release.
+# - Manual dispatch → build + upload as a workflow artifact for testing.
+#
+# Build is heavy (~5 GB onedir output: torch + cuDNN + cuBLAS).
+# Expect 15–25 minutes on a clean ``windows-latest`` runner.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Version label for artifact naming (no leading v)'
+        required: false
+        default: 'manual'
+
+permissions:
+  contents: write   # needed for ``softprops/action-gh-release`` to create releases
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: 'latest'
+          enable-cache: true
+          cache-dependency-glob: 'uv.lock'
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync dependencies (production deps only)
+        # ``--no-dev`` skips pytest etc. — they're not needed for the
+        # build and they bloat the bundle.
+        run: uv sync --no-dev
+
+      # PyInstaller is a regular dep in pyproject.toml so ``uv sync``
+      # already brought it in; this step just confirms it's callable.
+      - name: Verify PyInstaller install
+        run: uv run pyinstaller --version
+
+      - name: Build standalone .exe
+        run: uv run pyinstaller --noconfirm --clean lazy_to_text.spec
+
+      - name: Resolve version label
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $version = $env:GITHUB_REF -replace 'refs/tags/v', ''
+          } else {
+            $raw = '${{ github.event.inputs.tag_name }}'
+            $version = if ($raw) { $raw } else { 'manual' }
+          }
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+          $version = "$version-$shortSha"
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+          echo "Resolved version: $version"
+
+      - name: List build output
+        # Sanity check before zipping — failures here usually mean the
+        # spec didn't produce a ``LazyToText`` directory.
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'dist/LazyToText')) {
+            Write-Error 'dist/LazyToText not found — PyInstaller build failed silently?'
+            exit 1
+          }
+          $size = (Get-ChildItem 'dist/LazyToText' -Recurse | Measure-Object Length -Sum).Sum / 1MB
+          Write-Host ("Bundle size: {0:N0} MB" -f $size)
+
+      - name: Compress to zip
+        shell: pwsh
+        run: |
+          $name = "LazyToText-${{ steps.version.outputs.version }}-windows-x64.zip"
+          # Compress-Archive is slow on multi-GB content; use the
+          # System.IO.Compression API which streams directly.
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            (Resolve-Path 'dist/LazyToText').Path,
+            (Join-Path (Resolve-Path 'dist').Path $name),
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $false
+          )
+          $zipSize = (Get-Item "dist/$name").Length / 1MB
+          Write-Host ("Zip size: {0:N0} MB" -f $zipSize)
+          echo "ARCHIVE_NAME=$name" >> $env:GITHUB_ENV
+
+      - name: Upload workflow artifact
+        # Always uploaded so you can grab the build from a manual
+        # dispatch without going through a release.
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE_NAME }}
+          path: dist/${{ env.ARCHIVE_NAME }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ env.ARCHIVE_NAME }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-') }}

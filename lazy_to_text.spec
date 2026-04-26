@@ -45,10 +45,20 @@ if styles_src.exists():
             rel = p.relative_to(app_dir)
             datas.append((str(p), str(rel.parent)))
 
-# Include top-level config.yaml next to exe so user can edit it
-config_path = project_root / 'config.yaml'
-if config_path.exists():
-    datas.append((str(config_path), '.'))
+# Note: ``config.yaml`` is intentionally NOT bundled in the release.
+# Whatever sits in the repo's working tree at build time is the
+# developer's personal config (selected model, model_overrides,
+# audio device index, …) — shipping it would seed every fresh
+# install with someone else's preferences.
+#
+# ConfigManager._load_or_create() falls back to DEFAULT_CONFIG when
+# no user / bundled config is found, so the first launch writes a
+# clean default config.yaml into ``%APPDATA%/LazyToText/``.
+#
+# If a build needs a curated 'factory defaults' file (e.g. corporate
+# spin with non-default hotkeys), put it next to the .exe in the
+# COLLECT output (``dist/LazyToText/config.yaml``) — the seeding
+# path in ConfigManager will pick it up automatically.
 
 import importlib.util
 
