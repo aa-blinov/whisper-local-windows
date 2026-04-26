@@ -412,7 +412,10 @@ QLabel[role="recording-pill"][state="model_loading"] {
     background-color: {{color.bg_elevated}};
     border: 1px solid {{color.border}};
     border-radius: {{radius.sm}};
-    margin: 8px 12px 12px 12px;
+    /* Pin closer to the bottom edge of the sidebar — generous gap
+       above to separate the chip from the nav list, tight gap below
+       so it reads as docked to the bottom rather than floating. */
+    margin: 12px 12px 8px 12px;
 }
 
 QLabel[role="chip-label"] {
