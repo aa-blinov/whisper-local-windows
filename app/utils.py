@@ -24,33 +24,58 @@ def is_installed_package():
     # Check if running from an installed package
     return 'site-packages' in __file__
 
-def get_project_logs_path():
-    """Return unified logs directory inside project (or next to exe when frozen).
 
-        Decision: always write logs to the project `logs` directory per requirement.
-        Behavior now:
-            * PyInstaller: next to the executable /logs
-            * Any other case (dev, installed package) — project root /logs
-        Logs are always local in the logs directory.
+def _user_local_data_dir() -> Path:
+    """Per-user, non-roaming app data directory on Windows.
+
+    Honours ``%LOCALAPPDATA%`` (the canonical Local path); falls
+    back to ``~/AppData/Local/LazyToText`` when the env var isn't
+    exposed (sandboxed shells / unusual envs). Used for things
+    that are large or machine-specific — logs and downloaded
+    model weights — and shouldn't sync via Windows roaming
+    profiles. Config / small settings live under ``%APPDATA%``
+    instead (see ``ConfigManager._user_config_dir``).
+    """
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return Path(local) / "LazyToText"
+    return Path.home() / "AppData" / "Local" / "LazyToText"
+
+
+def _project_root_or_cwd() -> Path:
+    """Walk up from this module to the nearest ``pyproject.toml``.
+
+    Returns CWD parent fallback if no marker found — preserves the
+    behaviour the dev path has had since day one.
+    """
+    current = Path(__file__).parent
+    for p in [current, *current.parents]:
+        if (p / "pyproject.toml").exists():
+            return p
+    return current.parent.parent.parent
+
+
+def get_project_logs_path():
+    """Return the directory log files are written to.
+
+    - **Frozen (PyInstaller)**: ``%LOCALAPPDATA%/LazyToText/logs``.
+      The .exe might be installed in ``Program Files`` — that's
+      read-only for non-admin users, so writing logs next to the
+      binary fails on the very first ``RotatingFileHandler.emit``.
+      LOCAL appdata is always per-user-writable.
+    - **Installed wheel**: CWD ``/logs`` (legacy behaviour;
+      assumes the user launched from a writable cwd).
+    - **Dev**: project root ``/logs``.
+
+    Created if missing.
     """
     if getattr(sys, 'frozen', False):  # PyInstaller bundle
-        exe_dir = Path(sys.executable).parent
-        logs_dir = exe_dir / 'logs'
+        logs_dir = _user_local_data_dir() / 'logs'
     elif is_installed_package():
         # For installed packages, place logs in the working directory (where user launched the tool)
         logs_dir = Path.cwd() / 'logs'
     else:
-        # Walk upward until we find pyproject.toml to determine project root.
-        current = Path(__file__).parent
-        probe = current
-        project_root = None
-        for p in [probe, *probe.parents]:
-            if (p / 'pyproject.toml').exists():
-                project_root = p
-                break
-        if project_root is None:
-            project_root = current.parent.parent.parent
-        logs_dir = project_root / 'logs'
+        logs_dir = _project_root_or_cwd() / 'logs'
 
     os.makedirs(logs_dir, exist_ok=True)
     return str(logs_dir)
@@ -58,27 +83,26 @@ def get_project_logs_path():
 def get_project_models_path() -> str:
     """Return the directory used to cache downloaded model weights.
 
-    Lives next to the executable when frozen (PyInstaller), otherwise in the
-    project root identified by ``pyproject.toml``. Created if missing.
+    - **Frozen (PyInstaller)**: ``%LOCALAPPDATA%/LazyToText/models``.
+      Downloaded weights are gigabytes and would either fail to
+      write (Program Files install, read-only without admin) or
+      bloat the install dir if they did. LOCAL appdata is the
+      right bucket — per-user, writable, NOT synced across
+      machines via roaming profiles.
+    - **Installed wheel**: CWD ``/models``.
+    - **Dev**: project root ``/models``.
 
-    Used as ``HF_HOME`` so faster-whisper / huggingface_hub keep their
-    downloads inside the project tree rather than the per-user
-    ``~/.cache/huggingface`` location, which is invisible to most users and
-    eats the system drive.
+    Used as the default ``HF_HOME`` so faster-whisper /
+    huggingface_hub keep their downloads where ``is_model_cached``
+    can find them. Settings → Storage card lets the user override
+    this path; this is just the default when they haven't.
     """
     if getattr(sys, "frozen", False):
-        base = Path(sys.executable).parent
+        base = _user_local_data_dir()
     elif is_installed_package():
         base = Path.cwd()
     else:
-        current = Path(__file__).parent
-        base = None
-        for p in [current, *current.parents]:
-            if (p / "pyproject.toml").exists():
-                base = p
-                break
-        if base is None:
-            base = current.parent.parent.parent
+        base = _project_root_or_cwd()
     models_dir = base / "models"
     os.makedirs(models_dir, exist_ok=True)
     return str(models_dir)
