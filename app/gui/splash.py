@@ -30,7 +30,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QSplashScreen
+from PySide6.QtWidgets import QApplication, QPushButton, QSplashScreen
 
 
 # Splash visual sizing — picked to feel like a small launcher card,
@@ -151,21 +151,57 @@ def wait_for_backend(
         except Exception:  # pragma: no cover — defensive
             pass
 
+    # Optional Cancel button — shown only when the backend exposes
+    # ``cancel_load()``. Positioned bottom-right of the splash card.
+    cancel_btn: Optional[QPushButton] = None
+    _cancel_load = getattr(backend, "cancel_load", None)
+    if _cancel_load is not None:
+        cancel_btn = QPushButton("Cancel", splash)
+        cancel_btn.setStyleSheet(
+            "QPushButton {"
+            "  background: #2d3140; color: #7d828d;"
+            "  border: 1px solid #3d4150; border-radius: 4px;"
+            "  padding: 4px 14px;"
+            "}"
+            "QPushButton:hover { color: #e6e8ec; border-color: #5d6275; }"
+            "QPushButton:pressed { background: #252836; }"
+            "QPushButton:disabled { color: #4a4f5d; border-color: #2d3140; }"
+        )
+
+        def _on_cancel() -> None:
+            if cancel_btn is not None:
+                cancel_btn.setEnabled(False)
+            try:
+                _cancel_load()
+            except Exception:  # pragma: no cover — defensive
+                pass
+
+        cancel_btn.clicked.connect(_on_cancel)
+        cancel_btn.show()
+        bw, bh = cancel_btn.sizeHint().width(), cancel_btn.sizeHint().height()
+        cancel_btn.setFixedSize(bw, bh)
+        cancel_btn.move(_SPLASH_W - bw - 16, _SPLASH_H - bh - 12)
+
     backend.load()
 
     deadline = time.monotonic() + max(1.0, float(timeout_s))
     last_render = 0.0
+
+    def _cleanup() -> None:
+        if set_cb is not None:
+            try:
+                set_cb(None)
+            except Exception:  # pragma: no cover — defensive
+                pass
+        if cancel_btn is not None:
+            cancel_btn.hide()
 
     while time.monotonic() < deadline:
         status = backend.status()
         if status in ("ready", "error", "stopped"):
             # Detach the progress callback so the next backend (if the
             # routed swap rebuilds it) gets a clean slot.
-            if set_cb is not None:
-                try:
-                    set_cb(None)
-                except Exception:  # pragma: no cover — defensive
-                    pass
+            _cleanup()
             return "ready" if status == "ready" else (
                 "error" if status == "error" else "stopped"
             )
@@ -195,9 +231,5 @@ def wait_for_backend(
         # loop we starve it.
         time.sleep(0.02)
 
-    if set_cb is not None:
-        try:
-            set_cb(None)
-        except Exception:  # pragma: no cover — defensive
-            pass
+    _cleanup()
     return "timeout"
