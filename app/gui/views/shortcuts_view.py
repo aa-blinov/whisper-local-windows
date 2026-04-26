@@ -313,14 +313,19 @@ class ShortcutsView(QWidget):
         hf_hint = QLabel(
             "Optional. Used when downloading gated or private "
             "Hugging Face models — the app passes it to "
-            "huggingface_hub on every fetch.\n"
-            "Get one at https://huggingface.co/settings/tokens.",
+            "<code>huggingface_hub</code> on every fetch.<br>"
+            'Get one at '
+            '<a href="https://huggingface.co/settings/tokens" '
+            'style="color:#7aa2ff;text-decoration:none">'
+            'huggingface.co/settings/tokens</a>.',
             hf_card,
         )
         hf_hint.setObjectName("HfHint")
         hf_hint.setProperty("role", "muted")
         hf_hint.setWordWrap(True)
+        hf_hint.setTextFormat(Qt.RichText)
         hf_hint.setOpenExternalLinks(True)
+        hf_hint.setTextInteractionFlags(Qt.TextBrowserInteraction)
         hf_v.addWidget(hf_hint)
         root.addWidget(hf_card)
 
