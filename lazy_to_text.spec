@@ -5,6 +5,17 @@
 import os
 from pathlib import Path
 
+# Build-time compatibility shims — must run BEFORE the
+# ``importlib.util.find_spec(...)`` probes below, otherwise PyInstaller's
+# hidden-imports analysis crashes during ``import nemo.collections.asr``
+# (NeMo's exp_manager touches the POSIX-only ``signal.SIGKILL`` at
+# class-definition time on Windows). Same shim is applied at runtime via
+# ``runtime_hooks`` so the frozen exe boots cleanly too.
+import signal as _spec_signal
+
+if not hasattr(_spec_signal, "SIGKILL"):
+    _spec_signal.SIGKILL = _spec_signal.SIGTERM  # type: ignore[attr-defined]
+
 block_cipher = None
 
 """PyInstaller spec for Lazy to text.
@@ -92,6 +103,9 @@ if len(hiddenimports) < len(requested_hiddenimports):
 
 from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT
 
+_runtime_hook = project_root / 'scripts' / 'pyi_runtime_hook.py'
+runtime_hooks = [str(_runtime_hook)] if _runtime_hook.is_file() else []
+
 analysis = Analysis(
     ['lazy-to-text-ui.py'],
     pathex=[str(app_dir)],
@@ -100,7 +114,7 @@ analysis = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=runtime_hooks,
     excludes=[],
     noarchive=False,
 )
