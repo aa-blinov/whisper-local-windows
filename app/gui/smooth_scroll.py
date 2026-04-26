@@ -1,16 +1,23 @@
 """Browser-like smooth scrolling for Qt scroll areas.
 
-Qt's QPropertyAnimation is capped at ~60 updates/s regardless of the
-display refresh rate. On 144 Hz monitors this produces visible
-stutter because only 60 distinct scroll positions are generated per
-second while the display can show 144.
+Implements the "FixedStep + COSINE" algorithm from qfluentwidgets
+(zhiyiYo/PyQt-Fluent-Widgets).  Each wheel notch is broken into
+``_STEPS_TOTAL`` equal-interval ticks whose per-tick displacement
+follows a cosine bell curve:
 
-This module replaces the animation with a QTimer at 7 ms (≈144 Hz)
-that recalculates the scroll position from wall-clock time on every
-tick. The easing is computed from elapsed milliseconds, not frame
-count, so the curve shape is identical at any refresh rate — only
-the number of steps changes (more steps = smoother on high-Hz
-displays).
+    sub = (cos(x * π / m) + 1) / (2*m) * delta
+
+where x = |step_done - m| and m = _STEPS_TOTAL / 2.  The curve
+integrates exactly to ``delta`` so the total scroll distance per
+notch is preserved.
+
+Key properties:
+- Ease-in-out feel: slow at start and end, peak in the middle.
+- Accumulation: rapid notches append independent items to the queue;
+  each tick sums contributions from all active items, so fast
+  flicking naturally builds momentum.
+- Consistent 16 ms ticks: matches the Windows default timer
+  resolution, preventing the jitter that causes visual tearing.
 
 Usage::
 
@@ -20,31 +27,35 @@ Usage::
 
 from __future__ import annotations
 
-import time
+from collections import deque
+from math import cos, pi
 
 from PySide6.QtCore import QEvent, QObject, QTimer
 from PySide6.QtWidgets import QAbstractScrollArea
 
-_DURATION_MS = 180.0   # total animation length (wall-clock ms)
-_PX_PER_NOTCH = 100.0  # pixels per standard wheel notch (angleDelta = 120)
-# 16 ms matches Windows' default timer resolution (15.6 ms) so the timer
-# fires at a steady 60 Hz without jitter. Sub-16ms intervals cause
-# irregular firing (7ms → 15ms → 7ms) which produces visible tearing.
-# DWM vsync-composites Qt widget frames to the display rate automatically.
-_TICK_MS = 16
+_FPS = 60
+_DURATION_MS = 400            # total animation length per notch
+_STEPS_TOTAL = int(_FPS * _DURATION_MS / 1000)   # 24
+_PX_PER_NOTCH = 100.0         # base pixels per standard notch (angleDelta=120)
+_STEP_RATIO = 1.5             # multiplier — 100 * 1.5 = 150 px/notch
+_TICK_MS = int(1000 / _FPS)   # 16 ms — one Windows timer tick
 
 
-def _ease_out_cubic(t: float) -> float:
-    return 1.0 - (1.0 - t) ** 3
+def _sub_delta(delta: float, steps_left: int) -> float:
+    """Cosine bell contribution for this step."""
+    m = _STEPS_TOTAL / 2
+    x = abs(_STEPS_TOTAL - steps_left - m)
+    return (cos(x * pi / m) + 1) / (2 * m) * delta
 
 
 class _SmoothScrollFilter(QObject):
     def __init__(self, area: QAbstractScrollArea) -> None:
         super().__init__(area)
         self._area = area
-        self._start: float = 0.0
-        self._target: float = 0.0
-        self._t0: float = 0.0   # wall-clock start of current animation (seconds)
+        # Queue of [remaining_delta_px, steps_left] pairs.
+        # Each wheel notch appends one item; all active items contribute
+        # to every tick, then items are dropped when steps_left reaches 0.
+        self._queue: deque[list[float]] = deque()
 
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_MS)
@@ -53,15 +64,22 @@ class _SmoothScrollFilter(QObject):
     # ------------------------------------------------------------------ timer
 
     def _tick(self) -> None:
-        elapsed_ms = (time.monotonic() - self._t0) * 1000.0
-        t = min(1.0, elapsed_ms / _DURATION_MS)
-        eased = _ease_out_cubic(t)
+        if not self._queue:
+            self._timer.stop()
+            return
+
+        total = 0.0
+        for item in self._queue:
+            step = _sub_delta(item[0], int(item[1]))
+            total += step
+            item[1] -= 1
+
+        # Drop exhausted items.
+        while self._queue and self._queue[0][1] <= 0:
+            self._queue.popleft()
 
         bar = self._area.verticalScrollBar()
-        bar.setValue(int(self._start + (self._target - self._start) * eased))
-
-        if t >= 1.0:
-            self._timer.stop()
+        bar.setValue(max(bar.minimum(), min(bar.maximum(), int(bar.value() + total))))
 
     # ----------------------------------------------------------- event filter
 
@@ -73,31 +91,16 @@ class _SmoothScrollFilter(QObject):
         if angle == 0:
             return False
 
-        delta_px = -angle * _PX_PER_NOTCH / 120.0
-        bar = self._area.verticalScrollBar()
+        delta_px = -angle * _PX_PER_NOTCH * _STEP_RATIO / 120.0
+        self._queue.append([delta_px, float(_STEPS_TOTAL)])
 
-        if self._timer.isActive():
-            # Re-anchor from wherever the animation is right now so rapid
-            # flicks accumulate into the running motion.
-            elapsed_ms = (time.monotonic() - self._t0) * 1000.0
-            t = min(1.0, elapsed_ms / _DURATION_MS)
-            current = self._start + (self._target - self._start) * _ease_out_cubic(t)
-            self._start = current
-            self._target = current + delta_px
-            self._timer.stop()
-        else:
-            self._start = float(bar.value())
-            self._target = self._start + delta_px
-
-        lo, hi = float(bar.minimum()), float(bar.maximum())
-        self._target = max(lo, min(hi, self._target))
-        self._t0 = time.monotonic()
-        self._timer.start()
-        return True  # consume — prevent Qt's own jump-scroll
+        if not self._timer.isActive():
+            self._timer.start()
+        return True
 
 
 def apply_smooth_scroll(area: QAbstractScrollArea) -> None:
-    """Enable high-refresh-rate smooth scrolling on *area*."""
+    """Enable qfluentwidgets-style smooth scrolling on *area*."""
     from PySide6.QtWidgets import QAbstractItemView
     if isinstance(area, QAbstractItemView):
         area.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
