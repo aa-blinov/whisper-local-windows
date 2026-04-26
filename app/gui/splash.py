@@ -132,7 +132,8 @@ def wait_for_backend(
     """
     if app is None:
         app = QApplication.instance()
-    assert app is not None, "QApplication must exist before wait_for_backend"
+    if app is None:
+        raise RuntimeError("QApplication must exist before wait_for_backend")
 
     # Mutable progress state captured by the closure below; updated
     # every time tqdm fires, read on the next splash repaint.

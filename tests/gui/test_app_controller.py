@@ -912,6 +912,86 @@ def test_controller_storage_change_cancel_on_migration_aborts(
     assert config._data["storage"]["models_dir"] == "C:/initial"
 
 
+def test_controller_storage_change_refreshes_model_card_cache_state(
+    qtbot, monkeypatch,
+):
+    """After changing the models folder, ``models_view.refresh_cache_state``
+    must be called so cards immediately show 'Select' instead of
+    'Download' for models already present in the new directory."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    chosen = "D:/my-models"
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default"
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: chosen,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    refresh_calls: list = []
+    monkeypatch.setattr(
+        window.models_view, "refresh_cache_state",
+        lambda: refresh_calls.append(1),
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    assert refresh_calls, (
+        "refresh_cache_state must be called so model cards update "
+        "Download→Select without requiring a restart"
+    )
+
+
+def test_controller_storage_reset_refreshes_model_card_cache_state(
+    qtbot, monkeypatch,
+):
+    """Same contract for the Reset path: returning to the default
+    directory must also trigger a cache-state refresh on all cards."""
+    from PySide6.QtWidgets import QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": "D:/old"}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default"
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    refresh_calls: list = []
+    monkeypatch.setattr(
+        window.models_view, "refresh_cache_state",
+        lambda: refresh_calls.append(1),
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_reset_requested.emit()
+
+    assert refresh_calls, (
+        "refresh_cache_state must be called on reset so model cards "
+        "reflect the default directory's cache state immediately"
+    )
+
+
 def test_controller_prefills_hf_token_from_config(qtbot, monkeypatch):
     """The persisted token must paint the Settings field on first
     render — without that the user can't edit it (the field shows

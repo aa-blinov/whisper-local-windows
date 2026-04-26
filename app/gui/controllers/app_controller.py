@@ -496,6 +496,11 @@ class AppController(QObject):
         # ``Download`` click without a restart.
         _apply_env_for_models_root(chosen)
         self._refresh_storage_path()
+        # Refresh every model card's cache state so the Download ↔ Select
+        # button reflects the new directory immediately — without this the
+        # cards keep showing "Download" even when the chosen folder already
+        # contains the model weights.
+        self._window.models_view.refresh_cache_state()
 
         # Build a user-friendly summary so they know what landed
         # where and what didn't.
@@ -536,6 +541,7 @@ class AppController(QObject):
         self._config.update_user_setting("storage", "models_dir", "")
         resolved = _apply_env_for_models_root("")
         self._refresh_storage_path()
+        self._window.models_view.refresh_cache_state()
         QMessageBox.information(
             self._window,
             "Models folder reset",
