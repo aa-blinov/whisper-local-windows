@@ -357,6 +357,7 @@ def main() -> int:
             hotkey_listener=hotkey_listener,
         )
 
+    splash = None
     if backend is not None:
         # Auto-load only models whose weights are already cached on disk.
         # Triggering a fresh download silently on startup is a UX
@@ -368,11 +369,41 @@ def main() -> int:
 
         canonical = backend.current_model()
         try:
-            cached = is_cached_for_info(get_model(alias_for(canonical)))
+            info_for_load = get_model(alias_for(canonical))
+            cached = is_cached_for_info(info_for_load)
         except KeyError:
+            info_for_load = None
             cached = is_model_cached(canonical)
         if cached:
-            backend.load()
+            # Pre-load the backend BEFORE creating the main window so
+            # the GIL-locked NeMo / torch import doesn't freeze a
+            # half-built UI. The splash widget is movable and
+            # minimisable while we pump processEvents, which means
+            # the user can drag it / send it to the taskbar even
+            # while ``import nemo`` holds the GIL most of the time
+            # (Qt grabs short windows between Python yields).
+            from app.gui.splash import make_splash, wait_for_backend
+
+            display_name = (
+                info_for_load.display_name if info_for_load is not None else canonical
+            )
+            splash = make_splash("Lazy to Text")
+            splash.show()
+            qt_app.processEvents()
+            logging.getLogger(__name__).info(
+                "Pre-loading %s on the main thread (splash up)…",
+                display_name,
+            )
+            result = wait_for_backend(
+                splash=splash,
+                backend=backend,
+                display_name=display_name,
+                app=qt_app,
+                timeout_s=1800.0,
+            )
+            logging.getLogger(__name__).info(
+                "Pre-load finished: %s", result,
+            )
         else:
             logging.getLogger(__name__).info(
                 "Persisted model %s is not cached — skipping auto-load. "
@@ -406,6 +437,16 @@ def main() -> int:
     resource_monitor = ResourceMonitor(parent=window)
     resource_monitor.metrics_updated.connect(window.topbar.set_resource_metrics)
     resource_monitor.start()
+
+    if splash is not None:
+        # Tear the splash down once the main window is ready to take
+        # over. ``finish`` waits for the next ``window.show()`` — but
+        # we call it explicitly to be sure the splash isn't lingering
+        # when ``app.exec()`` starts.
+        try:
+            splash.finish(window)
+        except Exception:  # pragma: no cover — defensive
+            pass
 
     window.show()
 
