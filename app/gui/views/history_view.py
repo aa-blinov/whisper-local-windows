@@ -13,6 +13,7 @@ from PySide6.QtCore import (
 )
 # Qt is imported above for the alignment flags used by the empty state.
 
+from app.gui.smooth_scroll import apply_smooth_scroll
 from app.model_mapping import alias_for
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -233,9 +234,7 @@ class HistoryView(QWidget):
         self._table.setSelectionMode(QAbstractItemView.SingleSelection)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
-        # Smooth pixel-level scrolling instead of row-by-row jumps.
-        self._table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self._table.verticalScrollBar().setSingleStep(20)
+        apply_smooth_scroll(self._table)
         self._table.verticalHeader().setVisible(False)
         self._table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
