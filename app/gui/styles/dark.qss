@@ -412,10 +412,13 @@ QLabel[role="recording-pill"][state="model_loading"] {
     background-color: {{color.bg_elevated}};
     border: 1px solid {{color.border}};
     border-radius: {{radius.sm}};
-    /* Sit comfortably near the bottom — generous gap above to
-       separate from the nav list, balanced 10-px gap below so the
-       chip's rounded border doesn't kiss the window edge. */
-    margin: 12px 12px 10px 12px;
+    /* Bottom = 22 px so the chip's lower edge lines up with the
+       Models view's content padding (``setContentsMargins(28, 22,
+       28, 22)`` in models_view.py). Without this the chip dangled
+       12 px below the last visible card on the right. Top margin
+       stays smaller — generous gap above is unnecessary, the nav
+       list already has its own row spacing. */
+    margin: 12px 12px 22px 12px;
 }
 
 QLabel[role="chip-label"] {
