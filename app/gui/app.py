@@ -163,21 +163,28 @@ def build_application(
 def _apply_storage_path(configured: Optional[str]) -> str:
     """Resolve and apply the user's chosen models directory to env vars.
 
-    Both ``HF_HOME`` (faster-whisper / huggingface_hub) and the new
-    ``GIGAAM_MODELS_DIR`` are set so the two engines write into the
-    same root. Returns the resolved root for logging. Idempotent —
-    safe to call multiple times.
+    ``HF_HOME`` is always set (faster-whisper / huggingface_hub
+    ignores the system-wide ``~/.cache/huggingface`` only when this is
+    set). ``GIGAAM_MODELS_DIR`` is set ONLY when the user has
+    explicitly picked a custom path — leaving it unset keeps GigaAM
+    on its library default ``~/.cache/gigaam`` so existing installs
+    don't have their already-downloaded ckpt files orphaned by the
+    upgrade. Returns the resolved hub root for logging.
 
     Must run before any ``huggingface_hub`` or ``gigaam`` import: HF
     reads ``HF_HOME`` once at module load, GigaAM doesn't but its
-    download_root parameter is read per-call so the env var has to
-    be in place by the time ``GigaamBackend.load`` runs.
+    ``download_root`` is read per-call so the env var has to be in
+    place by the time ``GigaamBackend.load`` runs.
     """
     from app.utils import get_models_root
 
     root = get_models_root(configured)
     os.environ["HF_HOME"] = root
-    os.environ["GIGAAM_MODELS_DIR"] = str(Path(root) / "gigaam")
+    is_custom = bool(configured and str(configured).strip())
+    if is_custom:
+        os.environ["GIGAAM_MODELS_DIR"] = str(Path(root) / "gigaam")
+    else:
+        os.environ.pop("GIGAAM_MODELS_DIR", None)
     return root
 
 

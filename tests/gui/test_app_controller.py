@@ -540,6 +540,345 @@ def test_controller_delete_dialog_warns_about_shared_canonical(qtbot, monkeypatc
     assert "turbo-int8" in captured["text"]
 
 
+def test_controller_prefills_storage_path_from_config(qtbot, monkeypatch):
+    """The Storage card needs to render the configured (or default)
+    path on first paint — without this the user sees '(loading…)'
+    forever even though the value is already in config."""
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": "D:/models"}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default"
+    )
+
+    AppController(config=config, window=window)
+    label = window.shortcuts_view.findChild(
+        type(window.shortcuts_view._storage_path_label),
+        "StoragePathLabel",
+    )
+    assert "D:/models" in label.text()
+
+
+def test_controller_prefill_marks_default_when_config_empty(qtbot, monkeypatch):
+    """Empty/missing ``storage.models_dir`` → label still shows the
+    *resolved* default path AND a '(default)' marker — so the user
+    knows where weights actually go even when nothing's overridden."""
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default-models"
+    )
+
+    AppController(config=config, window=window)
+    label = window.shortcuts_view.findChild(
+        type(window.shortcuts_view._storage_path_label),
+        "StoragePathLabel",
+    )
+    text = label.text()
+    assert "C:/default-models" in text
+    assert "default" in text.lower()
+
+
+def test_controller_storage_change_writes_config_and_warns_about_restart(
+    qtbot, monkeypatch,
+):
+    """Picking a folder via QFileDialog → controller writes
+    ``storage.models_dir`` and pops an info dialog telling the user
+    a restart is needed (env vars are baked at startup)."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default"
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: "D:/lazy-to-text-models",
+    )
+    info_calls: list = []
+    monkeypatch.setattr(
+        QMessageBox, "information",
+        lambda *a, **kw: info_calls.append((a, kw)),
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    assert config._data.get("storage", {}).get("models_dir") == "D:/lazy-to-text-models"
+    # An info dialog fired — its body must mention restarting / next launch.
+    assert info_calls, "expected QMessageBox.information to fire after change"
+    args, _kwargs = info_calls[0]
+    body_text = " ".join(str(a) for a in args).lower()
+    assert "restart" in body_text or "next launch" in body_text
+
+
+def test_controller_storage_change_cancelled_writes_nothing(qtbot, monkeypatch):
+    """User clicks Cancel on the folder picker → no config write,
+    no info dialog."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": "D:/old"}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default"
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory", lambda *a, **kw: "",
+    )
+    info_calls: list = []
+    monkeypatch.setattr(
+        QMessageBox, "information",
+        lambda *a, **kw: info_calls.append(a),
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    assert config._data["storage"]["models_dir"] == "D:/old"
+    assert info_calls == []
+
+
+def test_controller_storage_change_offers_migration_when_old_has_weights(
+    qtbot, monkeypatch, tmp_path,
+):
+    """Old root has cached weights → controller pops a Yes/No/Cancel
+    prompt offering to move them. ``Yes`` triggers ``move_cached_dir``
+    for both ``hub/`` and ``gigaam/`` (whichever exist) and writes
+    the new path to config."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    old_root = tmp_path / "old-models"
+    new_root = tmp_path / "new-models"
+    (old_root / "hub").mkdir(parents=True)
+    (old_root / "hub" / "model.bin").write_bytes(b"x" * 4096)
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    # Old config is empty → resolves to old_root (default).
+    monkeypatch.setattr(
+        controller_module, "get_models_root",
+        lambda v: v or str(old_root),
+    )
+    # Folder picker returns the new path.
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: str(new_root),
+    )
+    # User clicks Yes on the migration prompt.
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: QMessageBox.Yes,
+    )
+    # Swallow the post-migration restart info dialog.
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    moves: list = []
+    real_move = controller_module.move_cached_dir
+
+    def tracking_move(src, dst):
+        moves.append((src, dst))
+        return real_move(src, dst)
+
+    monkeypatch.setattr(controller_module, "move_cached_dir", tracking_move)
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    # Hub moved, gigaam absent so its move was a no-op (still
+    # called — controller decides per-subdir).
+    assert any("hub" in src for src, _ in moves)
+    # Files actually moved on disk.
+    assert (new_root / "hub" / "model.bin").exists()
+    # New path written to config.
+    assert config._data["storage"]["models_dir"] == str(new_root)
+
+
+def test_controller_storage_change_no_prompt_when_old_root_is_empty(
+    qtbot, monkeypatch, tmp_path,
+):
+    """Old root has nothing → skip the migration prompt entirely.
+    The user only sees the standard 'restart required' info."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    new_root = tmp_path / "new-models"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root",
+        lambda v: v or str(tmp_path / "definitely-empty"),
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: str(new_root),
+    )
+
+    question_calls: list = []
+
+    def fake_question(*args, **kwargs):
+        question_calls.append(args)
+        return QMessageBox.Yes  # would say Yes if asked
+
+    monkeypatch.setattr(QMessageBox, "question", fake_question)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    # No migration prompt fired — old root was empty.
+    assert question_calls == []
+    # Path still written.
+    assert config._data["storage"]["models_dir"] == str(new_root)
+
+
+def test_controller_storage_change_no_on_migration_writes_config_only(
+    qtbot, monkeypatch, tmp_path,
+):
+    """Old has weights, user clicks ``No`` on the migration prompt →
+    config still updates (so future downloads go to new place) but
+    nothing moves on disk."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    old_root = tmp_path / "old-models"
+    new_root = tmp_path / "new-models"
+    (old_root / "hub").mkdir(parents=True)
+    (old_root / "hub" / "model.bin").write_bytes(b"x" * 1024)
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root",
+        lambda v: v or str(old_root),
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: str(new_root),
+    )
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: QMessageBox.No,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    moves: list = []
+    monkeypatch.setattr(
+        controller_module, "move_cached_dir",
+        lambda src, dst: moves.append((src, dst)),
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    assert moves == []
+    assert (old_root / "hub" / "model.bin").exists()
+    assert config._data["storage"]["models_dir"] == str(new_root)
+
+
+def test_controller_storage_change_cancel_on_migration_aborts(
+    qtbot, monkeypatch, tmp_path,
+):
+    """Cancel on the migration prompt → don't write config either,
+    so the user can pick a different folder without leaving a
+    half-applied state."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    old_root = tmp_path / "old-models"
+    new_root = tmp_path / "new-models"
+    (old_root / "hub").mkdir(parents=True)
+    (old_root / "hub" / "model.bin").write_bytes(b"x")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": "C:/initial"}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root",
+        lambda v: v if v != "C:/initial" else str(old_root),
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: str(new_root),
+    )
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: QMessageBox.Cancel,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    # Nothing changed — user can re-pick.
+    assert config._data["storage"]["models_dir"] == "C:/initial"
+
+
+def test_controller_storage_reset_clears_config_and_warns_about_restart(
+    qtbot, monkeypatch,
+):
+    from PySide6.QtWidgets import QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": "D:/old"}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default"
+    )
+    info_calls: list = []
+    monkeypatch.setattr(
+        QMessageBox, "information",
+        lambda *a, **kw: info_calls.append(a),
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_reset_requested.emit()
+
+    assert config._data["storage"]["models_dir"] == ""
+    assert info_calls, "expected restart-required info dialog after reset"
+
+
 def test_controller_clear_cancelled_keeps_entries(qtbot, monkeypatch):
     """If the user clicks Cancel on the confirm dialog, history must
     stay intact."""

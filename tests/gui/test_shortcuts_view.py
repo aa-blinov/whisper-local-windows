@@ -178,3 +178,111 @@ def test_reset_button_emits_reset_requested(qtbot):
     btn = _reset_btn(view)
     with qtbot.waitSignal(view.reset_requested, timeout=1000):
         qtbot.mouseClick(btn, Qt.LeftButton)
+
+
+# ---- Storage card ----------------------------------------------------------
+
+
+def _change_storage_btn(view) -> QPushButton:
+    return view.findChild(QPushButton, "ChangeStorageButton")
+
+
+def _reset_storage_btn(view) -> QPushButton:
+    return view.findChild(QPushButton, "ResetStorageButton")
+
+
+def _storage_path_label(view):
+    from PySide6.QtWidgets import QLabel
+
+    return view.findChild(QLabel, "StoragePathLabel")
+
+
+def test_shortcuts_view_has_storage_widgets(qtbot):
+    """Settings tab carries a Storage card so the user can move
+    downloaded weights off the system drive without editing
+    ``config.yaml`` by hand."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+
+    assert _change_storage_btn(view) is not None
+    assert _reset_storage_btn(view) is not None
+    assert _storage_path_label(view) is not None
+
+
+def test_set_storage_path_updates_label_with_path(qtbot):
+    """``set_storage_path(path, is_default=False)`` shows the chosen
+    directory verbatim — no truncation. The user copy-pastes this
+    into Explorer to verify the weights ended up where they expected."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+
+    view.set_storage_path("D:/lazy-to-text-models", is_default=False)
+    label = _storage_path_label(view)
+    assert "D:/lazy-to-text-models" in label.text()
+
+
+def test_set_storage_path_marks_default_explicitly(qtbot):
+    """When the user hasn't picked a custom path, the label still
+    shows the resolved default path AND a ``(default)`` marker so it's
+    clear nothing is overridden."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+
+    view.set_storage_path("C:/project/models", is_default=True)
+    text = _storage_path_label(view).text()
+    assert "C:/project/models" in text
+    assert "default" in text.lower()
+
+
+def test_change_storage_button_emits_request(qtbot):
+    """The view delegates path-picking to the controller — the
+    button itself just emits a request signal and the controller
+    opens the QFileDialog. Keeps the view free of dialogs and easier
+    to test."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+
+    btn = _change_storage_btn(view)
+    with qtbot.waitSignal(view.storage_path_change_requested, timeout=1000):
+        qtbot.mouseClick(btn, Qt.LeftButton)
+
+
+def test_reset_storage_button_emits_request(qtbot):
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+
+    # Reset is disabled until the user has actually customised the
+    # path — set a non-default before clicking.
+    view.set_storage_path("D:/elsewhere", is_default=False)
+
+    btn = _reset_storage_btn(view)
+    with qtbot.waitSignal(view.storage_reset_requested, timeout=1000):
+        qtbot.mouseClick(btn, Qt.LeftButton)
+
+
+def test_reset_storage_button_disabled_when_already_on_default(qtbot):
+    """No point clicking Reset when there's nothing to reset to —
+    fire the disabled state from ``set_storage_path`` so the user
+    doesn't get an info dialog saying 'already on default'."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+
+    view.set_storage_path("C:/project/models", is_default=True)
+    assert not _reset_storage_btn(view).isEnabled()
+
+    view.set_storage_path("D:/elsewhere", is_default=False)
+    assert _reset_storage_btn(view).isEnabled()

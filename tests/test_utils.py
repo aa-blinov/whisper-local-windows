@@ -309,3 +309,143 @@ def test_get_models_root_returns_default_when_empty(tmp_path, monkeypatch):
     assert get_models_root("") == default
     assert get_models_root(None) == default
     assert get_models_root("   ") == default
+
+
+# ---- cached_models_size ----------------------------------------------------
+
+
+def test_cached_models_size_returns_zero_for_missing_root(tmp_path):
+    """Brand-new path with nothing in it → 0. Lets the controller
+    skip the migration prompt entirely when there's nothing to
+    move."""
+    from app.utils import cached_models_size
+
+    assert cached_models_size(str(tmp_path / "does-not-exist")) == 0
+
+
+def test_cached_models_size_sums_hub_and_gigaam_subtrees(tmp_path):
+    """Total bytes under ``hub/`` (HF) plus ``gigaam/`` (.ckpt files)
+    — the two subdirs the app manages."""
+    from app.utils import cached_models_size
+
+    repo_dir = _make_hf_snapshot(tmp_path / "hub", "owner/repo")
+    (tmp_path / "gigaam").mkdir()
+    (tmp_path / "gigaam" / "v3_e2e_ctc.ckpt").write_bytes(b"x" * 2048)
+
+    total = cached_models_size(str(tmp_path))
+    # We don't assert the exact value (it depends on the test
+    # fixture's bytes) — just that it sums both subtrees.
+    assert total >= 2048 + len(b"fake weights") + len(b"{}")
+    # Sanity: removing one subtree must reduce the total.
+    import shutil
+    shutil.rmtree(repo_dir)
+    assert cached_models_size(str(tmp_path)) < total
+
+
+def test_cached_models_size_handles_only_hub(tmp_path):
+    """Hub only, no gigaam dir → returns just the hub bytes (no
+    crash from missing gigaam)."""
+    from app.utils import cached_models_size
+
+    _make_hf_snapshot(tmp_path / "hub", "owner/repo")
+    assert cached_models_size(str(tmp_path)) > 0
+
+
+def test_cached_models_size_handles_only_gigaam(tmp_path):
+    """And vice versa — gigaam only, no hub dir."""
+    from app.utils import cached_models_size
+
+    (tmp_path / "gigaam").mkdir()
+    (tmp_path / "gigaam" / "v3_e2e_ctc.ckpt").write_bytes(b"x" * 4096)
+    assert cached_models_size(str(tmp_path)) >= 4096
+
+
+# ---- move_cached_dir -------------------------------------------------------
+
+
+def test_move_cached_dir_renames_intra_volume(tmp_path):
+    """Inside the same drive ``os.rename`` is atomic and instant —
+    the helper should use it. We can't directly observe rename vs
+    copy, but the result must put files at dst and remove them
+    from src."""
+    from app.utils import move_cached_dir
+
+    src = tmp_path / "src" / "hub"
+    src.mkdir(parents=True)
+    (src / "model.bin").write_bytes(b"x" * 1024)
+
+    dst = tmp_path / "dst" / "hub"
+    result = move_cached_dir(str(src), str(dst))
+
+    assert result["moved"] is True
+    assert result["bytes"] >= 1024
+    assert not src.exists()
+    assert (dst / "model.bin").exists()
+
+
+def test_move_cached_dir_skips_when_source_missing(tmp_path):
+    """No source → no-op. Used to handle 'user has Whisper but never
+    downloaded GigaAM' cleanly without raising."""
+    from app.utils import move_cached_dir
+
+    src = tmp_path / "ghost"
+    dst = tmp_path / "dst"
+    result = move_cached_dir(str(src), str(dst))
+
+    assert result["moved"] is False
+    assert "missing" in result["reason"].lower() or "exist" in result["reason"].lower()
+
+
+def test_move_cached_dir_skips_when_dest_already_exists(tmp_path):
+    """Destination already populated → refuse rather than merge or
+    overwrite. Surface in the reason so the controller can show the
+    user what to do."""
+    from app.utils import move_cached_dir
+
+    src = tmp_path / "src" / "hub"
+    src.mkdir(parents=True)
+    (src / "model.bin").write_bytes(b"x")
+
+    dst = tmp_path / "dst" / "hub"
+    dst.mkdir(parents=True)
+    (dst / "existing.bin").write_bytes(b"already here")
+
+    result = move_cached_dir(str(src), str(dst))
+
+    assert result["moved"] is False
+    assert "exist" in result["reason"].lower()
+    # Source untouched — caller can still fall back to manual copy.
+    assert (src / "model.bin").exists()
+    # Destination untouched too — no overwrite.
+    assert (dst / "existing.bin").exists()
+
+
+def test_move_cached_dir_creates_dst_parent_dir(tmp_path):
+    """Destination's parent might not exist yet (fresh path the
+    user picked) — helper creates it on the way."""
+    from app.utils import move_cached_dir
+
+    src = tmp_path / "src" / "hub"
+    src.mkdir(parents=True)
+    (src / "model.bin").write_bytes(b"x" * 512)
+
+    dst = tmp_path / "fresh" / "destination" / "hub"
+    result = move_cached_dir(str(src), str(dst))
+
+    assert result["moved"] is True
+    assert (dst / "model.bin").exists()
+
+
+def test_move_cached_dir_short_circuits_when_src_equals_dst(tmp_path):
+    """User picked the same folder → no move, no failure."""
+    from app.utils import move_cached_dir
+
+    src = tmp_path / "hub"
+    src.mkdir()
+    (src / "model.bin").write_bytes(b"x")
+
+    result = move_cached_dir(str(src), str(src))
+
+    assert result["moved"] is False
+    assert "same" in result["reason"].lower()
+    assert (src / "model.bin").exists()

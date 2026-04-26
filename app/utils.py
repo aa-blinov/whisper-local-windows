@@ -84,6 +84,117 @@ def get_project_models_path() -> str:
     return str(models_dir)
 
 
+def cached_models_size(root: str) -> int:
+    """Sum bytes used by downloaded weights under ``root``.
+
+    Looks at the two subtrees the app manages — ``<root>/hub`` for
+    HF-hosted Whisper models and ``<root>/gigaam`` for GigaAM ckpt
+    files. Returns 0 if neither exists. Used by the Storage card's
+    migration prompt to show the user how much would move.
+
+    Doesn't follow symlinks (``Path.stat`` would resolve them and
+    inflate the count) and silently skips files that disappear
+    mid-walk.
+    """
+    if not root:
+        return 0
+    base = Path(root)
+    if not base.is_dir():
+        return 0
+    total = 0
+    for sub in ("hub", "gigaam"):
+        target = base / sub
+        if not target.is_dir():
+            continue
+        for path in target.rglob("*"):
+            try:
+                if path.is_file() and not path.is_symlink():
+                    total += path.stat().st_size
+            except OSError:
+                # Race or permission error — ignore the file rather
+                # than failing the whole sum.
+                continue
+    return total
+
+
+def move_cached_dir(src: str, dst: str) -> dict:
+    """Move the directory at ``src`` to ``dst``.
+
+    Tries ``os.rename`` first (atomic + free for intra-volume); on
+    cross-volume (``OSError``) falls back to ``shutil.move`` which
+    copies + deletes. Refuses to overwrite — if ``dst`` already
+    exists, returns ``moved=False`` with a reason. The controller
+    surfaces those reasons in the post-migration info dialog.
+
+    Returns a dict with:
+      - ``moved`` (bool) — whether anything was relocated
+      - ``bytes`` (int) — size of source tree (only when ``moved``)
+      - ``reason`` (str) — human-readable, only when ``moved`` is False
+    """
+    if not src or not dst:
+        return {"moved": False, "reason": "empty source or destination path"}
+
+    src_path = Path(src)
+    dst_path = Path(dst)
+
+    # Same path → nothing to do, but don't surface as a failure.
+    try:
+        same = src_path.resolve() == dst_path.resolve()
+    except OSError:
+        same = src_path == dst_path
+    if same:
+        return {"moved": False, "reason": "source and destination are the same"}
+
+    if not src_path.exists():
+        return {"moved": False, "reason": "source missing"}
+
+    if dst_path.exists():
+        return {"moved": False, "reason": "destination already exists"}
+
+    # Measure source size BEFORE the move so we can report it
+    # truthfully even after a successful rename leaves the original
+    # path empty.
+    bytes_moved = 0
+    try:
+        for p in src_path.rglob("*"):
+            try:
+                if p.is_file() and not p.is_symlink():
+                    bytes_moved += p.stat().st_size
+            except OSError:
+                continue
+    except OSError as exc:
+        log.warning("Failed to measure %s before move: %s", src, exc)
+
+    # Make sure the destination's parent exists; ``os.rename`` won't
+    # create intermediate directories. ``shutil.move`` will, but we
+    # call ``os.rename`` first so we have to set this up either way.
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        os.rename(str(src_path), str(dst_path))
+        log.info("Moved %s → %s (intra-volume rename)", src, dst)
+        return {"moved": True, "bytes": bytes_moved}
+    except OSError as rename_exc:
+        # Cross-volume rename, or some other rename-time error;
+        # fall back to copy + delete via shutil.move.
+        log.info(
+            "os.rename failed (%s) — falling back to shutil.move for %s → %s",
+            rename_exc, src, dst,
+        )
+        try:
+            shutil.move(str(src_path), str(dst_path))
+            log.info("Moved %s → %s (copy + delete)", src, dst)
+            return {"moved": True, "bytes": bytes_moved}
+        except (OSError, shutil.Error) as move_exc:
+            log.error(
+                "Failed to move %s → %s: %s", src, dst, move_exc,
+            )
+            return {
+                "moved": False,
+                "reason": f"move failed: {move_exc}",
+            }
+
+
 def get_models_root(configured: Optional[str]) -> str:
     """Resolve the root directory for downloaded model weights.
 

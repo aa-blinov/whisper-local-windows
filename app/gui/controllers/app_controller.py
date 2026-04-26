@@ -7,7 +7,9 @@ from typing import Any, Callable, Optional, Protocol
 
 import threading
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 # QApplication is imported above for the clipboard helper; reuse it for
@@ -17,10 +19,27 @@ from app.gui.controllers.backend_status_poller import BackendStatusPoller
 from app.gui.main_window import MainWindow
 from app.inference_settings import InferenceSettings
 from app.model_mapping import MODELS, alias_for, canonical_for, get_model
-from app.utils import delete_cached_for_info, is_cached_for_info
+from app.utils import (
+    cached_models_size,
+    delete_cached_for_info,
+    get_models_root,
+    is_cached_for_info,
+    move_cached_dir,
+)
 
 
 log = logging.getLogger(__name__)
+
+
+def _human_size(num_bytes: int) -> str:
+    """Compact human size for status / dialog text. KB/MB/GB to one
+    decimal — close enough for 'will this fit?' reasoning."""
+    n = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} GB"
 
 
 class _ConfigLike(Protocol):
@@ -261,6 +280,145 @@ class AppController(QObject):
         view.save_requested.connect(self._on_shortcuts_save)
         view.reset_requested.connect(self._on_shortcuts_reset)
         view.test_mic_requested.connect(self._on_test_mic_requested)
+
+        # Storage card — render the resolved path on first paint so
+        # the user sees where weights actually live, even when they
+        # haven't picked a custom path yet.
+        view.storage_path_change_requested.connect(self._on_storage_path_change)
+        view.storage_reset_requested.connect(self._on_storage_reset)
+        self._refresh_storage_path()
+
+    def _refresh_storage_path(self) -> None:
+        """Push the resolved storage path into the Settings card. The
+        view shows ``(default)`` after the path when nothing's been
+        overridden — same source-of-truth (``get_models_root``) the
+        rest of the app uses at startup."""
+        configured = self._config.get_setting("storage", "models_dir")
+        is_default = not (configured and str(configured).strip())
+        resolved = get_models_root(configured)
+        self._window.shortcuts_view.set_storage_path(
+            resolved, is_default=is_default,
+        )
+
+    def _on_storage_path_change(self) -> None:
+        """User clicked Change….
+
+        Flow:
+          1. Open the folder picker; bail on Cancel.
+          2. If the pick equals the current root → no-op.
+          3. Sum cached weights at the old root. If non-zero, ask
+             Yes/No/Cancel about migrating them. Cancel here aborts
+             the whole change so the user can re-pick without leaving
+             config in a half-applied state.
+          4. On Yes — block UI with a wait cursor and call
+             ``move_cached_dir`` for ``hub/`` and ``gigaam/`` in
+             sequence; the helper handles intra- vs cross-volume
+             internally and refuses to overwrite existing dirs.
+          5. Write the new path to config and pop a single info
+             dialog summarising what moved + the restart caveat
+             (env vars are baked at startup).
+        """
+        configured = self._config.get_setting("storage", "models_dir") or ""
+        old_root = get_models_root(configured)
+        start_dir = configured or str(Path(old_root).parent)
+        chosen = QFileDialog.getExistingDirectory(
+            self._window,
+            "Choose models folder",
+            start_dir,
+        )
+        if not chosen:
+            return  # Cancelled at the folder picker.
+
+        try:
+            same = Path(chosen).resolve() == Path(old_root).resolve()
+        except OSError:
+            same = chosen == old_root
+        if same:
+            return  # Picked the same folder — nothing to do.
+
+        old_size = cached_models_size(old_root)
+        move_outcomes: list[tuple[str, dict]] = []
+
+        if old_size > 0:
+            answer = QMessageBox.question(
+                self._window,
+                "Move existing weights?",
+                (
+                    f"You have {_human_size(old_size)} of cached models at:\n"
+                    f"{old_root}\n\n"
+                    f"Move them to the new location?\n{chosen}\n\n"
+                    "Yes — relocate now (intra-drive is instant; "
+                    "across drives can take several minutes for large "
+                    "caches).\n"
+                    "No  — leave them in place; new downloads go to "
+                    "the new folder.\n"
+                    "Cancel — go back without changing anything."
+                ),
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if answer == QMessageBox.Cancel:
+                return  # Bail without writing config.
+            if answer == QMessageBox.Yes:
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                try:
+                    for sub in ("hub", "gigaam"):
+                        result = move_cached_dir(
+                            str(Path(old_root) / sub),
+                            str(Path(chosen) / sub),
+                        )
+                        move_outcomes.append((sub, result))
+                finally:
+                    QApplication.restoreOverrideCursor()
+
+        self._config.update_user_setting("storage", "models_dir", chosen)
+        self._refresh_storage_path()
+
+        # Build a user-friendly summary so they know what landed
+        # where and what didn't.
+        summary_lines = [f"Models folder set to:\n{chosen}\n"]
+        if move_outcomes:
+            for name, result in move_outcomes:
+                if result.get("moved"):
+                    summary_lines.append(
+                        f"  • {name}: moved {_human_size(int(result['bytes']))}"
+                    )
+                else:
+                    reason = result.get("reason", "no source")
+                    if "missing" in reason or "same" in reason:
+                        # Don't bother surfacing 'gigaam: source missing'
+                        # — that's the normal case for Whisper-only
+                        # users and would clutter the dialog.
+                        continue
+                    summary_lines.append(f"  • {name}: skipped ({reason})")
+            summary_lines.append("")
+        elif old_size > 0:
+            summary_lines.append(
+                f"Existing {_human_size(old_size)} of weights left at:\n"
+                f"{old_root}\n"
+            )
+        summary_lines.append(
+            "Restart the app for the new location to take effect."
+        )
+
+        QMessageBox.information(
+            self._window,
+            "Restart required",
+            "\n".join(summary_lines),
+        )
+
+    def _on_storage_reset(self) -> None:
+        """Reset Storage to default — same restart caveat applies."""
+        self._config.update_user_setting("storage", "models_dir", "")
+        self._refresh_storage_path()
+        QMessageBox.information(
+            self._window,
+            "Restart required",
+            (
+                "Models folder reset to default.\n\n"
+                "Restart the app for the new location to take effect."
+            ),
+        )
 
     def _on_shortcuts_save(self, payload: dict) -> None:
         self._config.update_user_setting(

@@ -60,6 +60,10 @@ class ShortcutsView(QWidget):
     save_requested = Signal(dict)
     reset_requested = Signal()
     test_mic_requested = Signal()
+    # Storage card — view delegates path-picking to the controller so
+    # QFileDialog stays out of the widget code (cleaner tests).
+    storage_path_change_requested = Signal()
+    storage_reset_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -149,6 +153,57 @@ class ShortcutsView(QWidget):
         clipboard_form.addRow(self._auto_paste_cb)
         root.addWidget(clipboard_card)
 
+        # ---- Storage card -----------------------------------------------
+        # User-pickable models directory — both Whisper (HF hub) and
+        # GigaAM weights live under this root. Empty config value =
+        # use the default ``<project>/models`` (or ``<exe>/models``
+        # when frozen). The path label always shows the resolved
+        # absolute path so the user knows exactly where weights end
+        # up, even when they haven't picked anything custom.
+        storage_card, storage_form = _make_section_card("Storage", self)
+
+        self._storage_path_label = QLabel("(loading…)", storage_card)
+        self._storage_path_label.setObjectName("StoragePathLabel")
+        self._storage_path_label.setProperty("role", "muted")
+        self._storage_path_label.setWordWrap(True)
+        self._storage_path_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse
+        )
+        storage_form.addRow("Models folder", self._storage_path_label)
+
+        storage_btn_row = QHBoxLayout()
+        storage_btn_row.setSpacing(10)
+        self._change_storage_btn = QPushButton("Change…", storage_card)
+        self._change_storage_btn.setObjectName("ChangeStorageButton")
+        self._change_storage_btn.setFocusPolicy(Qt.NoFocus)
+        self._change_storage_btn.clicked.connect(
+            self.storage_path_change_requested.emit
+        )
+        storage_btn_row.addWidget(self._change_storage_btn)
+
+        self._reset_storage_btn = QPushButton("Reset to default", storage_card)
+        self._reset_storage_btn.setObjectName("ResetStorageButton")
+        self._reset_storage_btn.setFocusPolicy(Qt.NoFocus)
+        # Disabled until a custom path is set — see ``set_storage_path``.
+        self._reset_storage_btn.setEnabled(False)
+        self._reset_storage_btn.clicked.connect(
+            self.storage_reset_requested.emit
+        )
+        storage_btn_row.addWidget(self._reset_storage_btn)
+        storage_btn_row.addStretch(1)
+        storage_form.addRow("", storage_btn_row)
+
+        storage_hint = QLabel(
+            "Changes apply on next launch. Already-downloaded weights "
+            "stay where they are.",
+            storage_card,
+        )
+        storage_hint.setObjectName("StorageHint")
+        storage_hint.setProperty("role", "muted")
+        storage_hint.setWordWrap(True)
+        storage_form.addRow("", storage_hint)
+        root.addWidget(storage_card)
+
         footer = QHBoxLayout()
         footer.addStretch(1)
         self._reset_btn = QPushButton("Reset to defaults", self)
@@ -211,6 +266,21 @@ class ShortcutsView(QWidget):
 
     def device_index(self) -> Optional[int]:
         return self._device_combo.currentData()
+
+    def set_storage_path(self, path: str, is_default: bool) -> None:
+        """Update the Storage card's path display.
+
+        ``path`` is the *resolved* absolute path — not the raw config
+        value. ``is_default`` toggles a ``(default)`` marker and
+        disables the Reset button (no point resetting when we're
+        already on the default).
+        """
+        if is_default:
+            self._storage_path_label.setText(f"{path}  (default)")
+            self._reset_storage_btn.setEnabled(False)
+        else:
+            self._storage_path_label.setText(path)
+            self._reset_storage_btn.setEnabled(True)
 
     def values(self) -> Dict[str, Any]:
         return {
