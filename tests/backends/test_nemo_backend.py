@@ -113,6 +113,31 @@ def test_load_failure_transitions_to_error(monkeypatch):
     assert backend.health_check() is False
 
 
+def test_load_patches_legacy_np_sctypes_shim(monkeypatch):
+    """NeMo / lhotse / older librosa code paths call ``np.sctypes``,
+    which NumPy 2.0 removed with a hard AttributeError. The backend
+    has to put the attribute back as a compat shim, otherwise
+    ``transcribe`` raises and the user sees ``Transcription returned
+    0 characters`` for every recording."""
+    import numpy as np
+
+    # Pretend np.sctypes is missing — matches NumPy 2.0+ actual state.
+    monkeypatch.delattr(np, "sctypes", raising=False)
+
+    _install_fake_nemo(monkeypatch)
+
+    from app.backends.nemo_backend import NemoBackend
+
+    backend = NemoBackend(model="nvidia/parakeet-tdt-0.6b-v3")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    assert hasattr(np, "sctypes"), "shim was not installed during load"
+    # Spot-check the buckets NeMo actually indexes into.
+    assert np.float32 in np.sctypes["float"]
+    assert np.int32 in np.sctypes["int"]
+
+
 def test_import_attribute_error_transitions_to_error(monkeypatch):
     """NeMo's exp_manager touches ``signal.SIGKILL`` at class-definition
     time, which is POSIX-only — on Windows the import graph used to die

@@ -276,6 +276,35 @@ class NemoBackend:
         return text
 
     @staticmethod
+    def _patch_numpy_for_legacy_nemo_deps() -> None:
+        """Re-add ``np.sctypes`` removed in NumPy 2.0.
+
+        NeMo 2.1 (and the lhotse / older librosa code paths it pulls
+        in) touch ``np.sctypes`` from inside their audio loader. NumPy
+        2.0 removed it with the message ``np.sctypes was removed in
+        the NumPy 2.0 release. Access dtypes explicitly instead`` —
+        which is fine advice for new code, useless to a third-party
+        dependency we can't patch. The transcribe path raises
+        AttributeError, the caller catches it, and every recording
+        comes back as 'No speech detected — nothing to paste'.
+
+        Smallest workable shim is to put the dict back the way NumPy
+        1.x had it; NeMo only ever indexes into ``float`` / ``int`` /
+        ``complex``. Idempotent.
+        """
+        import numpy as np
+
+        if hasattr(np, "sctypes"):
+            return
+        np.sctypes = {  # type: ignore[attr-defined]
+            "int": [np.int8, np.int16, np.int32, np.int64],
+            "uint": [np.uint8, np.uint16, np.uint32, np.uint64],
+            "float": [np.float16, np.float32, np.float64],
+            "complex": [np.complex64, np.complex128],
+            "others": [bool, object, bytes, str, np.void],
+        }
+
+    @staticmethod
     def _patch_signal_for_windows() -> None:
         """Make ``nemo.utils.exp_manager`` importable on Windows.
 
@@ -319,6 +348,10 @@ class NemoBackend:
         # has no attribute 'SIGKILL'`` because NeMo's exp_manager
         # touches it at class-definition time.
         self._patch_signal_for_windows()
+        # See ``_patch_numpy_for_legacy_nemo_deps`` — without this
+        # ``transcribe`` fails on every audio buffer with
+        # ``AttributeError: np.sctypes was removed in NumPy 2.0``.
+        self._patch_numpy_for_legacy_nemo_deps()
 
         # NeMo's first import pulls in PyTorch Lightning, hydra,
         # lhotse, omegaconf, librosa, … — easily 30-90 s on a cold
