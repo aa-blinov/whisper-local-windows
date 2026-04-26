@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="description" content="Lazy to Text — local Whisper + GigaAM speech-to-text for Windows with global hotkeys, per-model inference settings, and a Qt UI." />
+<meta name="description" content="Lazy to Text — local Whisper / GigaAM / Parakeet speech-to-text for Windows with global hotkeys, per-model inference settings, and a Qt UI." />
 <meta name="theme-color" content="#0f1115" />
 <title>Lazy to Text — local speech-to-text for Windows</title>
 <link rel="icon" type="image/png" href="favicon.png" />
@@ -28,12 +28,13 @@
 <main id="top">
   <section class="hero">
     <div class="container hero__inner">
-      <span class="hero__pill">Windows · MIT · Local-first · Whisper + GigaAM</span>
+      <span class="hero__pill">Windows · MIT · Local-first · Whisper · GigaAM · Parakeet</span>
       <h1 class="hero__title">Press a hotkey, speak, paste.</h1>
       <p class="hero__sub">
         Lazy to Text records audio on a global keyboard shortcut, transcribes it locally
-        through faster-whisper or Sber's GigaAM running in-process, and pastes the result
-        into whatever window has focus. No cloud round-trip, no subscription, no telemetry.
+        through faster-whisper, Sber's GigaAM, or NVIDIA's Parakeet TDT v3 running in-process,
+        and pastes the result into whatever window has focus. No cloud round-trip,
+        no subscription, no telemetry.
       </p>
       <div class="hero__ctas">
         <a class="button button--primary" href="https://github.com/aa-blinov/lazy-to-text" target="_blank" rel="noopener">View on GitHub</a>
@@ -84,12 +85,14 @@
       <h2 class="section__title">Features</h2>
       <div class="grid grid--3">
         <article class="card">
-          <h3 class="card__title">Two engines, one Protocol</h3>
+          <h3 class="card__title">Three engines, one Protocol</h3>
           <p class="card__body">
             faster-whisper for multilingual capture, GigaAM (Sber) for
-            best-in-class Russian. A <code>RoutedBackend</code> facade
-            picks the engine per model and rebuilds the inner backend
-            transparently when you swap families.
+            best-in-class Russian, NVIDIA NeMo for Parakeet TDT v3
+            (25 European languages incl. Russian). A
+            <code>RoutedBackend</code> facade picks the engine per
+            model and rebuilds the inner backend transparently when
+            you swap families.
           </p>
         </article>
         <article class="card">
@@ -98,17 +101,18 @@
             Each Whisper card surfaces an inline panel — language, VAD
             filter, beam size, temperature, initial prompt — persisted
             per alias and pushed live into the running backend. No
-            restart needed. GigaAM cards skip the panel; the engine is
-            end-to-end.
+            restart needed. GigaAM and Parakeet cards have a smaller
+            panel matching their narrower API surface.
           </p>
         </article>
         <article class="card">
-          <h3 class="card__title">9 model presets, 5 families</h3>
+          <h3 class="card__title">11 model presets, 6 families</h3>
           <p class="card__body">
             Whisper Distil / Turbo (fp16+int8) / Large v3
-            (fp16+int8), Russian fine-tunes, and GigaAM v3 e2e
-            CTC + RNN-T (with built-in punctuation). Family chips on
-            each card colour-code the lineage.
+            (fp16+int8), Russian fine-tunes, GigaAM v3 e2e CTC + RNN-T
+            (with built-in punctuation), and NVIDIA Parakeet TDT v3
+            (multilingual). Family chips on each card colour-code the
+            lineage.
           </p>
         </article>
         <article class="card">
@@ -140,9 +144,30 @@
         <article class="card">
           <h3 class="card__title">Live VU meter</h3>
           <p class="card__body">
-            A slim level bar appears in the topbar while recording, so
-            silent or muted mics show up immediately — no more "why is
-            my transcription empty?" debugging.
+            A <code>STATUS · Idle / Recording / Processing</code> chip
+            in the sidebar's bottom-left corner mirrors the topbar's
+            resource cards; the live VU bar under it animates while
+            recording, so silent or muted mics show up immediately.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Cancel-load button</h3>
+          <p class="card__body">
+            Mis-clicked a heavy model card? A red Cancel pill appears
+            next to the loading indicator. One click abandons the
+            in-flight load, rolls back the active card / config /
+            topbar pill, and clears the loading state — no waiting
+            for a stuck import to finish.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Splash screen on cold start</h3>
+          <p class="card__body">
+            When the persisted model is cached, the app pre-loads it
+            in the main thread on a movable splash widget BEFORE the
+            main window appears — so the main window never freezes
+            for the 11–30 s it takes NeMo or torch to import under
+            the GIL.
           </p>
         </article>
         <article class="card">
@@ -252,6 +277,7 @@ uv run lazy-to-text-ui        # launch the app</code></pre>
           <ul>
             <li>GigaAM v3 e2e CTC — 2 GB</li>
             <li>GigaAM v3 e2e RNN-T — 2.5 GB</li>
+            <li>Parakeet TDT v3 (multilingual) — 3 GB</li>
             <li>Whisper Turbo (int8) — 3.5 GB</li>
             <li>Whisper Distil / Turbo (fp16) — 5–6 GB</li>
             <li>Whisper Large v3 (int8) — 5 GB</li>
@@ -273,13 +299,16 @@ uv run lazy-to-text-ui        # launch the app</code></pre>
         <li>System-font detection so we can drop the bundled Inter</li>
       </ul>
       <p class="section__note">
-        Done since the previous draft of this page: live VU meter, live
-        resource monitor, transcription confirmation toast, GigaAM v3
-        engine + longform support, distilled / turbo / Russian Whisper
-        presets, per-model inference settings, search + family filter
-        on the model browser, history detail dialog, coloured logs
-        view, sidebar icons + Inter font, smooth pixel scrolling
-        throughout.
+        Done since the previous draft of this page: NVIDIA NeMo /
+        Parakeet TDT v3 multilingual engine, splash screen on cold
+        start, cancel-load button with active-card / config / pill
+        rollback, recording status chip relocated to the sidebar's
+        bottom-left corner, live VU meter, live resource monitor,
+        transcription confirmation toast, GigaAM v3 engine + longform
+        support, distilled / turbo / Russian Whisper presets,
+        per-model inference settings, search + family filter on the
+        model browser, history detail dialog, coloured logs view,
+        sidebar icons + Inter font, smooth pixel scrolling throughout.
       </p>
     </div>
   </section>
