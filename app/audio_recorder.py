@@ -128,8 +128,16 @@ class AudioRecorder:
             chunks.append(np.asarray(indata).copy())
             flat = np.asarray(indata).flatten()
             if flat.size:
+                # Per-block PEAK amplitude rather than RMS so the
+                # value matches the meter's 0–1 scale and the
+                # post-test frozen reading. RMS for speech is 3–5×
+                # smaller than peak — feeding RMS made the meter
+                # barely twitch even on yelling, then jump on the
+                # frozen-peak overlay after the test ended. The UI
+                # widget applies its own peak-and-decay envelope so
+                # we don't need any smoothing here.
                 self._current_input_level = float(
-                    np.sqrt(np.mean(flat ** 2))
+                    np.abs(flat).max()
                 )
 
         try:
@@ -348,8 +356,13 @@ class AudioRecorder:
                 try:
                     flat = np.asarray(audio_data).flatten()
                     if flat.size:
+                        # Peak rather than RMS — see comment in
+                        # ``test_input_level`` for the rationale.
+                        # Same scale as the post-recording UI
+                        # treatments (color thresholds calibrated
+                        # for peak amplitude).
                         self._current_input_level = float(
-                            np.sqrt(np.mean(flat ** 2))
+                            np.abs(flat).max()
                         )
                 except Exception:
                     pass
