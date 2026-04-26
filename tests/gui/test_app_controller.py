@@ -1510,6 +1510,90 @@ def test_cancel_after_select_restores_config(qtbot):
     assert config.get_setting("whisper", "model") == "large-v3"
 
 
+def test_download_progress_falls_back_to_size_mb_when_total_zero(qtbot):
+    """NeMo's ``cloud.maybe_download_from_cloud`` streams via plain
+    ``requests`` without a Content-Length header, so the tqdm bar
+    fires with ``total=0``. Without a fallback the topbar pill
+    shows raw bytes ('Loading: ... 1.3 GB') for the full 4-minute
+    download instead of a percentage that climbs.
+
+    The controller plugs ``ModelInfo.size_mb * 1 MB`` in as the
+    fallback total so the bar still climbs 0% → 99% smoothly."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+    from app.model_mapping import get_model
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})
+    rec = FakeRecordingController()
+
+    controller = AppController(config=config, window=window, recording=rec)
+    # User clicks Parakeet — controller records the expected total
+    # from the registry (Parakeet TDT v3 → 1200 MB).
+    window.models_view.model_selected.emit("parakeet-tdt-v3")
+    # Mirror the recording controller emitting model_loading so the
+    # topbar pill renders its loading variant.
+    window.topbar.set_recording_state("model_loading")
+    # Half the expected size has streamed in; tqdm reports total=0.
+    expected_total = get_model("parakeet-tdt-v3").size_mb * 1024 * 1024
+    controller._on_download_progress(expected_total // 2, 0, "model.nemo")
+
+    pill_text = window.topbar._model_pill.text()
+    # 50% (or 49% — the topbar caps progress at 99 to avoid showing
+    # 100% before ready). Either way "%" must appear, NOT raw bytes.
+    assert "%" in pill_text, f"expected percentage, got: {pill_text}"
+    assert "GB" not in pill_text and "MB" not in pill_text, (
+        f"raw bytes leaked through, got: {pill_text}"
+    )
+
+
+def test_download_progress_preserves_real_total(qtbot):
+    """Faster-whisper / GigaAM paths give tqdm a real total via
+    ``huggingface_hub.snapshot_download``. The controller must NOT
+    clobber a real total with the size_mb fallback."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})
+    rec = FakeRecordingController()
+
+    controller = AppController(config=config, window=window, recording=rec)
+    window.models_view.model_selected.emit("large-v3")
+    window.topbar.set_recording_state("model_loading")
+    # 50 MB out of 200 MB — should render as 25%.
+    controller._on_download_progress(50_000_000, 200_000_000, "model.bin")
+
+    pill_text = window.topbar._model_pill.text()
+    assert "25%" in pill_text, f"expected 25%, got: {pill_text}"
+
+
+def test_download_progress_resets_expected_total_on_idle(qtbot):
+    """After a successful load the expected-bytes fallback must
+    drop back to zero — otherwise a future download whose tqdm
+    actually does report total=0 (a small misc file in some
+    other backend) would inherit Parakeet's 1200 MB fallback and
+    show nonsense progress."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})
+    rec = FakeRecordingController()
+
+    controller = AppController(config=config, window=window, recording=rec)
+    window.models_view.model_selected.emit("parakeet-tdt-v3")
+    assert controller._loading_expected_bytes > 0
+
+    # Simulate the load finishing — recording state goes idle.
+    rec.state_changed.emit("idle")
+
+    assert controller._loading_expected_bytes == 0
+
+
 def test_cancel_with_no_load_in_flight_does_not_revert(qtbot):
     """If cancel arrives while nothing is loading (the recording
     controller returns falsy), the rollback path must NOT fire —

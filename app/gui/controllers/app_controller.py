@@ -167,6 +167,16 @@ class AppController(QObject):
         # ``_on_recording_state_changed`` when state goes to idle and
         # the backend reports ``ready``).
         self._pre_select_snapshot: Optional[dict] = None
+        # Expected weights size for the model currently loading, in
+        # bytes. Set from ``ModelInfo.size_mb`` at the moment of click
+        # (and at app startup for the persisted active model). Used as
+        # a fallback ``total`` in ``_on_download_progress`` when the
+        # backend's tqdm fires with ``total=0`` — NeMo's downloader
+        # streams via plain ``requests`` with no Content-Length, so
+        # without this the topbar would show raw bytes the entire
+        # download instead of a climbing percentage. Reset once the
+        # load settles (state goes idle).
+        self._loading_expected_bytes: int = 0
         self._wire_models()
         self._wire_shortcuts()
         self._wire_history()
@@ -204,6 +214,13 @@ class AppController(QObject):
                         "inactive until the user clicks Download.",
                         info.canonical,
                     )
+
+        # Pre-populate the fallback total for an auto-loading
+        # persisted model — same rationale as ``_on_model_selected``.
+        if active_info is not None:
+            self._loading_expected_bytes = (
+                int(active_info.size_mb) * 1024 * 1024
+            )
 
         self._sync_topbar_model(active_info)
 
@@ -263,6 +280,14 @@ class AppController(QObject):
             self._config.update_user_setting(
                 "whisper", "compute_type", info.compute_type
             )
+            # Pre-populate the fallback total so the topbar can show
+            # percentages even when the backend's tqdm doesn't carry
+            # a Content-Length (NeMo's case — see field doc).
+            self._loading_expected_bytes = (
+                int(info.size_mb) * 1024 * 1024
+            )
+        else:
+            self._loading_expected_bytes = 0
         self._window.models_view.set_active(alias)
         # Paint the Loading pill on the card immediately — otherwise
         # there is a ~200 ms window where the green Active pill flashes
@@ -873,6 +898,16 @@ class AppController(QObject):
         else:
             self._window.models_view.set_active(None)
         self._sync_topbar_model(prev_info)
+        # Reset the fallback total to the previous active model's
+        # size (or 0 if there was no prior active card) — a future
+        # progress event from a stale tqdm bar shouldn't render
+        # a percentage scaled to the cancelled model.
+        if prev_info is not None:
+            self._loading_expected_bytes = (
+                int(prev_info.size_mb) * 1024 * 1024
+            )
+        else:
+            self._loading_expected_bytes = 0
 
         # Roll back config too, otherwise next launch picks the
         # cancelled model up as the persisted active one.
@@ -892,12 +927,23 @@ class AppController(QObject):
         # and the larger pill on the active model card. The card is
         # where the user just clicked, so it's the most discoverable
         # spot to surface byte-by-byte feedback.
+        # When the backend's tqdm fires without a usable total (NeMo's
+        # streaming download has no Content-Length), substitute the
+        # expected size we cached at click time. Real totals (Whisper /
+        # GigaAM via huggingface_hub.snapshot_download) take priority.
+        effective_total = int(total)
+        if effective_total <= 0 and self._loading_expected_bytes > 0:
+            effective_total = self._loading_expected_bytes
         try:
-            self._window.topbar.set_loading_progress(int(current), int(total))
+            self._window.topbar.set_loading_progress(
+                int(current), effective_total
+            )
         except Exception:  # pragma: no cover — defensive
             pass
         try:
-            self._window.models_view.set_loading_progress(int(current), int(total))
+            self._window.models_view.set_loading_progress(
+                int(current), effective_total
+            )
         except Exception:  # pragma: no cover — defensive
             pass
 
@@ -936,6 +982,11 @@ class AppController(QObject):
                 self._window.models_view.refresh_cache_state()
             except Exception:  # pragma: no cover — defensive
                 pass
+            # Clear the fallback total so a future load whose tqdm
+            # legitimately reports total=0 (e.g. a small misc file
+            # in some unrelated download) doesn't inherit a stale
+            # 1.2 GB expectation from the previous Parakeet load.
+            self._loading_expected_bytes = 0
         if self._tray is not None:
             self._tray.set_state(state)
 
