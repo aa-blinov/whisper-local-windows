@@ -471,6 +471,14 @@ def main() -> int:
             logging.getLogger(__name__).info(
                 "Pre-load finished: %s", result,
             )
+            if result == "stopped":
+                # User cancelled the startup load — shut down cleanly
+                # and exit without opening the main window.
+                splash.close()
+                backend.shutdown()
+                if recording_controller is not None:
+                    recording_controller.shutdown()
+                return 0
         else:
             logging.getLogger(__name__).info(
                 "Persisted model %s is not cached — skipping auto-load. "
