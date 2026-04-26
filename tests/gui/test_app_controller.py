@@ -323,9 +323,9 @@ def test_reset_does_not_re_emit_save_requested(qtbot):
     window.shortcuts_view.reset_requested.emit()
     writes_during = len(config.writes) - writes_before
 
-    # Reset should write exactly 3 settings (start, stop, auto_paste).
-    # If save_requested re-fired from set_values, we'd see additional writes.
-    assert writes_during == 3
+    # Reset writes 4 settings: start, stop, cancel, auto_paste.
+    # If save_requested re-fired from set_values, we'd see extra writes.
+    assert writes_during == 4
 
 
 # ---- Topbar sync ------------------------------------------------------------
@@ -1002,6 +1002,79 @@ def test_controller_hf_token_change_refreshes_model_cards(qtbot, monkeypatch):
     # Warning should be hidden after the env var is set + cards
     # refreshed.
     assert not warn.isVisible()
+
+
+def test_controller_prefills_cancel_hotkey_from_config(qtbot):
+    """The controller paints whatever's in ``hotkey.cancel_recording_hotkey``
+    into the new third field on first render."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({
+        "hotkey": {
+            "start_recording_hotkey": "ctrl+f2",
+            "stop_recording_hotkey": "ctrl+f3",
+            "cancel_recording_hotkey": "ctrl+f4",
+        },
+    })
+
+    AppController(config=config, window=window)
+    assert window.shortcuts_view.cancel_hotkey() == "ctrl+f4"
+
+
+def test_controller_persists_cancel_hotkey_on_save(qtbot):
+    """Save payload from the view carries ``cancel_hotkey``;
+    controller writes it under ``hotkey.cancel_recording_hotkey``."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({
+        "hotkey": {
+            "start_recording_hotkey": "ctrl+f2",
+            "stop_recording_hotkey": "ctrl+f3",
+            "cancel_recording_hotkey": "",
+        },
+    })
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.save_requested.emit({
+        "start_hotkey": "ctrl+f2",
+        "stop_hotkey": "ctrl+f3",
+        "cancel_hotkey": "ctrl+alt+x",
+        "auto_paste": True,
+    })
+
+    assert config._data["hotkey"]["cancel_recording_hotkey"] == "ctrl+alt+x"
+
+
+def test_controller_reset_restores_cancel_hotkey_default(qtbot):
+    """Reset to defaults populates all three hotkey fields, including
+    cancel — otherwise a user who cleared it can't quickly get the
+    default back."""
+    from app.config_manager import DEFAULT_CONFIG
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({
+        "hotkey": {
+            "start_recording_hotkey": "ctrl+x",
+            "stop_recording_hotkey": "ctrl+y",
+            "cancel_recording_hotkey": "",
+        },
+    })
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.reset_requested.emit()
+
+    expected_default = DEFAULT_CONFIG["hotkey"]["cancel_recording_hotkey"]
+    assert config._data["hotkey"]["cancel_recording_hotkey"] == expected_default
+    assert window.shortcuts_view.cancel_hotkey() == expected_default
 
 
 def test_controller_storage_reset_clears_config_and_updates_env(

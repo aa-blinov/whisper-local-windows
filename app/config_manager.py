@@ -18,6 +18,13 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "hotkey": {
         "start_recording_hotkey": "ctrl+f2",
         "stop_recording_hotkey": "ctrl+f3",
+        # 'Discard the current buffer without transcribing'. Empty
+        # string means no global key is bound — the runtime feature
+        # works through ``StateManager.cancel_active_recording`` but
+        # nothing fires it. ctrl+f4 lives next to f2/f3 on the
+        # keyboard so the trio (start / stop+transcribe / cancel) is
+        # one finger-arc apart.
+        "cancel_recording_hotkey": "ctrl+f4",
     },
     "audio": {
         "channels": 1,

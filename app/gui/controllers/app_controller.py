@@ -312,8 +312,14 @@ class AppController(QObject):
         view = self._window.shortcuts_view
         start = self._config.get_setting("hotkey", "start_recording_hotkey") or ""
         stop = self._config.get_setting("hotkey", "stop_recording_hotkey") or ""
+        cancel = self._config.get_setting("hotkey", "cancel_recording_hotkey") or ""
         auto_paste = bool(self._config.get_setting("clipboard", "auto_paste"))
-        view.set_values(start_hotkey=start, stop_hotkey=stop, auto_paste=auto_paste)
+        view.set_values(
+            start_hotkey=start,
+            stop_hotkey=stop,
+            auto_paste=auto_paste,
+            cancel_hotkey=cancel,
+        )
 
         # Populate the microphone dropdown if a recording stack is wired in.
         if self._recording is not None and hasattr(self._recording, "list_input_devices"):
@@ -496,6 +502,13 @@ class AppController(QObject):
         self._config.update_user_setting(
             "hotkey", "stop_recording_hotkey", payload["stop_hotkey"]
         )
+        # ``cancel_hotkey`` may be missing if a legacy view emits the
+        # old payload shape — default to empty rather than raising.
+        self._config.update_user_setting(
+            "hotkey",
+            "cancel_recording_hotkey",
+            payload.get("cancel_hotkey", ""),
+        )
         self._config.update_user_setting(
             "clipboard", "auto_paste", payload["auto_paste"]
         )
@@ -637,6 +650,7 @@ class AppController(QObject):
         defaults_clipboard = DEFAULT_CONFIG.get("clipboard", {})
         start = defaults_hotkey.get("start_recording_hotkey", "")
         stop = defaults_hotkey.get("stop_recording_hotkey", "")
+        cancel = defaults_hotkey.get("cancel_recording_hotkey", "")
         auto_paste = bool(defaults_clipboard.get("auto_paste", True))
 
         self._config.update_user_setting(
@@ -645,10 +659,16 @@ class AppController(QObject):
         self._config.update_user_setting(
             "hotkey", "stop_recording_hotkey", stop
         )
+        self._config.update_user_setting(
+            "hotkey", "cancel_recording_hotkey", cancel
+        )
         self._config.update_user_setting("clipboard", "auto_paste", auto_paste)
         # set_values uses the suspend-emit guard so this won't fire save_requested.
         self._window.shortcuts_view.set_values(
-            start_hotkey=start, stop_hotkey=stop, auto_paste=auto_paste
+            start_hotkey=start,
+            stop_hotkey=stop,
+            auto_paste=auto_paste,
+            cancel_hotkey=cancel,
         )
 
     def _wire_history(self) -> None:

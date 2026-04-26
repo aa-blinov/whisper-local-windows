@@ -169,6 +169,26 @@ class ShortcutsView(QWidget):
         self._stop_edit.setPlaceholderText("e.g. ctrl+f3")
         self._stop_edit.editingFinished.connect(self._emit_save)
         hotkeys_form.addRow("Stop recording", self._stop_edit)
+
+        # "Discard buffer without transcribing" — the runtime has
+        # always supported this (StateManager.cancel_active_recording)
+        # but the hotkey was never exposed. Optional — empty value
+        # means no global key, the feature simply isn't bound.
+        self._cancel_edit = QLineEdit(hotkeys_card)
+        self._cancel_edit.setObjectName("CancelHotkeyEdit")
+        self._cancel_edit.setPlaceholderText("e.g. ctrl+f4 — leave empty to disable")
+        self._cancel_edit.editingFinished.connect(self._emit_save)
+        hotkeys_form.addRow("Cancel recording", self._cancel_edit)
+
+        hotkeys_hint = QLabel(
+            "Cancel discards the current buffer without transcribing — "
+            "useful if you mis-spoke or changed your mind mid-sentence.",
+            hotkeys_card,
+        )
+        hotkeys_hint.setObjectName("HotkeysHint")
+        hotkeys_hint.setProperty("role", "muted")
+        hotkeys_hint.setWordWrap(True)
+        hotkeys_form.addRow("", hotkeys_hint)
         root.addWidget(hotkeys_card)
 
         # ---- Clipboard card ---------------------------------------------
@@ -347,13 +367,17 @@ class ShortcutsView(QWidget):
         start_hotkey: str,
         stop_hotkey: str,
         auto_paste: bool,
+        cancel_hotkey: str = "",
     ) -> None:
         # Programmatic update — must not feed back into save_requested.
+        # ``cancel_hotkey`` is keyword-only with a default so callers
+        # written before the field existed keep working unchanged.
         self._suspend_emit = True
         try:
             self._start_edit.setText(start_hotkey)
             self._stop_edit.setText(stop_hotkey)
             self._auto_paste_cb.setChecked(bool(auto_paste))
+            self._cancel_edit.setText(cancel_hotkey or "")
         finally:
             self._suspend_emit = False
 
@@ -385,6 +409,9 @@ class ShortcutsView(QWidget):
 
     def stop_hotkey(self) -> str:
         return self._stop_edit.text().strip()
+
+    def cancel_hotkey(self) -> str:
+        return self._cancel_edit.text().strip()
 
     def auto_paste(self) -> bool:
         return self._auto_paste_cb.isChecked()
@@ -429,6 +456,7 @@ class ShortcutsView(QWidget):
         return {
             "start_hotkey": self.start_hotkey(),
             "stop_hotkey": self.stop_hotkey(),
+            "cancel_hotkey": self.cancel_hotkey(),
             "auto_paste": self.auto_paste(),
             "device": self.device_index(),
         }

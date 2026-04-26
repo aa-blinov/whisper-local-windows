@@ -358,3 +358,93 @@ def test_set_hf_token_does_not_re_emit(qtbot):
     view.hf_token_changed.connect(emissions.append)
     view.set_hf_token("hf_persisted_value")
     assert emissions == []
+
+
+# ---- Cancel-recording hotkey -----------------------------------------------
+
+
+def _cancel_edit(view) -> QLineEdit:
+    return view.findChild(QLineEdit, "CancelHotkeyEdit")
+
+
+def test_shortcuts_view_has_cancel_hotkey_field(qtbot):
+    """The Hotkeys card carries a third row for the "discard buffer
+    without transcribing" hotkey — the runtime supports it via
+    ``StateManager.cancel_active_recording`` but until now it was
+    never exposed to the user."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    assert _cancel_edit(view) is not None
+
+
+def test_set_values_prefills_cancel_hotkey(qtbot):
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.set_values(
+        start_hotkey="ctrl+f2",
+        stop_hotkey="ctrl+f3",
+        auto_paste=True,
+        cancel_hotkey="ctrl+f4",
+    )
+    assert _cancel_edit(view).text() == "ctrl+f4"
+
+
+def test_cancel_hotkey_returns_via_getter(qtbot):
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.set_values(
+        start_hotkey="ctrl+f2",
+        stop_hotkey="ctrl+f3",
+        auto_paste=True,
+        cancel_hotkey="ctrl+shift+x",
+    )
+    assert view.cancel_hotkey() == "ctrl+shift+x"
+
+
+def test_save_payload_includes_cancel_hotkey(qtbot):
+    """Edits to the cancel field must surface through the same
+    ``save_requested`` payload the controller already listens on —
+    otherwise a typed value never reaches config."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+
+    view.set_values(
+        start_hotkey="ctrl+f2",
+        stop_hotkey="ctrl+f3",
+        auto_paste=False,
+        cancel_hotkey="ctrl+f4",
+    )
+
+    edit = _cancel_edit(view)
+    edit.clear()
+    qtbot.keyClicks(edit, "ctrl+alt+x")
+
+    with qtbot.waitSignal(view.save_requested, timeout=1000) as blocker:
+        edit.editingFinished.emit()
+
+    assert blocker.args[0]["cancel_hotkey"] == "ctrl+alt+x"
+
+
+def test_set_values_handles_legacy_callers_without_cancel_kw(qtbot):
+    """Callers that still pass only the old three kwargs must keep
+    working — controller tests + any external code shouldn't need a
+    flag day to upgrade. Cancel field stays empty in that case."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.set_values(
+        start_hotkey="ctrl+f2",
+        stop_hotkey="ctrl+f3",
+        auto_paste=True,
+    )
+    assert _cancel_edit(view).text() == ""
