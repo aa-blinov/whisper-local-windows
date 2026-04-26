@@ -41,6 +41,12 @@ dependencies = [
     # ``HF_TOKEN`` set; without that, ``transcribe_longform`` will
     # raise and we fall back to plain ``transcribe``.
     "gigaam[longform] @ git+https://github.com/salute-developers/GigaAM",
+    # NVIDIA NeMo — needed for Parakeet TDT v3 (multilingual, 25
+    # languages incl. Russian) and the Canary v2 family. Heavy
+    # dependency tree (PyTorch Lightning, hydra, lhotse, librosa)
+    # but everything torch-y already came in via faster-whisper /
+    # gigaam, so the marginal install size is ~600-800 MB.
+    "nemo_toolkit[asr]>=2.0",
 ]
 
 [project.scripts]

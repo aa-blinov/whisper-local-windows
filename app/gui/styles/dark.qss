@@ -60,6 +60,15 @@ QLabel[role="test-result-good"] {
     font-weight: 500;
 }
 
+QLabel[role="warning"] {
+    color: {{color.warning}};
+    font-size: {{font.size_small}};
+    background-color: rgba(245, 158, 11, 0.10);
+    border: 1px solid rgba(245, 158, 11, 0.45);
+    border-radius: {{radius.md}};
+    padding: 8px 10px;
+}
+
 QLabel[role="test-result-warn"] {
     color: {{color.warning}};
     font-size: {{font.size_small}};
@@ -113,6 +122,26 @@ QPushButton[role="primary"]:hover {
 
 QPushButton[role="primary"]:disabled {
     background-color: {{color.bg_elevated}};
+    color: {{color.text_muted}};
+    border-color: {{color.border}};
+}
+
+/* Destructive action — outlined in danger red, filled on hover. The
+   subdued resting state keeps it visually subordinate to the primary
+   action sitting next to it (Select/Download). */
+QPushButton[role="danger"] {
+    background-color: transparent;
+    color: {{color.danger}};
+    border: 1px solid {{color.danger}};
+    font-weight: 500;
+}
+
+QPushButton[role="danger"]:hover {
+    background-color: {{color.danger}};
+    color: {{color.text_primary}};
+}
+
+QPushButton[role="danger"]:disabled {
     color: {{color.text_muted}};
     border-color: {{color.border}};
 }
@@ -352,38 +381,9 @@ QLabel[role="model-pill"][state="loading"] {
     border: 1px solid {{color.warning}};
 }
 
-QLabel[role="status-pill"] {
-    border-radius: {{radius.sm}};
-    padding: 4px {{space.md}};
-    font-size: {{font.size_small}};
-    font-weight: 600;
-    background-color: {{color.bg_elevated}};
-    color: {{color.text_secondary}};
-}
-
-QLabel[role="status-pill"][status="running"] {
-    background-color: {{color.success}};
-    color: {{color.bg_primary}};
-}
-
-QLabel[role="status-pill"][status="stopped"] {
-    background-color: {{color.warning}};
-    color: {{color.bg_primary}};
-}
-
-QLabel[role="status-pill"][status="error"] {
-    background-color: {{color.danger}};
-    color: {{color.text_primary}};
-}
-
-QLabel[role="status-pill"][status="unknown"] {
-    background-color: {{color.bg_elevated}};
-    color: {{color.text_muted}};
-}
-
 QLabel[role="recording-pill"] {
     border-radius: {{radius.sm}};
-    padding: 4px {{space.md}};
+    padding: 3px {{space.md}};
     font-size: {{font.size_small}};
     font-weight: 600;
     background-color: {{color.bg_elevated}};
@@ -403,6 +403,72 @@ QLabel[role="recording-pill"][state="processing"] {
 QLabel[role="recording-pill"][state="model_loading"] {
     background-color: {{color.warning}};
     color: {{color.bg_primary}};
+}
+
+/* Sidebar's bottom-left status chip — same shape as a single
+   ResourceWidget block (CPU / RAM): rounded card with a muted
+   label on top-left, state value on top-right, VU bar underneath. */
+#RecordingStatusWidget {
+    background-color: {{color.bg_elevated}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    /* Outer spacing lives on the parent ``RecordingStatusHolder``
+       widget (sidebar.py) — Qt's QStyle routes QSS ``margin`` for
+       plain QWidgets unreliably, so layout contentsMargins is the
+       safer source of truth for the bottom alignment with
+       ModelsView's content padding. */
+}
+
+QLabel[role="chip-label"] {
+    color: {{color.text_muted}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    background: transparent;
+}
+
+QLabel[role="chip-value"] {
+    font-size: {{font.size_small}};
+    font-weight: 600;
+    background: transparent;
+}
+
+QLabel[role="chip-value"][state="idle"] {
+    color: {{color.text_secondary}};
+}
+
+QLabel[role="chip-value"][state="recording"] {
+    color: {{color.danger}};
+}
+
+QLabel[role="chip-value"][state="processing"] {
+    color: {{color.accent}};
+}
+
+/* Cancel button next to the loading model pill — visible only while
+   the backend is downloading / importing. Compact, danger-tinted so
+   the user sees it as the escape hatch it is, but soft enough that
+   it doesn't dominate the topbar. */
+QPushButton[role="cancel-load"] {
+    background-color: transparent;
+    color: {{color.danger}};
+    border: 1px solid {{color.danger}};
+    border-radius: {{radius.sm}};
+    padding: 3px {{space.sm}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+}
+
+QPushButton[role="cancel-load"]:hover {
+    background-color: {{color.danger}};
+    color: {{color.text_primary}};
+}
+
+QPushButton[role="cancel-load"]:pressed {
+    background-color: {{color.danger}};
+    color: {{color.text_primary}};
+    padding-top: 4px;
+    padding-bottom: 2px;
 }
 
 /* ---- Sidebar ------------------------------------------------------------- */

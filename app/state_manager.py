@@ -323,6 +323,36 @@ class StateManager:
             pass
         return "idle"
     
+    def cancel_model_change(self) -> bool:
+        """Abandon an in-flight model load.
+
+        The user clicked Cancel on the topbar pill — almost always
+        because they mis-picked a heavy model card (or NeMo's cold
+        import deadlocked for half an hour). We tell the backend to
+        drop its in-flight result, clear ``is_model_loading`` so the
+        UI flips back to idle, and let the watcher thread exit on
+        its next poll when it sees ``backend.status() == 'stopped'``.
+
+        Returns ``True`` iff a load was actually cancelled, ``False``
+        if there was nothing to cancel (cancel button can race with
+        a load that already finished or failed).
+        """
+        with self._state_lock:
+            if not self.is_model_loading:
+                return False
+
+        self.logger.info(
+            "Cancelling model load…", extra={'user_message': True}
+        )
+        target = getattr(self.backend, "cancel_load", None)
+        if target is not None:
+            try:
+                target()
+            except Exception as exc:  # pragma: no cover — defensive
+                self.logger.warning("backend.cancel_load raised: %s", exc)
+        self.set_model_loading(False)
+        return True
+
     def request_model_change(
         self,
         new_model_size: str,
@@ -389,8 +419,26 @@ class StateManager:
             name=f"model-change-{new_model_size}",
         ).start()
 
-    def _watch_model_change(self, model_size: str, timeout: float = 120.0) -> None:
+    def _watch_model_change(
+        self, model_size: str, timeout: float = 1800.0
+    ) -> None:
+        """Poll the backend until it settles on ``ready`` / ``error``.
+
+        Default timeout is 30 minutes — generous on purpose. NeMo's
+        first cold-load on a fresh install can run 4-6 minutes
+        (PyTorch Lightning + hydra + lhotse imports, then ~1.2 GB
+        of safetensors over the wire). The previous 2-minute cap
+        fired during normal operation and made the model pill go
+        stale even though the download was still progressing.
+
+        While waiting, log a heartbeat every 30 s so the user can
+        tell — at a glance in the Logs view — that the watcher is
+        alive and the load is still going. Saves them having to
+        toggle on the network-noise filter to see life signs.
+        """
         deadline = time.monotonic() + timeout
+        last_heartbeat = time.monotonic()
+        start = time.monotonic()
         while time.monotonic() < deadline:
             status = self.backend.status()
             if status == "ready":
@@ -407,8 +455,26 @@ class StateManager:
                 )
                 self.set_model_loading(False)
                 return
+            if status == "stopped":
+                # The user (or app teardown) cancelled the in-flight
+                # load via ``cancel_model_change`` / backend
+                # ``cancel_load``. Exit cleanly without the timeout
+                # warning — the cancel path already logged the user-
+                # facing message.
+                self.set_model_loading(False)
+                return
+            now = time.monotonic()
+            if now - last_heartbeat >= 30.0:
+                elapsed = int(now - start)
+                self.logger.info(
+                    f"Still loading {model_size}… ({elapsed}s elapsed, "
+                    f"backend status={status})"
+                )
+                last_heartbeat = now
             time.sleep(0.2)
         self.logger.warning(
-            f"Model change watcher timed out for {model_size}"
+            f"Model change watcher timed out for {model_size} "
+            f"after {int(timeout)}s — load may still be in progress, "
+            "check the backend status."
         )
         self.set_model_loading(False)

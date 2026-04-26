@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -58,8 +60,20 @@ def _make_section_card(title: str, parent: QWidget) -> tuple[QFrame, QFormLayout
 
 class ShortcutsView(QWidget):
     save_requested = Signal(dict)
-    reset_requested = Signal()
     test_mic_requested = Signal()
+    # Per-card reset signals — granular replacements for the old
+    # single ``reset_requested`` footer button. Each card now owns
+    # its own affordance so the user can revert one section without
+    # nuking unrelated state.
+    hotkeys_reset_requested = Signal()
+    hf_token_reset_requested = Signal()
+    # Storage card — view delegates path-picking to the controller so
+    # QFileDialog stays out of the widget code (cleaner tests).
+    storage_path_change_requested = Signal()
+    storage_reset_requested = Signal()
+    # Hugging Face card — fired on focus loss after the user edits
+    # the token field. Controller persists + applies to env.
+    hf_token_changed = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -69,17 +83,44 @@ class ShortcutsView(QWidget):
         # programmatically (e.g. controller prefilling from config).
         self._suspend_emit = False
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(28, 22, 28, 22)
-        root.setSpacing(14)
+        # Outer layout = top hint pinned + scrollable card stack.
+        # Without the scroll area Qt tried to fit every card into
+        # whatever vertical space the window had; once we pushed
+        # past 4-5 cards Qt started squishing form rows below
+        # their min-height and labels rendered on top of inputs.
+        # Mirrors the Models view's pattern exactly.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
+        hint_wrapper = QWidget(self)
+        hint_wrapper_layout = QVBoxLayout(hint_wrapper)
+        hint_wrapper_layout.setContentsMargins(28, 22, 28, 0)
+        hint_wrapper_layout.setSpacing(0)
         hint = QLabel(
             "Microphone, global hotkeys, paste behaviour. "
             "Changes save automatically.",
-            self,
+            hint_wrapper,
         )
         hint.setProperty("role", "muted")
-        root.addWidget(hint)
+        hint_wrapper_layout.addWidget(hint)
+        outer.addWidget(hint_wrapper)
+
+        scroll = QScrollArea(self)
+        scroll.setObjectName("ShortcutsScrollArea")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        scroll.verticalScrollBar().setSingleStep(20)
+        outer.addWidget(scroll, 1)
+
+        scroll_content = QWidget(scroll)
+        scroll_content.setObjectName("ShortcutsScrollContent")
+        scroll.setWidget(scroll_content)
+        root = QVBoxLayout(scroll_content)
+        root.setContentsMargins(28, 14, 28, 22)
+        root.setSpacing(14)
 
         # ---- Audio input card -------------------------------------------
         audio_card, audio_form = _make_section_card("Audio input", self)
@@ -96,12 +137,15 @@ class ShortcutsView(QWidget):
         # Populated later via set_devices(); placeholder until then.
         self._device_combo.addItem("System default", None)
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
-        audio_form.addRow("Microphone", self._device_combo)
 
-        # Quick verifier: capture ~3 s, report peak/RMS so the user
-        # knows the chosen device is actually picking up sound.
-        mic_test_row = QHBoxLayout()
-        mic_test_row.setSpacing(10)
+        # Microphone row: dropdown + Test button inline. Same trick
+        # as the HF card — kills the empty space a button-on-its-
+        # own-row left next to the dropdown.
+        from app.gui.widgets.vu_meter import VUMeter
+
+        mic_input_row = QHBoxLayout()
+        mic_input_row.setSpacing(10)
+        mic_input_row.addWidget(self._device_combo, 1)
         self._test_mic_btn = QPushButton("Test microphone", audio_card)
         self._test_mic_btn.setObjectName("TestMicrophoneButton")
         # Without ``NoFocus`` clicking the button puts keyboard focus
@@ -110,13 +154,26 @@ class ShortcutsView(QWidget):
         # QLineEdit — and the cursor lands inside it. Annoying.
         self._test_mic_btn.setFocusPolicy(Qt.NoFocus)
         self._test_mic_btn.clicked.connect(self.test_mic_requested.emit)
-        mic_test_row.addWidget(self._test_mic_btn)
+        mic_input_row.addWidget(self._test_mic_btn)
+        audio_form.addRow("Microphone", mic_input_row)
+
+        # Result row: live VU meter (visible only during / after a
+        # test) + the textual result. Sits below the input row —
+        # collapses to a thin empty strip when nothing is running,
+        # blooms into a meter + verdict line during / after a test.
+        mic_result_row = QHBoxLayout()
+        mic_result_row.setSpacing(10)
+        self._test_mic_meter = VUMeter(audio_card)
+        self._test_mic_meter.setObjectName("MicrophoneTestMeter")
+        self._test_mic_meter.setVisible(False)
+        mic_result_row.addWidget(self._test_mic_meter)
+
         self._test_mic_label = QLabel("", audio_card)
         self._test_mic_label.setObjectName("MicrophoneTestResult")
         self._test_mic_label.setProperty("role", "muted")
         self._test_mic_label.setWordWrap(True)
-        mic_test_row.addWidget(self._test_mic_label, 1)
-        audio_form.addRow("", mic_test_row)
+        mic_result_row.addWidget(self._test_mic_label, 1)
+        audio_form.addRow("", mic_result_row)
         root.addWidget(audio_card)
 
         # ---- Hotkeys card -----------------------------------------------
@@ -133,6 +190,45 @@ class ShortcutsView(QWidget):
         self._stop_edit.setPlaceholderText("e.g. ctrl+f3")
         self._stop_edit.editingFinished.connect(self._emit_save)
         hotkeys_form.addRow("Stop recording", self._stop_edit)
+
+        # "Discard buffer without transcribing" — the runtime has
+        # always supported this (StateManager.cancel_active_recording)
+        # but the hotkey was never exposed. Optional — empty value
+        # means no global key, the feature simply isn't bound.
+        self._cancel_edit = QLineEdit(hotkeys_card)
+        self._cancel_edit.setObjectName("CancelHotkeyEdit")
+        self._cancel_edit.setPlaceholderText("e.g. ctrl+f6 — leave empty to disable")
+        self._cancel_edit.editingFinished.connect(self._emit_save)
+        hotkeys_form.addRow("Cancel recording", self._cancel_edit)
+
+        # "Reset to defaults" lives inside the card now (next to its
+        # owned content) instead of a footer at the bottom of the
+        # whole tab — matches the Storage card's button placement
+        # and means each card's reset only touches its own settings.
+        hotkeys_btn_row = QHBoxLayout()
+        hotkeys_btn_row.setSpacing(10)
+        hotkeys_btn_row.addStretch(1)
+        self._reset_hotkeys_btn = QPushButton("Reset to defaults", hotkeys_card)
+        self._reset_hotkeys_btn.setObjectName("ResetHotkeysButton")
+        self._reset_hotkeys_btn.setFocusPolicy(Qt.NoFocus)
+        self._reset_hotkeys_btn.clicked.connect(
+            self.hotkeys_reset_requested.emit
+        )
+        hotkeys_btn_row.addWidget(self._reset_hotkeys_btn)
+        hotkeys_card.layout().addLayout(hotkeys_btn_row)
+
+        # Hint goes into the card's OUTER VBox, not the form — adding
+        # it as a labelless form-row would offset it to the field
+        # column (under the inputs), inconsistent with the Storage
+        # card's hint which sits flush-left across the full card.
+        hotkeys_hint = QLabel(
+            "Cancel discards the current buffer instead of transcribing.",
+            hotkeys_card,
+        )
+        hotkeys_hint.setObjectName("HotkeysHint")
+        hotkeys_hint.setProperty("role", "muted")
+        hotkeys_hint.setWordWrap(True)
+        hotkeys_card.layout().addWidget(hotkeys_hint)
         root.addWidget(hotkeys_card)
 
         # ---- Clipboard card ---------------------------------------------
@@ -149,15 +245,167 @@ class ShortcutsView(QWidget):
         clipboard_form.addRow(self._auto_paste_cb)
         root.addWidget(clipboard_card)
 
-        footer = QHBoxLayout()
-        footer.addStretch(1)
-        self._reset_btn = QPushButton("Reset to defaults", self)
-        self._reset_btn.setObjectName("ResetShortcutsButton")
-        self._reset_btn.setFocusPolicy(Qt.NoFocus)
-        self._reset_btn.clicked.connect(self.reset_requested.emit)
-        footer.addWidget(self._reset_btn)
-        root.addLayout(footer)
+        # ---- Storage card -----------------------------------------------
+        # User-pickable models directory — both Whisper (HF hub) and
+        # GigaAM weights live under this root. Empty config value =
+        # use the default ``<project>/models`` (or ``<exe>/models``
+        # when frozen).
+        #
+        # Built by hand instead of via ``_make_section_card`` because
+        # this card mixes a label-row with a button-row and a hint
+        # paragraph; QFormLayout's spanning-row layout shrinks rows
+        # whose label column is empty, squashing the buttons. A
+        # straight QVBoxLayout sidesteps that entirely.
+        storage_card = QFrame(self)
+        storage_card.setObjectName("StorageCard")
+        storage_card.setProperty("role", "card")
+        storage_v = QVBoxLayout(storage_card)
+        storage_v.setContentsMargins(20, 16, 20, 16)
+        storage_v.setSpacing(10)
 
+        storage_header = QLabel("Storage", storage_card)
+        storage_header.setProperty("role", "section-header")
+        storage_v.addWidget(storage_header)
+
+        # Path row — leading caption + selectable label, all on one line.
+        storage_path_row = QHBoxLayout()
+        storage_path_row.setSpacing(16)
+        storage_caption = QLabel("Models folder", storage_card)
+        storage_path_row.addWidget(storage_caption)
+
+        self._storage_path_label = QLabel("(loading…)", storage_card)
+        self._storage_path_label.setObjectName("StoragePathLabel")
+        self._storage_path_label.setProperty("role", "muted")
+        self._storage_path_label.setWordWrap(True)
+        self._storage_path_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse
+        )
+        storage_path_row.addWidget(self._storage_path_label, 1)
+        storage_v.addLayout(storage_path_row)
+
+        # Button row — flush left, stretch on the right. Wrapped in a
+        # QWidget rather than added as a bare QHBoxLayout because the
+        # outer VBox doesn't reliably pick up the layout's sizeHint
+        # in this nesting (hint label was rendering on top of the
+        # button row's bottom edge).
+        storage_btn_widget = QWidget(storage_card)
+        storage_btn_widget.setObjectName("StorageButtonRow")
+        storage_btn_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        # Without this the global ``QWidget { background-color:
+        # bg_primary }`` rule paints a dark slab around the buttons
+        # that's visibly different from the card's elevated bg —
+        # makes the row look like its own button-coloured strip.
+        storage_btn_widget.setStyleSheet("background: transparent;")
+        storage_btn_row = QHBoxLayout(storage_btn_widget)
+        storage_btn_row.setContentsMargins(0, 0, 0, 0)
+        storage_btn_row.setSpacing(10)
+        self._change_storage_btn = QPushButton("Change…", storage_btn_widget)
+        self._change_storage_btn.setObjectName("ChangeStorageButton")
+        self._change_storage_btn.setFocusPolicy(Qt.NoFocus)
+        self._change_storage_btn.clicked.connect(
+            self.storage_path_change_requested.emit
+        )
+        storage_btn_row.addWidget(self._change_storage_btn)
+
+        self._reset_storage_btn = QPushButton(
+            "Reset to default", storage_btn_widget,
+        )
+        self._reset_storage_btn.setObjectName("ResetStorageButton")
+        self._reset_storage_btn.setFocusPolicy(Qt.NoFocus)
+        # Disabled until a custom path is set — see ``set_storage_path``.
+        self._reset_storage_btn.setEnabled(False)
+        self._reset_storage_btn.clicked.connect(
+            self.storage_reset_requested.emit
+        )
+        storage_btn_row.addWidget(self._reset_storage_btn)
+        storage_btn_row.addStretch(1)
+        # Match the wrapper's height to the buttons' sizeHint so the
+        # outer VBox can't squish it below the button height.
+        storage_btn_widget.setMinimumHeight(
+            self._change_storage_btn.sizeHint().height(),
+        )
+        storage_v.addWidget(storage_btn_widget)
+
+        storage_hint = QLabel(
+            "New downloads land here immediately. Already-downloaded "
+            "weights stay in their current folder unless you choose "
+            "to move them.",
+            storage_card,
+        )
+        storage_hint.setObjectName("StorageHint")
+        storage_hint.setProperty("role", "muted")
+        storage_hint.setWordWrap(True)
+        storage_v.addWidget(storage_hint)
+        root.addWidget(storage_card)
+
+        # ---- Hugging Face card ------------------------------------------
+        # Optional API token, only relevant for GigaAM long-form
+        # audio (>25 s) which routes through pyannote VAD —
+        # ``pyannote/segmentation-3.0`` is gated and needs an HF
+        # account that's accepted the model card. Built by hand
+        # rather than via ``_make_section_card`` for the same
+        # reason as the Storage card (form-row layout + helper
+        # widgets clash on spanning rows).
+        hf_card = QFrame(self)
+        hf_card.setObjectName("HfCard")
+        hf_card.setProperty("role", "card")
+        hf_v = QVBoxLayout(hf_card)
+        hf_v.setContentsMargins(20, 16, 20, 16)
+        hf_v.setSpacing(10)
+
+        hf_header = QLabel("Hugging Face", hf_card)
+        hf_header.setProperty("role", "section-header")
+        hf_v.addWidget(hf_header)
+
+        # Token field + Clear on a single row to avoid the wide
+        # empty rectangle a stretch-aligned button row used to
+        # leave next to the input. Scope is field-level (just the
+        # token), so inline placement is clear without the extra
+        # vertical real estate.
+        hf_row = QHBoxLayout()
+        hf_row.setSpacing(10)
+        hf_caption = QLabel("API token", hf_card)
+        hf_row.addWidget(hf_caption)
+        self._hf_token_edit = QLineEdit(hf_card)
+        self._hf_token_edit.setObjectName("HfTokenEdit")
+        self._hf_token_edit.setEchoMode(QLineEdit.Password)
+        self._hf_token_edit.setPlaceholderText("hf_…")
+        self._hf_token_edit.setClearButtonEnabled(True)
+        self._hf_token_edit.editingFinished.connect(self._on_hf_token_finished)
+        hf_row.addWidget(self._hf_token_edit, 1)
+        self._clear_hf_token_btn = QPushButton("Clear", hf_card)
+        self._clear_hf_token_btn.setObjectName("ClearHfTokenButton")
+        self._clear_hf_token_btn.setFocusPolicy(Qt.NoFocus)
+        self._clear_hf_token_btn.clicked.connect(
+            self.hf_token_reset_requested.emit
+        )
+        hf_row.addWidget(self._clear_hf_token_btn)
+        hf_v.addLayout(hf_row)
+
+        hf_hint = QLabel(
+            "Optional. Used when downloading gated or private "
+            "Hugging Face models — the app passes it to "
+            "<code>huggingface_hub</code> on every fetch.<br>"
+            'Get one at '
+            '<a href="https://huggingface.co/settings/tokens" '
+            'style="color:#7aa2ff;text-decoration:none">'
+            'huggingface.co/settings/tokens</a>.',
+            hf_card,
+        )
+        hf_hint.setObjectName("HfHint")
+        hf_hint.setProperty("role", "muted")
+        hf_hint.setWordWrap(True)
+        hf_hint.setTextFormat(Qt.RichText)
+        hf_hint.setOpenExternalLinks(True)
+        hf_hint.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        hf_v.addWidget(hf_hint)
+        root.addWidget(hf_card)
+
+        # Footer reset button retired — each card now owns its own
+        # 'Reset' / 'Clear' affordance. The previous global button
+        # was misleading: it advertised 'Reset to defaults' but
+        # only touched hotkeys + auto_paste, leaving Storage / HF
+        # untouched. Per-card buttons make the scope explicit.
         root.addStretch(1)
 
     # ---- public API ---------------------------------------------------------
@@ -167,13 +415,17 @@ class ShortcutsView(QWidget):
         start_hotkey: str,
         stop_hotkey: str,
         auto_paste: bool,
+        cancel_hotkey: str = "",
     ) -> None:
         # Programmatic update — must not feed back into save_requested.
+        # ``cancel_hotkey`` is keyword-only with a default so callers
+        # written before the field existed keep working unchanged.
         self._suspend_emit = True
         try:
             self._start_edit.setText(start_hotkey)
             self._stop_edit.setText(stop_hotkey)
             self._auto_paste_cb.setChecked(bool(auto_paste))
+            self._cancel_edit.setText(cancel_hotkey or "")
         finally:
             self._suspend_emit = False
 
@@ -206,16 +458,53 @@ class ShortcutsView(QWidget):
     def stop_hotkey(self) -> str:
         return self._stop_edit.text().strip()
 
+    def cancel_hotkey(self) -> str:
+        return self._cancel_edit.text().strip()
+
     def auto_paste(self) -> bool:
         return self._auto_paste_cb.isChecked()
 
     def device_index(self) -> Optional[int]:
         return self._device_combo.currentData()
 
+    def set_hf_token(self, token: str) -> None:
+        """Programmatic prefill of the HF token field — used by the
+        controller on init. Won't echo a ``hf_token_changed`` signal
+        back so we don't re-save what we just loaded."""
+        self._suspend_emit = True
+        try:
+            self._hf_token_edit.setText(token or "")
+        finally:
+            self._suspend_emit = False
+
+    def hf_token(self) -> str:
+        return self._hf_token_edit.text().strip()
+
+    def _on_hf_token_finished(self) -> None:
+        if self._suspend_emit:
+            return
+        self.hf_token_changed.emit(self.hf_token())
+
+    def set_storage_path(self, path: str, is_default: bool) -> None:
+        """Update the Storage card's path display.
+
+        ``path`` is the *resolved* absolute path — not the raw config
+        value. ``is_default`` toggles a ``(default)`` marker and
+        disables the Reset button (no point resetting when we're
+        already on the default).
+        """
+        if is_default:
+            self._storage_path_label.setText(f"{path}  (default)")
+            self._reset_storage_btn.setEnabled(False)
+        else:
+            self._storage_path_label.setText(path)
+            self._reset_storage_btn.setEnabled(True)
+
     def values(self) -> Dict[str, Any]:
         return {
             "start_hotkey": self.start_hotkey(),
             "stop_hotkey": self.stop_hotkey(),
+            "cancel_hotkey": self.cancel_hotkey(),
             "auto_paste": self.auto_paste(),
             "device": self.device_index(),
         }
@@ -241,33 +530,61 @@ class ShortcutsView(QWidget):
         self._test_mic_label.setProperty("role", "muted")
         self._test_mic_label.style().unpolish(self._test_mic_label)
         self._test_mic_label.style().polish(self._test_mic_label)
+        # Show the live VU meter for the duration of the test.
+        # Controller starts a polling timer to feed it through
+        # ``set_mic_test_level`` — without that the bar would just
+        # sit at zero.
+        self._test_mic_meter.reset()
+        self._test_mic_meter.setVisible(True)
+
+    def set_mic_test_level(self, level: float) -> None:
+        """Push a fresh amplitude reading into the mic-test VU meter.
+        Called by the controller while a test is running. No-op when
+        the meter is hidden so a stray late tick can't paint over a
+        finished result."""
+        if self._test_mic_meter.isVisible():
+            self._test_mic_meter.set_level(level)
 
     def show_mic_test_result(self, peak: float, rms: float) -> None:
         self._test_mic_btn.setEnabled(True)
+        # Keep the meter visible and frozen at the peak amplitude
+        # — the bar IS the visual "how loud were you" answer, no
+        # numeric % needed in the text. ``set_level`` once + no
+        # follow-up calls = the peak-and-decay envelope just holds
+        # the value indefinitely (decay only fires on subsequent
+        # ``set_level`` calls). Reset happens on the next test.
+        self._test_mic_meter.setVisible(True)
+        self._test_mic_meter.set_level(max(0.0, min(1.0, peak)))
+
+        # Plain English result: descriptive only, no jargon, no
+        # mystery numbers. Power users / bug-reporters still get
+        # the raw 0–1 ``peak`` and ``rms`` via the tooltip.
         if peak < 0.01:
-            text = (
-                f"Silence detected (peak {peak:.3f}). "
-                "Check the device or speak louder."
-            )
+            text = "No sound detected — check the selected microphone."
             role = "test-result-bad"
         elif peak < 0.08:
             text = (
-                f"Quiet input (peak {peak:.3f}, rms {rms:.3f}). "
-                "Audible but on the low side."
+                "Very quiet. Speak louder or raise the input "
+                "level in Windows sound settings."
             )
             role = "test-result-warn"
         else:
-            text = (
-                f"Looks good — peak {peak:.3f}, rms {rms:.3f}."
-            )
+            text = "Looks good."
             role = "test-result-good"
         self._test_mic_label.setText(text)
+        self._test_mic_label.setToolTip(
+            f"peak={peak:.3f}, rms={rms:.3f}\n"
+            "(amplitude on a 0–1 scale; peak = loudest sample, "
+            "rms = average power)"
+        )
         self._test_mic_label.setProperty("role", role)
         self._test_mic_label.style().unpolish(self._test_mic_label)
         self._test_mic_label.style().polish(self._test_mic_label)
 
     def show_mic_test_error(self, reason: str) -> None:
         self._test_mic_btn.setEnabled(True)
+        self._test_mic_meter.setVisible(False)
+        self._test_mic_meter.reset()
         self._test_mic_label.setText(f"Test failed: {reason}")
         self._test_mic_label.setProperty("role", "test-result-bad")
         self._test_mic_label.style().unpolish(self._test_mic_label)

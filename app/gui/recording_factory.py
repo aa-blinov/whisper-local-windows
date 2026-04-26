@@ -91,10 +91,16 @@ def build_recording_stack(
         state_manager.handle_max_recording_duration_reached
     )
 
+    # ``cancel_recording_hotkey`` is optional — empty / missing means
+    # the third binding is skipped and Cancel-via-hotkey is unavailable
+    # (the runtime feature still works programmatically). Pass ``None``
+    # to ``HotkeyListener`` for skip semantics rather than empty string.
+    cancel_hotkey = hotkey_cfg.get("cancel_recording_hotkey", "") or ""
     hotkey_listener = HotkeyListener(
         state_manager=state_manager,
         start_recording_hotkey=hotkey_cfg.get("start_recording_hotkey", "ctrl+f2"),
         stop_recording_hotkey=hotkey_cfg.get("stop_recording_hotkey", "ctrl+f3"),
+        cancel_combination=cancel_hotkey.strip() or None,
     )
 
     log.info(

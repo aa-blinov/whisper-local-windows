@@ -48,6 +48,16 @@ def _build_gigaam(model: str, **kwargs) -> TranscriptionBackend:
     return GigaamBackend(model=model, **accepted)
 
 
+def _build_nemo(model: str, **kwargs) -> TranscriptionBackend:
+    from app.backends.nemo_backend import NemoBackend
+
+    # NemoBackend takes only ``device``; ``compute_type`` /
+    # ``beam_size`` / ``language`` are NeMo-internal or not
+    # exposed through the public transcribe API.
+    accepted = {k: v for k, v in kwargs.items() if k in ("device",)}
+    return NemoBackend(model=model, **accepted)
+
+
 class RoutedBackend:
     def __init__(
         self,
@@ -146,6 +156,23 @@ class RoutedBackend:
     def shutdown(self) -> None:
         self._inner.shutdown()
 
+    def cancel_load(self) -> None:
+        """Forward cancel-load to the inner backend.
+
+        Silent if the inner doesn't expose ``cancel_load`` (older fakes
+        in tests; future engines that haven't been updated yet) — the
+        topbar's cancel button must never raise from a click. The
+        inner backends themselves are idempotent when status isn't
+        ``loading``, so it's safe to call this blindly from the UI.
+        """
+        target = getattr(self._inner, "cancel_load", None)
+        if target is None:
+            return
+        try:
+            target()
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("cancel_load on inner raised: %s", exc)
+
     def update_inference_settings(self, settings) -> None:
         """Forward per-model overrides to the inner backend if it
         accepts them. GigaAM's backend ignores the call (its engine
@@ -191,4 +218,6 @@ class RoutedBackend:
     def _build(self, canonical: str, kind: str) -> TranscriptionBackend:
         if kind == "gigaam":
             return _build_gigaam(canonical, **self._kwargs)
+        if kind == "nemo":
+            return _build_nemo(canonical, **self._kwargs)
         return _build_faster_whisper(canonical, **self._kwargs)

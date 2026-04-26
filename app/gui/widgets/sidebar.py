@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.theme import icon_path
+from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 
 
 NavItem = Tuple[str, str]
@@ -64,7 +65,26 @@ class Sidebar(QWidget):
         self._list.verticalScrollBar().setSingleStep(20)
         # Heroicons render best at ~20 px in a 14-px-text row.
         self._list.setIconSize(QSize(20, 20))
-        layout.addWidget(self._list)
+        # Stretch=1 so the nav list eats whatever vertical space the
+        # bottom recording-status slot doesn't claim.
+        layout.addWidget(self._list, 1)
+
+        # Recording status slot pinned to the bottom-left of the
+        # sidebar — chip-style card matching the topbar's resource
+        # widget, always shows its placeholder state even when idle.
+        # Wrapped in its own widget so the layout's contentsMargins
+        # handle the bottom-alignment with the ModelsView's
+        # ``setContentsMargins(28, 22, 28, 22)`` (QSS ``margin`` on
+        # the chip itself isn't reliable for plain QWidgets — Qt
+        # routes it through QStyle which doesn't always apply it).
+        chip_holder = QWidget(self)
+        chip_holder.setObjectName("RecordingStatusHolder")
+        chip_layout = QVBoxLayout(chip_holder)
+        chip_layout.setContentsMargins(12, 12, 12, 22)
+        chip_layout.setSpacing(0)
+        self.recording_status = RecordingStatusWidget(chip_holder)
+        chip_layout.addWidget(self.recording_status)
+        layout.addWidget(chip_holder)
 
         resolved = tuple(items) if items is not None else _DEFAULT_ITEMS
         for key, label in resolved:

@@ -1,11 +1,12 @@
 # Lazy to Text
 
-Press a global hotkey, speak, paste. Local Whisper- and GigaAM-based speech-to-text for Windows, with a Qt UI.
+Press a global hotkey, speak, paste. Local Whisper / GigaAM / Parakeet speech-to-text for Windows, with a Qt UI.
 
 [![Python](https://img.shields.io/badge/python-3.12+-blue)](https://www.python.org/)
 [![Qt](https://img.shields.io/badge/UI-PySide6-41cd52)](https://doc.qt.io/qtforpython-6/)
 [![faster-whisper](https://img.shields.io/badge/backend-faster--whisper-orange)](https://github.com/SYSTRAN/faster-whisper)
 [![GigaAM](https://img.shields.io/badge/backend-gigaam-7a3fff)](https://github.com/salute-developers/GigaAM)
+[![NeMo](https://img.shields.io/badge/backend-NVIDIA%20NeMo-76b900)](https://github.com/NVIDIA/NeMo)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ![Hero](docs/screenshots/hero.png)
@@ -15,40 +16,55 @@ Press a global hotkey, speak, paste. Local Whisper- and GigaAM-based speech-to-t
 ## What it is
 
 A Windows desktop application that records microphone audio on a global hotkey,
-transcribes it locally via either [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
-(CTranslate2 under the hood) or Sber's [GigaAM](https://github.com/salute-developers/GigaAM)
-acoustic model, and pastes the resulting text into the focused window.
+transcribes it locally via [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+(CTranslate2), Sber's [GigaAM](https://github.com/salute-developers/GigaAM), or
+NVIDIA's [NeMo](https://github.com/NVIDIA/NeMo) running Parakeet TDT v3, and
+pastes the resulting text into the focused window.
 
 The audio never leaves the machine. No Docker, no cloud APIs — every model
 runs in-process and downloads from Hugging Face / Sber's CDN on first use.
 
 ## Features
 
-- **Two engines, one Protocol.** A `RoutedBackend` facade picks between
-  faster-whisper and GigaAM based on the selected model and rebuilds the
-  inner backend transparently when the user switches across engines.
+- **Three engines, one Protocol.** A `RoutedBackend` facade picks between
+  faster-whisper, GigaAM, and NVIDIA NeMo based on the selected model and
+  rebuilds the inner backend transparently when the user switches across
+  engines.
 - **Per-model inference settings.** Each card surfaces its own inline
   panel — language, VAD filter, beam size, temperature, initial prompt —
   persisted under `model_overrides.<alias>` and pushed live into the
   running backend without a restart.
-- **9 model presets.** Whisper Distil, Turbo (fp16/int8), Large v3
-  (fp16/int8), Russian fine-tunes (fp16/int8), GigaAM v3 e2e CTC + RNN-T.
+- **11 model presets.** Whisper Distil, Turbo (fp16/int8), Large v3
+  (fp16/int8), Russian fine-tunes (fp16/int8), GigaAM v3 e2e CTC + RNN-T,
+  NVIDIA Parakeet TDT v3 (multilingual, 25 EU languages incl. Russian).
   Family chips on each card colour-code the lineage.
 - **Long-form audio.** Captures over 25 s on GigaAM route through
-  `transcribe_longform` with pyannote VAD; on faster-whisper they go
-  through Silero VAD when the toggle is on.
+  `transcribe_longform` with pyannote VAD; faster-whisper goes through
+  Silero VAD when the toggle is on; Parakeet TDT v3 handles multi-minute
+  audio natively via local relative-position attention.
+- **Cancel-load button.** Mis-clicked a heavy model card? A red Cancel
+  pill appears next to the loading indicator in the topbar. Clicking it
+  abandons the in-flight load, rolls back the active card / config /
+  topbar pill to whatever was active before, and clears the loading
+  state immediately — no waiting for a stuck import to finish.
+- **Splash screen on cold start.** When the persisted model is cached,
+  the app pre-loads it in the main thread on a movable / minimisable
+  splash widget BEFORE the main window appears — so the main window
+  never freezes for the 11–30 s it takes NeMo or torch to import.
 - **Live resource monitor.** A 4-block widget in the topbar tracks
   CPU / RAM / GPU utilisation / VRAM via `psutil` + `nvidia-ml-py`,
   refreshing every two seconds.
-- **Live VU meter.** A tiny audio-level bar appears in the topbar while
-  recording, so silent or muted mics show up before you finish speaking.
+- **Recording status chip with live VU.** A `STATUS · Idle / Recording /
+  Processing` chip pinned to the sidebar's bottom-left corner mirrors the
+  topbar's resource cards — the VU meter under it animates while
+  recording, so silent / muted mics show up before you finish speaking.
 - **Toast confirmation.** A bottom-right banner with a preview of the
   latest transcription pops up after every successful run — silent
   paste flow used to be invisible.
 - **Searchable model browser.** A search box plus family-filter chips
   (All / Whisper / Whisper Turbo / Whisper Distil / Whisper RU /
-  GigaAM) narrow the grid; an empty-state placeholder appears if
-  nothing matches.
+  GigaAM / Parakeet) narrow the grid; an empty-state placeholder appears
+  if nothing matches.
 - **Coloured logs view.** Records colour-coded by level + logger
   source, with a "Show network logs" toggle that hides httpx /
   huggingface_hub noise and a search field that filters the buffer
@@ -83,11 +99,12 @@ uv run lazy-to-text-ui       # launch the app
 ```
 
 The first launch leaves no model loaded — pick one from the Models tab and
-click **Download**. Weights for Whisper-derivatives land in
-`<project>/models/hub/` (HF cache); GigaAM weights go to
+click **Download**. Weights for Whisper-derivatives and NeMo / Parakeet
+land in `<project>/models/hub/` (HF cache); GigaAM weights go to
 `~/.cache/gigaam/<name>.ckpt`. Press `Ctrl+F2`, speak, `Ctrl+F3` — the
 transcript pastes into whatever has focus, and a banner confirms in the
-bottom-right.
+bottom-right. Subsequent launches pre-load the persisted active model on a
+splash screen so the main window appears already responsive.
 
 ## Screenshots
 
@@ -200,16 +217,18 @@ and auto-paste fields without touching the rest of the file.
                                           │ picks engine by model.     │
                                           │ backend_kind, swaps inner  │
                                           │ on cross-engine change.    │
-                                          └─────┬─────────────────┬────┘
-                                                │                 │
-                                  faster_whisper▼                 ▼ gigaam
-                              ┌───────────────────────┐  ┌────────────────────┐
-                              │ FasterWhisperBackend  │  │ GigaamBackend      │
-                              │ ctranslate2 + cuBLAS  │  │ pyannote VAD for   │
-                              │ + cuDNN via cu12      │  │ longform >25 s     │
-                              │ wheels; tqdm progress │  │ via gigaam[longform]│
-                              │ piped through to UI   │  └────────────────────┘
-                              └───────────────────────┘
+                                          └────┬─────────────┬─────────┴───┐
+                                               │             │             │
+                                faster_whisper ▼             ▼ gigaam      ▼ nemo
+                          ┌───────────────────────┐ ┌───────────────────┐ ┌────────────────────┐
+                          │ FasterWhisperBackend  │ │ GigaamBackend     │ │ NemoBackend        │
+                          │ ctranslate2 + cuBLAS  │ │ pyannote VAD for  │ │ Parakeet TDT v3    │
+                          │ + cuDNN via cu12      │ │ longform >25 s    │ │ rel_pos_local_attn │
+                          │ wheels; tqdm progress │ │ via               │ │ for multi-minute   │
+                          │ piped through to UI   │ │ gigaam[longform]  │ │ audio; nemo_toolkit│
+                          └───────────────────────┘ └───────────────────┘ │ + signal/numpy     │
+                                                                          │ shims for Windows  │
+                                                                          └────────────────────┘
 ```
 
 The Qt layer (`app/gui/`) holds every UI concern. The domain layer
@@ -218,9 +237,11 @@ The Qt layer (`app/gui/`) holds every UI concern. The domain layer
 signals into. The speech-to-text engine sits behind the
 `TranscriptionBackend` Protocol in `app/backends/` and is dispatched by
 `RoutedBackend` based on the selected model's `backend_kind` —
-`faster_whisper` and `gigaam` ship today; cloud APIs would be a drop-in
-addition. `BackendStatusPoller` polls `backend.status()` off the UI
-thread; `ResourceMonitor` polls CPU / RAM / GPU on a Qt timer.
+`faster_whisper`, `gigaam`, and `nemo` ship today; cloud APIs would be a
+drop-in addition. `ResourceMonitor` polls CPU / RAM / GPU on a Qt timer
+to drive the topbar widget. `app/gui/splash.py` pre-loads the persisted
+model in the main thread before the main window appears, so the GIL-
+heavy `import nemo` / `import torch` step never freezes a half-built UI.
 
 ## Building a standalone executable
 
@@ -235,10 +256,11 @@ Output: `dist\LazyToText\LazyToText.exe` (folder mode, fastest startup) or
 run). The build script delegates to `pyinstaller` via `uv run`; a fresh
 `uv sync` runs first unless `-SkipSync` is passed.
 
-> **Bundle size note** — with the `gigaam[longform]` extras pulling in
-> torch + pyannote + transformers, the folder build now lands in the
-> 4–5 GB range (vs ~144 MB before GigaAM). One-file is similarly large.
-> Model weights are NOT bundled and download on first use of each card.
+> **Bundle size note** — with the `gigaam[longform]` and
+> `nemo_toolkit[asr]` extras pulling in torch + pyannote + transformers
+> + lhotse + hydra, the folder build now lands in the 6–8 GB range (vs
+> ~144 MB before GigaAM). One-file is similarly large. Model weights
+> are NOT bundled and download on first use of each card.
 
 ## Installing locally
 
@@ -298,8 +320,8 @@ build. From source, `uv sync` installs the same wheels. **Driver-side**,
 you still need an NVIDIA GPU with up-to-date drivers (CUDA 12 era).
 
 CPU-only just about works for `gigaam-v3-e2e-ctc`; everything else
-(`turbo*`, `large-v*`, `gigaam-v3-e2e-rnnt`) will be too slow to be
-useful without a GPU.
+(`turbo*`, `large-v*`, `gigaam-v3-e2e-rnnt`, `parakeet-tdt-v3`) will
+be too slow to be useful without a GPU.
 
 ## GigaAM longform — pyannote VAD requirements
 
@@ -321,7 +343,7 @@ on short captures.
 
 ```powershell
 uv sync                                         # production deps + dev tools
-uv run pytest                                   # full test suite (~330 tests)
+uv run pytest                                   # full test suite (485 tests)
 uv run python lazy-to-text-ui.py                # run from source
 uv run python scripts/generate_screenshots.py  # regenerate docs/screenshots
 ```
@@ -344,6 +366,7 @@ the actual hardware or libraries.
 - PySide6 (Qt 6.11) for the UI, bundled Inter Variable + Heroicons
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) + CTranslate2 for in-process Whisper inference
 - [GigaAM](https://github.com/salute-developers/GigaAM) (PyTorch) for the Russian-only end-to-end engine, with `gigaam[longform]` for >25 s captures
+- [NVIDIA NeMo](https://github.com/NVIDIA/NeMo) (`nemo_toolkit[asr]`) for Parakeet TDT v3 (25 EU languages), with `signal.SIGKILL` and `np.sctypes` shims so it boots cleanly on Windows + NumPy 2.x
 - `sounddevice` for audio capture, `pyautogui` + `pyperclip` for paste,
   `global-hotkeys` + `pywin32` for Windows-native hotkey registration
 - `psutil` + `nvidia-ml-py` for the live resource monitor
@@ -354,6 +377,8 @@ the actual hardware or libraries.
   [CTranslate2](https://github.com/OpenNMT/CTranslate2) under the Whisper hood.
 - [OpenAI Whisper](https://github.com/openai/whisper) — the underlying model.
 - [GigaAM](https://github.com/salute-developers/GigaAM) (Sber) — the Russian-specialised acoustic model.
+- [NVIDIA NeMo](https://github.com/NVIDIA/NeMo) and
+  [Parakeet TDT v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) — the multilingual European-language engine.
 - [Heroicons](https://heroicons.com) (Tailwind Labs) — sidebar icons.
 - [Inter](https://rsms.me/inter/) (Rasmus Andersson) — bundled UI font.
 - UI direction borrowed from [Spokenly](https://spokenly.app/) (macOS).

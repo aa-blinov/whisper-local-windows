@@ -461,3 +461,310 @@ def test_model_card_emits_select_signal_with_alias(qtbot):
         qtbot.mouseClick(select_btn, Qt.LeftButton)
 
     assert blocker.args == ["large-v3"]
+
+
+# ---- Delete button ---------------------------------------------------------
+
+
+def _delete_btn(card) -> QPushButton:
+    return next(
+        b for b in card.findChildren(QPushButton)
+        if b.objectName() == "DeleteButton"
+    )
+
+
+def test_model_card_has_a_delete_button(qtbot):
+    """Every card carries a Delete affordance — cached state controls
+    its visibility, but the widget is always present."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    btns = [b.objectName() for b in card.findChildren(QPushButton)]
+    assert "DeleteButton" in btns
+
+
+def test_model_card_delete_button_hidden_when_not_cached(qtbot, monkeypatch):
+    """Nothing to delete → no button. Otherwise the user gets an
+    enabled control that does nothing (or worse, fires a confirm
+    dialog over an empty cache)."""
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: False)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    assert not _delete_btn(card).isVisible()
+
+
+def test_model_card_delete_button_visible_when_cached_and_inactive(qtbot, monkeypatch):
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.show()
+    qtbot.waitExposed(card)
+    assert _delete_btn(card).isVisible()
+
+
+def test_model_card_delete_button_hidden_when_active(qtbot, monkeypatch):
+    """Deleting the loaded model would crash the running backend —
+    hide the button until the user picks a different active card."""
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.show()
+    qtbot.waitExposed(card)
+    card.set_active(True)
+    assert not _delete_btn(card).isVisible()
+
+
+def test_model_card_delete_button_hidden_when_loading(qtbot, monkeypatch):
+    """Mid-download / mid-deserialise the cache state is undefined —
+    hiding Delete avoids confusing the user with a button that might
+    succeed or fail depending on timing."""
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.show()
+    qtbot.waitExposed(card)
+    card.set_loading(True)
+    assert not _delete_btn(card).isVisible()
+
+
+def test_model_card_delete_button_emits_signal_with_alias(qtbot, monkeypatch):
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.show()
+    qtbot.waitExposed(card)
+
+    with qtbot.waitSignal(card.delete_requested, timeout=1000) as blocker:
+        qtbot.mouseClick(_delete_btn(card), Qt.LeftButton)
+
+    assert blocker.args == ["large-v3"]
+
+
+def test_model_card_refresh_cache_state_toggles_delete_visibility(qtbot, monkeypatch):
+    """After a Download or Delete completes, the controller calls
+    ``refresh_cache_state`` — Delete's visibility must follow."""
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    cache_status = {"cached": True}
+    monkeypatch.setattr(
+        model_card_module,
+        "is_cached_for_info",
+        lambda info: cache_status["cached"],
+    )
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.show()
+    qtbot.waitExposed(card)
+    assert _delete_btn(card).isVisible()
+
+    cache_status["cached"] = False
+    card.refresh_cache_state()
+    assert not _delete_btn(card).isVisible()
+
+
+# ---- HF token warning (GigaAM only) ----------------------------------------
+
+
+def _make_gigaam_info():
+    from app.model_mapping import ModelInfo
+
+    return ModelInfo(
+        alias="gigaam-v3-e2e-ctc",
+        canonical="v3_e2e_ctc",
+        display_name="GigaAM v3 CTC (e2e, punctuated)",
+        size_mb=260,
+        vram_gb=2.0,
+        speed="fast",
+        quality="excellent",
+        languages="Russian (only)",
+        description="Sber GigaAM v3 with CTC decoder.",
+        backend_kind="gigaam",
+        family="GigaAM",
+    )
+
+
+def _hf_warning(card):
+    from PySide6.QtWidgets import QLabel
+
+    return card.findChild(QLabel, "HfTokenWarning")
+
+
+def test_gigaam_card_has_hf_token_warning_widget(qtbot):
+    """Every GigaAM card carries a warning label that surfaces when
+    no HF token is configured — long-form audio (>25 s) routes
+    through pyannote VAD which needs a token to download
+    ``pyannote/segmentation-3.0`` (gated)."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_gigaam_info())
+    qtbot.addWidget(card)
+    assert _hf_warning(card) is not None
+
+
+def test_whisper_card_has_no_hf_token_warning(qtbot):
+    """Whisper long-form goes through Silero VAD — no HF token
+    needed — so the warning widget is omitted entirely on
+    ``faster_whisper`` cards."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    assert _hf_warning(card) is None
+
+
+def test_gigaam_card_warning_visible_when_no_token(qtbot, monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_gigaam_info())
+    qtbot.addWidget(card)
+    card.show()
+    assert _hf_warning(card).isVisible()
+
+
+def test_gigaam_card_warning_hidden_when_token_set(qtbot, monkeypatch):
+    monkeypatch.setenv("HF_TOKEN", "hf_dummy_value")
+
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_gigaam_info())
+    qtbot.addWidget(card)
+    card.show()
+    assert not _hf_warning(card).isVisible()
+
+
+def test_gigaam_card_refresh_hf_token_state_updates_warning(qtbot, monkeypatch):
+    """After the user pastes a token in Settings, the controller
+    calls ``refresh_hf_token_state`` to re-evaluate every GigaAM
+    card's warning visibility without rebuilding the card tree."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_gigaam_info())
+    qtbot.addWidget(card)
+    card.show()
+    assert _hf_warning(card).isVisible()
+
+    monkeypatch.setenv("HF_TOKEN", "hf_dummy_value")
+    card.refresh_hf_token_state()
+    assert not _hf_warning(card).isVisible()
+
+
+def test_gigaam_card_warning_text_mentions_settings_and_25s(qtbot, monkeypatch):
+    """User-facing copy must explain WHY (long-form / 25 s cap) and
+    WHERE to fix (Settings tab) — otherwise the warning is just
+    noise."""
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_gigaam_info())
+    qtbot.addWidget(card)
+    text = _hf_warning(card).text().lower()
+    assert "25" in text
+    assert "settings" in text or "token" in text
+
+
+# ---- Backend-specific inference panel dispatch -----------------------------
+
+
+def _make_parakeet_info():
+    from app.model_mapping import ModelInfo
+
+    return ModelInfo(
+        alias="parakeet-tdt-v3",
+        canonical="nvidia/parakeet-tdt-0.6b-v3",
+        display_name="Parakeet TDT v3",
+        size_mb=1200,
+        vram_gb=2.0,
+        speed="fast",
+        quality="excellent",
+        languages="25 langs incl. Russian, Ukrainian",
+        description="NVIDIA Parakeet TDT 0.6B v3 — 25 European languages.",
+        backend_kind="nemo",
+        family="Parakeet",
+    )
+
+
+def test_whisper_card_uses_whisper_inference_panel(qtbot):
+    """Whisper-backed cards get the full 5-knob panel
+    (language / VAD / beam / temperature / prompt)."""
+    from app.gui.widgets.inference_settings_panel import InferenceSettingsPanel
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())  # _make_info() builds a Whisper card
+    qtbot.addWidget(card)
+    assert isinstance(card._settings_panel, InferenceSettingsPanel)
+
+
+def test_nemo_card_uses_nemo_inference_panel(qtbot):
+    """NeMo (Parakeet/Canary) cards get the minimal panel
+    — NeMo's API only exposes the ``timestamps`` toggle."""
+    from app.gui.widgets.model_card import ModelCard
+    from app.gui.widgets.nemo_inference_settings_panel import (
+        NemoInferenceSettingsPanel,
+    )
+
+    card = ModelCard(_make_parakeet_info())
+    qtbot.addWidget(card)
+    assert isinstance(card._settings_panel, NemoInferenceSettingsPanel)
+
+
+def test_gigaam_card_has_no_inference_panel(qtbot):
+    """GigaAM is end-to-end with no transcribe-time tunables —
+    the panel is omitted entirely so a disabled control group
+    doesn't look like a rendering bug."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_gigaam_info())
+    qtbot.addWidget(card)
+    assert card._settings_panel is None
+
+
+def test_nemo_card_panel_emits_through_card_signal(qtbot):
+    """The card forwards each panel's ``settings_changed`` to its
+    own ``inference_settings_changed`` so the controller listens at
+    a single point regardless of backend kind."""
+    from app.gui.widgets.model_card import ModelCard
+    from app.inference_settings import NemoInferenceSettings
+
+    card = ModelCard(_make_parakeet_info())
+    qtbot.addWidget(card)
+
+    with qtbot.waitSignal(card.inference_settings_changed, timeout=1000) as blocker:
+        card._settings_panel.settings_changed.emit(
+            NemoInferenceSettings(timestamps=True)
+        )
+
+    alias, settings = blocker.args
+    assert alias == "parakeet-tdt-v3"
+    assert isinstance(settings, NemoInferenceSettings)
+    assert settings.timestamps is True

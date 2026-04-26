@@ -2,8 +2,32 @@
 
 from __future__ import annotations
 
+
+# DLL-ordering workaround for a pyarrow ↔ Qt segfault on Windows.
+#
+# pyarrow's ``arrow.dll`` and Qt's runtime end up sharing some Windows-
+# global state (CRT / OpenSSL / something else — the EventLog points at
+# arrow.dll offset 0xbc5431 with exception 0xC0000005 every time). If
+# Qt loads first and pyarrow comes later — through the NeMo backend
+# pulling in lhotse → pyarrow on a worker thread — pyarrow segfaults
+# the entire process during ``import pyarrow.arrow.dll``. Importing
+# pyarrow FIRST puts arrow.dll into the loader's address space before
+# Qt has a chance to claim conflicting slots, and the rest of the day
+# is fine.
+#
+# Reproduced cleanly with ``scripts/diag_parakeet_with_qt.py`` (segfault
+# inside ``import nemo.collections.asr``) vs ``diag_parakeet_qt_preimport``
+# (ALL DONE). Wrapped in try/except so machines without pyarrow installed
+# (a Whisper-only setup) still boot.
+try:  # noqa: SIM105 — keep the explicit comment + import-time placement
+    import pyarrow  # noqa: F401  (warmup-only, value unused)
+except ImportError:
+    pass
+
+
 import os
 import sys
+from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from PySide6.QtGui import QIcon
@@ -114,7 +138,6 @@ def build_application(
     theme: str = "dark",
     config: Optional[Any] = None,
     history: Optional[Any] = None,
-    backend_status_fetcher: Optional[Any] = None,
     recording: Optional[Any] = None,
     tray: Optional[Any] = None,
     install_logs: bool = False,
@@ -147,7 +170,6 @@ def build_application(
             config=config,
             window=window,
             history=history,
-            backend_status_fetcher=backend_status_fetcher,
             recording=recording,
             tray=tray,
         )
@@ -159,19 +181,69 @@ def build_application(
     return app, window
 
 
+def _apply_hf_token(configured: Optional[str]) -> bool:
+    """Mirror the user's HF token into the live process environment.
+
+    huggingface_hub and pyannote both read ``HF_TOKEN`` (alongside
+    ``HUGGING_FACE_HUB_TOKEN`` as a legacy alias). Setting just one
+    is enough — huggingface_hub treats them as equivalent.
+
+    Returns True iff a non-empty token was applied.
+    """
+    if configured and str(configured).strip():
+        token = str(configured).strip()
+        os.environ["HF_TOKEN"] = token
+        os.environ["HUGGING_FACE_HUB_TOKEN"] = token
+        return True
+    os.environ.pop("HF_TOKEN", None)
+    os.environ.pop("HUGGING_FACE_HUB_TOKEN", None)
+    return False
+
+
+def _apply_storage_path(configured: Optional[str]) -> str:
+    """Resolve and apply the user's chosen models directory to env vars.
+
+    ``HF_HOME`` is always set (faster-whisper / huggingface_hub
+    ignores the system-wide ``~/.cache/huggingface`` only when this is
+    set). ``GIGAAM_MODELS_DIR`` is set ONLY when the user has
+    explicitly picked a custom path — leaving it unset keeps GigaAM
+    on its library default ``~/.cache/gigaam`` so existing installs
+    don't have their already-downloaded ckpt files orphaned by the
+    upgrade. Returns the resolved hub root for logging.
+
+    Must run before any ``huggingface_hub`` or ``gigaam`` import: HF
+    reads ``HF_HOME`` once at module load, GigaAM doesn't but its
+    ``download_root`` is read per-call so the env var has to be in
+    place by the time ``GigaamBackend.load`` runs.
+    """
+    from app.utils import get_models_root
+
+    root = get_models_root(configured)
+    os.environ["HF_HOME"] = root
+    is_custom = bool(configured and str(configured).strip())
+    if is_custom:
+        os.environ["GIGAAM_MODELS_DIR"] = str(Path(root) / "gigaam")
+    else:
+        os.environ.pop("GIGAAM_MODELS_DIR", None)
+    return root
+
+
 def main() -> int:
     import logging
 
-    # Redirect Hugging Face downloads into <project>/models/ before any
-    # huggingface_hub / faster_whisper code is imported — these libs read
-    # HF_HOME at import time. Without this the cache lands in
-    # ``~/.cache/huggingface/hub``, which is invisible to most users and
-    # eats the system drive.
-    from app.utils import get_project_models_path
-
-    os.environ.setdefault("HF_HOME", get_project_models_path())
-
+    # Read the configured ``storage.models_dir`` (may be empty for
+    # 'use the default') from config.yaml, then plant ``HF_HOME`` and
+    # ``GIGAAM_MODELS_DIR`` BEFORE the libraries that need them get
+    # imported. ConfigManager itself doesn't pull in HF/torch so we
+    # can safely import it first.
     from app.config_manager import ConfigManager
+
+    _early_config = ConfigManager()
+    storage_root = _apply_storage_path(
+        _early_config.get_setting("storage", "models_dir")
+    )
+    _apply_hf_token(_early_config.get_setting("huggingface", "token"))
+
     from app.gui.controllers.recording_controller import RecordingController
     from app.gui.recording_factory import build_recording_stack
     from app.gui.widgets.tray_icon import AppTrayIcon
@@ -245,7 +317,25 @@ def main() -> int:
     )
     _logging.getLogger().addHandler(_file_handler)
 
-    config = ConfigManager()
+    # Bridge ``warnings.warn(...)`` into the logging pipeline so
+    # NeMo / PyTorch / pyannote deprecation noise (and our own
+    # ``DeprecationWarning`` etc.) lands in the same place as
+    # everything else — both ``app.log`` and the Logs view.
+    # Without this, those warnings only print to stderr and
+    # disappear in a windowed build with no console.
+    _logging.captureWarnings(True)
+
+    # Reuse the early config — re-creating it would re-read the YAML
+    # and just produce identical state, but the early one was made
+    # before the logging file handler was attached, so log messages
+    # from the load path went to stderr only. That's fine; we don't
+    # need them in app.log.
+    config = _early_config
+    logging.getLogger(__name__).info(
+        "Models root: %s (configured=%r)",
+        storage_root,
+        _early_config.get_setting("storage", "models_dir"),
+    )
 
     state_manager = None
     hotkey_listener = None
@@ -267,6 +357,7 @@ def main() -> int:
             hotkey_listener=hotkey_listener,
         )
 
+    splash = None
     if backend is not None:
         # Auto-load only models whose weights are already cached on disk.
         # Triggering a fresh download silently on startup is a UX
@@ -278,11 +369,41 @@ def main() -> int:
 
         canonical = backend.current_model()
         try:
-            cached = is_cached_for_info(get_model(alias_for(canonical)))
+            info_for_load = get_model(alias_for(canonical))
+            cached = is_cached_for_info(info_for_load)
         except KeyError:
+            info_for_load = None
             cached = is_model_cached(canonical)
         if cached:
-            backend.load()
+            # Pre-load the backend BEFORE creating the main window so
+            # the GIL-locked NeMo / torch import doesn't freeze a
+            # half-built UI. The splash widget is movable and
+            # minimisable while we pump processEvents, which means
+            # the user can drag it / send it to the taskbar even
+            # while ``import nemo`` holds the GIL most of the time
+            # (Qt grabs short windows between Python yields).
+            from app.gui.splash import make_splash, wait_for_backend
+
+            display_name = (
+                info_for_load.display_name if info_for_load is not None else canonical
+            )
+            splash = make_splash("Lazy to Text")
+            splash.show()
+            qt_app.processEvents()
+            logging.getLogger(__name__).info(
+                "Pre-loading %s on the main thread (splash up)…",
+                display_name,
+            )
+            result = wait_for_backend(
+                splash=splash,
+                backend=backend,
+                display_name=display_name,
+                app=qt_app,
+                timeout_s=1800.0,
+            )
+            logging.getLogger(__name__).info(
+                "Pre-load finished: %s", result,
+            )
         else:
             logging.getLogger(__name__).info(
                 "Persisted model %s is not cached — skipping auto-load. "
@@ -291,7 +412,6 @@ def main() -> int:
             )
 
     history = state_manager.history_manager if state_manager is not None else None
-    backend_status_fetcher = backend.status if backend is not None else None
 
     # qt_app already exists from the single-instance gate above.
     tray: Optional[AppTrayIcon] = None
@@ -305,7 +425,6 @@ def main() -> int:
     app, window = build_application(
         config=config,
         history=history,
-        backend_status_fetcher=backend_status_fetcher,
         recording=recording_controller,
         tray=tray,
         install_logs=True,
@@ -318,6 +437,16 @@ def main() -> int:
     resource_monitor = ResourceMonitor(parent=window)
     resource_monitor.metrics_updated.connect(window.topbar.set_resource_metrics)
     resource_monitor.start()
+
+    if splash is not None:
+        # Tear the splash down once the main window is ready to take
+        # over. ``finish`` waits for the next ``window.show()`` — but
+        # we call it explicitly to be sure the splash isn't lingering
+        # when ``app.exec()`` starts.
+        try:
+            splash.finish(window)
+        except Exception:  # pragma: no cover — defensive
+            pass
 
     window.show()
 

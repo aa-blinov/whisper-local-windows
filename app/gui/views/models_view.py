@@ -28,6 +28,10 @@ _FILTER_ALL = "All"
 
 class ModelsView(QWidget):
     model_selected = Signal(str)
+    # Re-emitted from whichever card the user clicked Delete on. The
+    # controller is responsible for confirming with the user before
+    # actually wiping the cache.
+    model_delete_requested = Signal(str)
     # Re-emitted from whichever card had its inline panel touched —
     # ``(alias, InferenceSettings)``.
     inference_settings_changed = Signal(str, InferenceSettings)
@@ -103,6 +107,7 @@ class ModelsView(QWidget):
         for info in resolved:
             card = ModelCard(info, parent=content)
             card.select_requested.connect(self.model_selected.emit)
+            card.delete_requested.connect(self.model_delete_requested.emit)
             card.inference_settings_changed.connect(
                 self.inference_settings_changed.emit
             )
@@ -148,11 +153,15 @@ class ModelsView(QWidget):
     def active_alias(self) -> Optional[str]:
         return self._active_alias
 
-    def set_active(self, alias: str) -> None:
-        if alias not in self._cards:
+    def set_active(self, alias: Optional[str]) -> None:
+        """Mark a card as the currently active one. ``None`` clears
+        the active state on every card — the rollback hook used by
+        the cancel-load flow when the user backs out of a
+        just-clicked model before its load finishes."""
+        if alias is not None and alias not in self._cards:
             raise KeyError(alias)
         for card_alias, card in self._cards.items():
-            card.set_active(card_alias == alias)
+            card.set_active(alias is not None and card_alias == alias)
         self._active_alias = alias
 
     def is_locked(self) -> bool:
@@ -192,6 +201,14 @@ class ModelsView(QWidget):
         card = self._cards.get(alias)
         if card is not None:
             card.set_inference_settings(settings)
+
+    def refresh_hf_token_state(self) -> None:
+        """Recompute the HF-token warning visibility on every card.
+        Called by the controller after the user pastes a token in
+        Settings — Whisper cards no-op (no warning widget), GigaAM
+        cards hide / show their warning based on the env vars."""
+        for card in self._cards.values():
+            card.refresh_hf_token_state()
 
     def refresh_cache_state(self) -> None:
         """Re-check the on-disk cache for every card. Called after a model

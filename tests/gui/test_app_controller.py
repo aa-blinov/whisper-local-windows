@@ -270,15 +270,20 @@ def test_reset_shortcuts_restores_defaults_in_config(qtbot):
     )
 
     AppController(config=config, window=window)
-    window.shortcuts_view.reset_requested.emit()
+    window.shortcuts_view.hotkeys_reset_requested.emit()
 
     expected_start = DEFAULT_CONFIG["hotkey"]["start_recording_hotkey"]
     expected_stop = DEFAULT_CONFIG["hotkey"]["stop_recording_hotkey"]
-    expected_paste = DEFAULT_CONFIG["clipboard"]["auto_paste"]
 
     assert ("hotkey", "start_recording_hotkey", expected_start) in config.writes
     assert ("hotkey", "stop_recording_hotkey", expected_stop) in config.writes
-    assert ("clipboard", "auto_paste", expected_paste) in config.writes
+    # Per-card reset: ``auto_paste`` is no longer reset by the
+    # hotkeys button — it's a separate setting and would have its
+    # own reset path on the Clipboard card if we wanted one.
+    assert not any(
+        write[0] == "clipboard" and write[1] == "auto_paste"
+        for write in config.writes
+    )
 
 
 def test_reset_shortcuts_updates_view_to_defaults(qtbot):
@@ -299,12 +304,14 @@ def test_reset_shortcuts_updates_view_to_defaults(qtbot):
     )
 
     AppController(config=config, window=window)
-    window.shortcuts_view.reset_requested.emit()
+    window.shortcuts_view.hotkeys_reset_requested.emit()
 
     sv = window.shortcuts_view
     assert sv.start_hotkey() == DEFAULT_CONFIG["hotkey"]["start_recording_hotkey"]
     assert sv.stop_hotkey() == DEFAULT_CONFIG["hotkey"]["stop_recording_hotkey"]
-    assert sv.auto_paste() == bool(DEFAULT_CONFIG["clipboard"]["auto_paste"])
+    # auto_paste preserved (was False, still False) — hotkeys reset
+    # doesn't touch it.
+    assert sv.auto_paste() is False
 
 
 def test_reset_does_not_re_emit_save_requested(qtbot):
@@ -320,11 +327,11 @@ def test_reset_does_not_re_emit_save_requested(qtbot):
 
     # Capture only writes that happen AFTER the reset.
     writes_before = len(config.writes)
-    window.shortcuts_view.reset_requested.emit()
+    window.shortcuts_view.hotkeys_reset_requested.emit()
     writes_during = len(config.writes) - writes_before
 
-    # Reset should write exactly 3 settings (start, stop, auto_paste).
-    # If save_requested re-fired from set_values, we'd see additional writes.
+    # Reset writes exactly 3 settings: start, stop, cancel.
+    # If save_requested re-fired from set_values, we'd see extras.
     assert writes_during == 3
 
 
@@ -441,6 +448,717 @@ def test_controller_clears_history_through_manager(qtbot, monkeypatch):
 
     assert history.cleared is True
     assert window.history_view._source_model.rowCount() == 0
+
+
+def test_controller_deletes_cached_model_after_confirm(qtbot, monkeypatch):
+    """Yes on the confirmation dialog → delete is called with the
+    matching ModelInfo, then ``refresh_cache_state`` is invoked so the
+    Download/Select label and the Delete-button visibility update."""
+    from PySide6.QtWidgets import QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.Yes)
+
+    deleted: list = []
+
+    def fake_delete(info):
+        deleted.append(info.alias)
+        return True
+
+    monkeypatch.setattr(controller_module, "delete_cached_for_info", fake_delete)
+
+    refreshed = {"called": False}
+
+    def fake_refresh():
+        refreshed["called"] = True
+
+    monkeypatch.setattr(window.models_view, "refresh_cache_state", fake_refresh)
+
+    AppController(config=config, window=window)
+    window.models_view.model_delete_requested.emit("turbo-int8")
+
+    assert deleted == ["turbo-int8"]
+    assert refreshed["called"] is True
+
+
+def test_controller_does_not_delete_when_user_cancels(qtbot, monkeypatch):
+    """Cancel on the confirmation dialog → cache stays put and no
+    refresh fires (UI was already correct)."""
+    from PySide6.QtWidgets import QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.Cancel)
+
+    deleted: list = []
+    monkeypatch.setattr(
+        controller_module,
+        "delete_cached_for_info",
+        lambda info: deleted.append(info.alias) or True,
+    )
+
+    AppController(config=config, window=window)
+    window.models_view.model_delete_requested.emit("turbo-int8")
+
+    assert deleted == []
+
+
+def test_controller_delete_dialog_warns_about_shared_canonical(qtbot, monkeypatch):
+    """``turbo`` and ``turbo-int8`` point at the same HF repo; deleting
+    one wipes weights for both. The confirm-dialog text must mention
+    the sibling so the user isn't surprised when the other card flips
+    back to 'Download'."""
+    from PySide6.QtWidgets import QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+
+    captured: dict = {}
+
+    def fake_question(parent, title, text, *args, **kwargs):
+        captured["title"] = title
+        captured["text"] = text
+        return QMessageBox.Cancel
+
+    monkeypatch.setattr(QMessageBox, "question", fake_question)
+    monkeypatch.setattr(
+        controller_module, "delete_cached_for_info", lambda info: True
+    )
+
+    AppController(config=config, window=window)
+    window.models_view.model_delete_requested.emit("turbo")
+
+    # Sibling alias mentioned somewhere in the dialog body.
+    assert "turbo-int8" in captured["text"]
+
+
+def test_controller_prefills_storage_path_from_config(qtbot, monkeypatch):
+    """The Storage card needs to render the configured (or default)
+    path on first paint — without this the user sees '(loading…)'
+    forever even though the value is already in config."""
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": "D:/models"}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default"
+    )
+
+    AppController(config=config, window=window)
+    label = window.shortcuts_view.findChild(
+        type(window.shortcuts_view._storage_path_label),
+        "StoragePathLabel",
+    )
+    assert "D:/models" in label.text()
+
+
+def test_controller_prefill_marks_default_when_config_empty(qtbot, monkeypatch):
+    """Empty/missing ``storage.models_dir`` → label still shows the
+    *resolved* default path AND a '(default)' marker — so the user
+    knows where weights actually go even when nothing's overridden."""
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default-models"
+    )
+
+    AppController(config=config, window=window)
+    label = window.shortcuts_view.findChild(
+        type(window.shortcuts_view._storage_path_label),
+        "StoragePathLabel",
+    )
+    text = label.text()
+    assert "C:/default-models" in text
+    assert "default" in text.lower()
+
+
+def test_controller_storage_change_writes_config_and_updates_env(
+    qtbot, monkeypatch,
+):
+    """Picking a folder via QFileDialog → controller writes
+    ``storage.models_dir`` AND mirrors the new path into the live
+    process environment so the next ``WhisperModel`` /
+    ``gigaam.load_model`` call uses it without a restart.
+
+    The info dialog no longer mentions restarting (it would be a
+    lie now)."""
+    import os
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    # Tell monkeypatch about both env vars up-front so it tracks
+    # them and reverts on teardown — without this the production
+    # code's direct ``os.environ`` writes leak into other tests.
+    # ``setenv`` to a placeholder forces monkeypatch to track the
+    # variable; production code under test will overwrite it with
+    # ``os.environ[...] = ...`` which monkeypatch can then restore on
+    # teardown. ``delenv(raising=False)`` doesn't track unset vars
+    # — leaks env changes into other tests.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    chosen = "D:/lazy-to-text-models"
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default"
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: chosen,
+    )
+    info_calls: list = []
+    monkeypatch.setattr(
+        QMessageBox, "information",
+        lambda *a, **kw: info_calls.append((a, kw)),
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    assert config._data.get("storage", {}).get("models_dir") == chosen
+    # Env vars updated live so the next backend load picks up the
+    # new path. ``HF_HOME`` is the root; ``GIGAAM_MODELS_DIR`` is
+    # always the ``gigaam`` subdir of that root.
+    from pathlib import Path as _Path
+
+    assert os.environ.get("HF_HOME") == chosen
+    assert os.environ.get("GIGAAM_MODELS_DIR") == str(_Path(chosen) / "gigaam")
+    # Info dialog body must NOT mention restart/next-launch — that
+    # wording is now a lie since the change applies live.
+    assert info_calls, "expected QMessageBox.information to fire after change"
+    args, _kwargs = info_calls[0]
+    body_text = " ".join(str(a) for a in args).lower()
+    assert "restart" not in body_text
+    assert "next launch" not in body_text
+
+
+def test_controller_storage_change_cancelled_writes_nothing(qtbot, monkeypatch):
+    """User clicks Cancel on the folder picker → no config write,
+    no info dialog."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": "D:/old"}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default"
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory", lambda *a, **kw: "",
+    )
+    info_calls: list = []
+    monkeypatch.setattr(
+        QMessageBox, "information",
+        lambda *a, **kw: info_calls.append(a),
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    assert config._data["storage"]["models_dir"] == "D:/old"
+    assert info_calls == []
+
+
+def test_controller_storage_change_offers_migration_when_old_has_weights(
+    qtbot, monkeypatch, tmp_path,
+):
+    # ``setenv`` to a placeholder forces monkeypatch to track the
+    # variable; production code under test will overwrite it with
+    # ``os.environ[...] = ...`` which monkeypatch can then restore on
+    # teardown. ``delenv(raising=False)`` doesn't track unset vars
+    # — leaks env changes into other tests.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
+    """Old root has cached weights → controller pops a Yes/No/Cancel
+    prompt offering to move them. ``Yes`` triggers ``move_cached_dir``
+    for both ``hub/`` and ``gigaam/`` (whichever exist) and writes
+    the new path to config."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    old_root = tmp_path / "old-models"
+    new_root = tmp_path / "new-models"
+    (old_root / "hub").mkdir(parents=True)
+    (old_root / "hub" / "model.bin").write_bytes(b"x" * 4096)
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    # Old config is empty → resolves to old_root (default).
+    monkeypatch.setattr(
+        controller_module, "get_models_root",
+        lambda v: v or str(old_root),
+    )
+    # Folder picker returns the new path.
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: str(new_root),
+    )
+    # User clicks Yes on the migration prompt.
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: QMessageBox.Yes,
+    )
+    # Swallow the post-migration restart info dialog.
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    moves: list = []
+    real_move = controller_module.move_cached_dir
+
+    def tracking_move(src, dst):
+        moves.append((src, dst))
+        return real_move(src, dst)
+
+    monkeypatch.setattr(controller_module, "move_cached_dir", tracking_move)
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    # Hub moved, gigaam absent so its move was a no-op (still
+    # called — controller decides per-subdir).
+    assert any("hub" in src for src, _ in moves)
+    # Files actually moved on disk.
+    assert (new_root / "hub" / "model.bin").exists()
+    # New path written to config.
+    assert config._data["storage"]["models_dir"] == str(new_root)
+
+
+def test_controller_storage_change_no_prompt_when_old_root_is_empty(
+    qtbot, monkeypatch, tmp_path,
+):
+    # ``setenv`` to a placeholder forces monkeypatch to track the
+    # variable; production code under test will overwrite it with
+    # ``os.environ[...] = ...`` which monkeypatch can then restore on
+    # teardown. ``delenv(raising=False)`` doesn't track unset vars
+    # — leaks env changes into other tests.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
+    """Old root has nothing → skip the migration prompt entirely.
+    The user only sees the standard 'restart required' info."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    new_root = tmp_path / "new-models"
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root",
+        lambda v: v or str(tmp_path / "definitely-empty"),
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: str(new_root),
+    )
+
+    question_calls: list = []
+
+    def fake_question(*args, **kwargs):
+        question_calls.append(args)
+        return QMessageBox.Yes  # would say Yes if asked
+
+    monkeypatch.setattr(QMessageBox, "question", fake_question)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    # No migration prompt fired — old root was empty.
+    assert question_calls == []
+    # Path still written.
+    assert config._data["storage"]["models_dir"] == str(new_root)
+
+
+def test_controller_storage_change_no_on_migration_writes_config_only(
+    qtbot, monkeypatch, tmp_path,
+):
+    # ``setenv`` to a placeholder forces monkeypatch to track the
+    # variable; production code under test will overwrite it with
+    # ``os.environ[...] = ...`` which monkeypatch can then restore on
+    # teardown. ``delenv(raising=False)`` doesn't track unset vars
+    # — leaks env changes into other tests.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
+    """Old has weights, user clicks ``No`` on the migration prompt →
+    config still updates (so future downloads go to new place) but
+    nothing moves on disk."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    old_root = tmp_path / "old-models"
+    new_root = tmp_path / "new-models"
+    (old_root / "hub").mkdir(parents=True)
+    (old_root / "hub" / "model.bin").write_bytes(b"x" * 1024)
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root",
+        lambda v: v or str(old_root),
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: str(new_root),
+    )
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: QMessageBox.No,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    moves: list = []
+    monkeypatch.setattr(
+        controller_module, "move_cached_dir",
+        lambda src, dst: moves.append((src, dst)),
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    assert moves == []
+    assert (old_root / "hub" / "model.bin").exists()
+    assert config._data["storage"]["models_dir"] == str(new_root)
+
+
+def test_controller_storage_change_cancel_on_migration_aborts(
+    qtbot, monkeypatch, tmp_path,
+):
+    # ``setenv`` to a placeholder forces monkeypatch to track the
+    # variable; production code under test will overwrite it with
+    # ``os.environ[...] = ...`` which monkeypatch can then restore on
+    # teardown. ``delenv(raising=False)`` doesn't track unset vars
+    # — leaks env changes into other tests.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
+    """Cancel on the migration prompt → don't write config either,
+    so the user can pick a different folder without leaving a
+    half-applied state."""
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    old_root = tmp_path / "old-models"
+    new_root = tmp_path / "new-models"
+    (old_root / "hub").mkdir(parents=True)
+    (old_root / "hub" / "model.bin").write_bytes(b"x")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": "C:/initial"}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root",
+        lambda v: v if v != "C:/initial" else str(old_root),
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: str(new_root),
+    )
+    monkeypatch.setattr(
+        QMessageBox, "question",
+        lambda *a, **kw: QMessageBox.Cancel,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_path_change_requested.emit()
+
+    # Nothing changed — user can re-pick.
+    assert config._data["storage"]["models_dir"] == "C:/initial"
+
+
+def test_controller_prefills_hf_token_from_config(qtbot, monkeypatch):
+    """The persisted token must paint the Settings field on first
+    render — without that the user can't edit it (the field shows
+    blank then gets overwritten by save) and shoulder-surfing risk
+    via screenshare looks identical."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setenv("HF_TOKEN", "")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"huggingface": {"token": "hf_persisted"}})
+
+    AppController(config=config, window=window)
+    assert window.shortcuts_view.hf_token() == "hf_persisted"
+
+
+def test_controller_writes_hf_token_to_config_and_env(qtbot, monkeypatch):
+    """User edits the token field → controller writes to
+    ``huggingface.token`` AND mirrors into ``HF_TOKEN`` /
+    ``HUGGING_FACE_HUB_TOKEN`` env vars so the next download picks
+    it up without a restart."""
+    import os
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setenv("HF_TOKEN", "")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"huggingface": {"token": ""}})
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.hf_token_changed.emit("hf_brand_new")
+
+    assert config._data["huggingface"]["token"] == "hf_brand_new"
+    assert os.environ.get("HF_TOKEN") == "hf_brand_new"
+    assert os.environ.get("HUGGING_FACE_HUB_TOKEN") == "hf_brand_new"
+
+
+def test_controller_clearing_hf_token_removes_env(qtbot, monkeypatch):
+    """Empty value in the field → drop env vars entirely so
+    huggingface_hub doesn't try to use a stale token."""
+    import os
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setenv("HF_TOKEN", "stale_value")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "stale_value")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"huggingface": {"token": "stale_value"}})
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.hf_token_changed.emit("")
+
+    assert config._data["huggingface"]["token"] == ""
+    assert "HF_TOKEN" not in os.environ
+    assert "HUGGING_FACE_HUB_TOKEN" not in os.environ
+
+
+def test_controller_hf_token_change_refreshes_model_cards(qtbot, monkeypatch):
+    """After a token change every GigaAM card needs its warning
+    state recomputed — otherwise the user pastes a token and the
+    big yellow warning sits there until they restart."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setenv("HF_TOKEN", "")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+    config = FakeConfig({"huggingface": {"token": ""}})
+
+    AppController(config=config, window=window)
+
+    # Locate one GigaAM card and verify its warning is visible.
+    gigaam_cards = [
+        c for c in window.models_view.findChildren(ModelCard)
+        if c.info().backend_kind == "gigaam"
+    ]
+    assert gigaam_cards, "expected at least one GigaAM card"
+    warn = gigaam_cards[0].findChild(type(gigaam_cards[0]._hf_warning), "HfTokenWarning")
+    assert warn.isVisible()
+
+    window.shortcuts_view.hf_token_changed.emit("hf_token_now_set")
+
+    # Warning should be hidden after the env var is set + cards
+    # refreshed.
+    assert not warn.isVisible()
+
+
+def test_controller_prefills_cancel_hotkey_from_config(qtbot):
+    """The controller paints whatever's in ``hotkey.cancel_recording_hotkey``
+    into the new third field on first render."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({
+        "hotkey": {
+            "start_recording_hotkey": "ctrl+f2",
+            "stop_recording_hotkey": "ctrl+f3",
+            "cancel_recording_hotkey": "ctrl+f6",
+        },
+    })
+
+    AppController(config=config, window=window)
+    assert window.shortcuts_view.cancel_hotkey() == "ctrl+f6"
+
+
+def test_controller_persists_cancel_hotkey_on_save(qtbot):
+    """Save payload from the view carries ``cancel_hotkey``;
+    controller writes it under ``hotkey.cancel_recording_hotkey``."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({
+        "hotkey": {
+            "start_recording_hotkey": "ctrl+f2",
+            "stop_recording_hotkey": "ctrl+f3",
+            "cancel_recording_hotkey": "",
+        },
+    })
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.save_requested.emit({
+        "start_hotkey": "ctrl+f2",
+        "stop_hotkey": "ctrl+f3",
+        "cancel_hotkey": "ctrl+alt+x",
+        "auto_paste": True,
+    })
+
+    assert config._data["hotkey"]["cancel_recording_hotkey"] == "ctrl+alt+x"
+
+
+def test_controller_reset_restores_cancel_hotkey_default(qtbot):
+    """Reset to defaults populates all three hotkey fields, including
+    cancel — otherwise a user who cleared it can't quickly get the
+    default back."""
+    from app.config_manager import DEFAULT_CONFIG
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({
+        "hotkey": {
+            "start_recording_hotkey": "ctrl+x",
+            "stop_recording_hotkey": "ctrl+y",
+            "cancel_recording_hotkey": "",
+        },
+    })
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.hotkeys_reset_requested.emit()
+
+    expected_default = DEFAULT_CONFIG["hotkey"]["cancel_recording_hotkey"]
+    assert config._data["hotkey"]["cancel_recording_hotkey"] == expected_default
+    assert window.shortcuts_view.cancel_hotkey() == expected_default
+
+
+def test_controller_hf_token_clear_button_wipes_config_and_env(
+    qtbot, monkeypatch,
+):
+    """Per-card 'Clear token' on the HF card must do the same as
+    typing an empty value into the field: drop config + env, repaint
+    the field, refresh the GigaAM warning banner."""
+    import os
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setenv("HF_TOKEN", "")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"huggingface": {"token": "hf_persisted"}})
+
+    AppController(config=config, window=window)
+    # Sanity: the prefill plus init's apply-to-env populates env.
+    assert os.environ.get("HF_TOKEN") == "hf_persisted"
+    assert window.shortcuts_view.hf_token() == "hf_persisted"
+
+    window.shortcuts_view.hf_token_reset_requested.emit()
+
+    assert config._data["huggingface"]["token"] == ""
+    assert "HF_TOKEN" not in os.environ
+    assert "HUGGING_FACE_HUB_TOKEN" not in os.environ
+    assert window.shortcuts_view.hf_token() == ""
+
+
+def test_controller_storage_reset_clears_config_and_updates_env(
+    qtbot, monkeypatch,
+):
+    """Reset clears ``storage.models_dir`` and mirrors the change
+    into the live env: ``HF_HOME`` snaps back to the resolved
+    default and ``GIGAAM_MODELS_DIR`` is removed entirely so GigaAM
+    falls back to its library default ``~/.cache/gigaam``."""
+    import os
+    from PySide6.QtWidgets import QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    # ``setenv`` to a placeholder forces monkeypatch to track the
+    # variable; production code under test will overwrite it with
+    # ``os.environ[...] = ...`` which monkeypatch can then restore on
+    # teardown. ``delenv(raising=False)`` doesn't track unset vars
+    # — leaks env changes into other tests.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": "D:/old"}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default"
+    )
+    # Make sure GIGAAM_MODELS_DIR starts set so we can verify it's
+    # cleared by the reset.
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "D:/old/gigaam")
+    info_calls: list = []
+    monkeypatch.setattr(
+        QMessageBox, "information",
+        lambda *a, **kw: info_calls.append(a),
+    )
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_reset_requested.emit()
+
+    assert config._data["storage"]["models_dir"] == ""
+    # HF_HOME → resolved default; GIGAAM_MODELS_DIR removed.
+    assert os.environ.get("HF_HOME") == "C:/default"
+    assert "GIGAAM_MODELS_DIR" not in os.environ
+    assert info_calls, "expected info dialog after reset"
 
 
 def test_controller_clear_cancelled_keeps_entries(qtbot, monkeypatch):
@@ -574,46 +1292,6 @@ def test_controller_works_without_history_manager(qtbot):
     assert window.history_view._source_model.rowCount() == 0
 
 
-# ---- Backend status poller wiring -------------------------------------------
-
-
-def test_controller_drives_topbar_status_from_fetcher(qtbot):
-    from app.gui.controllers.app_controller import AppController
-    from app.gui.main_window import MainWindow
-
-    window = MainWindow()
-    qtbot.addWidget(window)
-    config = FakeConfig()
-
-    AppController(
-        config=config,
-        window=window,
-        backend_status_fetcher=lambda: "error",
-    )
-
-    # Polling is async (worker thread), so wait for the topbar to update.
-    # ``ready`` and ``loading`` map to ``hidden`` to avoid duplicating the
-    # left-side recording-state pill, so we use ``error`` here as a status
-    # the topbar surfaces visibly.
-    qtbot.waitUntil(
-        lambda: window.topbar._status_pill.property("status") == "error",
-        timeout=2000,
-    )
-
-
-def test_controller_without_backend_fetcher_leaves_status_unknown(qtbot):
-    from app.gui.controllers.app_controller import AppController
-    from app.gui.main_window import MainWindow
-
-    window = MainWindow()
-    qtbot.addWidget(window)
-    config = FakeConfig()
-
-    AppController(config=config, window=window)
-
-    assert window.topbar._status_pill.property("status") == "unknown"
-
-
 # ---- Recording controller wiring -------------------------------------------
 
 
@@ -680,11 +1358,20 @@ class FakeRecordingController:
         self.model_change_requests.append((canonical, compute_type))
         return self._model_change_returns
 
+    def cancel_model_change(self) -> bool:
+        self.cancel_model_change_calls = (
+            getattr(self, "cancel_model_change_calls", 0) + 1
+        )
+        return True
+
     def current_state(self) -> str:
         return self._current_state
 
 
-def test_controller_updates_topbar_recording_pill_on_state_change(qtbot):
+def test_controller_updates_sidebar_recording_pill_on_state_change(qtbot):
+    """Recording pill lives in the sidebar's bottom-left slot now —
+    the controller fans recording state out to it the same way it
+    used to fan it to the topbar's pill."""
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
 
@@ -695,13 +1382,257 @@ def test_controller_updates_topbar_recording_pill_on_state_change(qtbot):
 
     AppController(config=config, window=window, recording=rec)
 
+    pill = window.sidebar.recording_status._pill
+
     rec.state_changed.emit("recording")
-    assert window.topbar._recording_pill.property("state") == "recording"
-    assert window.topbar._recording_pill.isVisibleTo(window.topbar) or True
-    # visibility depends on parent visibility — property change is the contract
+    assert pill.property("state") == "recording"
 
     rec.state_changed.emit("idle")
-    assert window.topbar._recording_pill.property("state") == "idle"
+    assert pill.property("state") == "idle"
+
+
+def test_controller_routes_topbar_cancel_to_recording_controller(qtbot):
+    """The topbar's Cancel button emits ``cancel_load_requested``; the
+    AppController must wire that into ``recording.cancel_model_change``
+    so a click actually stops the in-flight load."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+
+    window.topbar.cancel_load_requested.emit()
+
+    assert getattr(rec, "cancel_model_change_calls", 0) == 1
+
+
+# ---- Cancel-load rollback (the half-clicked card bug) ---------------------
+
+
+def test_cancel_after_select_reverts_active_card_to_previous(qtbot):
+    """The user had Whisper Large v3 active. They click on a different
+    card → the controller flips the new card to Active and starts the
+    load. They click Cancel → the previously-active card must reclaim
+    the green Active pill, otherwise a model the backend never loaded
+    looks confirmed in the UI."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+    assert window.models_view.active_alias() == "large-v3"
+
+    # User clicks a different card.
+    window.models_view.model_selected.emit("turbo")
+    assert window.models_view.active_alias() == "turbo"
+
+    # User clicks Cancel.
+    window.topbar.cancel_load_requested.emit()
+
+    assert window.models_view.active_alias() == "large-v3"
+
+
+def test_cancel_after_select_clears_active_when_no_prior_card(qtbot):
+    """Fresh install — no previously-active card. User clicks a card,
+    decides they don't want it, hits Cancel. No card should be Active
+    afterwards."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})  # no persisted model
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+    assert window.models_view.active_alias() is None
+
+    window.models_view.model_selected.emit("turbo")
+    assert window.models_view.active_alias() == "turbo"
+
+    window.topbar.cancel_load_requested.emit()
+
+    assert window.models_view.active_alias() is None
+
+
+def test_cancel_after_select_restores_topbar_pill(qtbot):
+    """The topbar's display name shadows the active card. After a
+    cancel, the previously-active model's display name must come
+    back — otherwise the user sees ``Loading: <half-clicked>`` flip
+    to ``Current model: <half-clicked>`` of a model the backend
+    never actually loaded."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+    # Snapshot: large-v3 display name is in the pill.
+    initial_display = window.topbar._model_display_name
+
+    window.models_view.model_selected.emit("turbo")
+    # Pill was just flipped to a different model.
+    assert window.topbar._model_display_name != initial_display
+
+    window.topbar.cancel_load_requested.emit()
+
+    assert window.topbar._model_display_name == initial_display
+
+
+def test_cancel_after_select_restores_config(qtbot):
+    """``_on_model_selected`` writes the new alias to config
+    immediately so a crash-on-load doesn't leave a half-applied
+    state. Cancel must roll the config back too — otherwise next
+    launch picks up the model the user explicitly cancelled."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+
+    window.models_view.model_selected.emit("turbo")
+    assert config.get_setting("whisper", "model") == "turbo"
+
+    window.topbar.cancel_load_requested.emit()
+
+    assert config.get_setting("whisper", "model") == "large-v3"
+
+
+def test_download_progress_falls_back_to_size_mb_when_total_zero(qtbot):
+    """NeMo's ``cloud.maybe_download_from_cloud`` streams via plain
+    ``requests`` without a Content-Length header, so the tqdm bar
+    fires with ``total=0``. Without a fallback the topbar pill
+    shows raw bytes ('Loading: ... 1.3 GB') for the full 4-minute
+    download instead of a percentage that climbs.
+
+    The controller plugs ``ModelInfo.size_mb * 1 MB`` in as the
+    fallback total so the bar still climbs 0% → 99% smoothly."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+    from app.model_mapping import get_model
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})
+    rec = FakeRecordingController()
+
+    controller = AppController(config=config, window=window, recording=rec)
+    # User clicks Parakeet — controller records the expected total
+    # from the registry (Parakeet TDT v3 → 1200 MB).
+    window.models_view.model_selected.emit("parakeet-tdt-v3")
+    # Mirror the recording controller emitting model_loading so the
+    # topbar pill renders its loading variant.
+    window.topbar.set_recording_state("model_loading")
+    # Half the expected size has streamed in; tqdm reports total=0.
+    expected_total = get_model("parakeet-tdt-v3").size_mb * 1024 * 1024
+    controller._on_download_progress(expected_total // 2, 0, "model.nemo")
+
+    pill_text = window.topbar._model_pill.text()
+    # 50% (or 49% — the topbar caps progress at 99 to avoid showing
+    # 100% before ready). Either way "%" must appear, NOT raw bytes.
+    assert "%" in pill_text, f"expected percentage, got: {pill_text}"
+    assert "GB" not in pill_text and "MB" not in pill_text, (
+        f"raw bytes leaked through, got: {pill_text}"
+    )
+
+
+def test_download_progress_preserves_real_total(qtbot):
+    """Faster-whisper / GigaAM paths give tqdm a real total via
+    ``huggingface_hub.snapshot_download``. The controller must NOT
+    clobber a real total with the size_mb fallback."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})
+    rec = FakeRecordingController()
+
+    controller = AppController(config=config, window=window, recording=rec)
+    window.models_view.model_selected.emit("large-v3")
+    window.topbar.set_recording_state("model_loading")
+    # 50 MB out of 200 MB — should render as 25%.
+    controller._on_download_progress(50_000_000, 200_000_000, "model.bin")
+
+    pill_text = window.topbar._model_pill.text()
+    assert "25%" in pill_text, f"expected 25%, got: {pill_text}"
+
+
+def test_download_progress_resets_expected_total_on_idle(qtbot):
+    """After a successful load the expected-bytes fallback must
+    drop back to zero — otherwise a future download whose tqdm
+    actually does report total=0 (a small misc file in some
+    other backend) would inherit Parakeet's 1200 MB fallback and
+    show nonsense progress."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})
+    rec = FakeRecordingController()
+
+    controller = AppController(config=config, window=window, recording=rec)
+    window.models_view.model_selected.emit("parakeet-tdt-v3")
+    assert controller._loading_expected_bytes > 0
+
+    # Simulate the load finishing — recording state goes idle.
+    rec.state_changed.emit("idle")
+
+    assert controller._loading_expected_bytes == 0
+
+
+def test_cancel_with_no_load_in_flight_does_not_revert(qtbot):
+    """If cancel arrives while nothing is loading (the recording
+    controller returns falsy), the rollback path must NOT fire —
+    otherwise an unrelated cancel click would un-mark a happily-
+    loaded card."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    class _NoCancelRec(FakeRecordingController):
+        def cancel_model_change(self) -> bool:
+            self.cancel_model_change_calls = (
+                getattr(self, "cancel_model_change_calls", 0) + 1
+            )
+            return False  # nothing was loading
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    rec = _NoCancelRec()
+
+    AppController(config=config, window=window, recording=rec)
+    # Pretend the user picked "turbo" earlier and it actually loaded —
+    # then they hit Cancel idly with nothing in flight.
+    window.models_view.model_selected.emit("turbo")
+    # Suppose loading completed; backend reports ready, etc. We
+    # simulate that by clearing the snapshot the way a real
+    # ``ready`` state would (the rollback target). This is the
+    # behavioural assertion: the snapshot should NOT survive once
+    # the load has succeeded.
+    window.topbar.cancel_load_requested.emit()
+
+    # The cancel reached the recording controller (one call).
+    assert rec.cancel_model_change_calls == 1
+    # But because cancel returned False, the active card stayed at
+    # the just-selected one — no spurious rollback.
+    assert window.models_view.active_alias() == "turbo"
 
 
 def test_controller_refreshes_history_on_history_updated(qtbot):
@@ -946,12 +1877,24 @@ def test_controller_runs_mic_test_and_reports_result(qtbot):
 
     window.shortcuts_view.test_mic_requested.emit()
 
+    # Result text is purely descriptive now — the VU meter, frozen
+    # at the captured peak level, IS the visual "how loud" answer.
+    # Numeric peak/rms still surface in the tooltip for bug reports.
     qtbot.waitUntil(
-        lambda: "0.42" in window.shortcuts_view._test_mic_label.text(),
+        lambda: "Looks good"
+        in window.shortcuts_view._test_mic_label.text(),
         timeout=2000,
     )
     assert recorder.test_calls == 1
     assert window.shortcuts_view._test_mic_btn.isEnabled()
+    tooltip = window.shortcuts_view._test_mic_label.toolTip()
+    assert "0.42" in tooltip and "0.18" in tooltip
+    # Meter stays visible after the test, holding the peak level so
+    # the user sees how loud they actually were. ``isHidden()`` is
+    # the right check in unit tests — ``isVisible()`` requires the
+    # parent chain to be on screen, but here we only assert the
+    # widget's own visibility flag.
+    assert not window.shortcuts_view._test_mic_meter.isHidden()
 
 
 def test_controller_mic_test_blocked_during_recording(qtbot):
@@ -1038,7 +1981,11 @@ def test_test_microphone_button_does_not_grab_focus(qtbot):
     view = ShortcutsView()
     qtbot.addWidget(view)
     assert view._test_mic_btn.focusPolicy() == Qt.NoFocus
-    assert view._reset_btn.focusPolicy() == Qt.NoFocus
+    # Per-card reset / clear buttons replaced the old single
+    # ``_reset_btn`` footer — same NoFocus discipline applies so
+    # they don't steal focus when clicked.
+    assert view._reset_hotkeys_btn.focusPolicy() == Qt.NoFocus
+    assert view._clear_hf_token_btn.focusPolicy() == Qt.NoFocus
 
 
 def test_controller_loads_persisted_inference_overrides_on_init(qtbot):

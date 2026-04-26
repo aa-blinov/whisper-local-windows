@@ -103,7 +103,7 @@ def test_toggle_does_not_play_start_sound_when_already_recording():
     sm.audio_recorder.get_recording_status.return_value = True
     sm.audio_recorder.stop_recording.return_value = None  # short-circuits pipeline
 
-    # Stub the pipeline so we don't drive Wyoming/transcription paths.
+    # Stub the pipeline so we don't drive the real transcription path.
     sm._transcription_pipeline = MagicMock()
 
     sm.toggle_recording()

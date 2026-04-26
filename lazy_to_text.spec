@@ -45,10 +45,20 @@ if styles_src.exists():
             rel = p.relative_to(app_dir)
             datas.append((str(p), str(rel.parent)))
 
-# Include top-level config.yaml next to exe so user can edit it
-config_path = project_root / 'config.yaml'
-if config_path.exists():
-    datas.append((str(config_path), '.'))
+# Note: ``config.yaml`` is intentionally NOT bundled in the release.
+# Whatever sits in the repo's working tree at build time is the
+# developer's personal config (selected model, model_overrides,
+# audio device index, …) — shipping it would seed every fresh
+# install with someone else's preferences.
+#
+# ConfigManager._load_or_create() falls back to DEFAULT_CONFIG when
+# no user / bundled config is found, so the first launch writes a
+# clean default config.yaml into ``%APPDATA%/LazyToText/``.
+#
+# If a build needs a curated 'factory defaults' file (e.g. corporate
+# spin with non-default hotkeys), put it next to the .exe in the
+# COLLECT output (``dist/LazyToText/config.yaml``) — the seeding
+# path in ConfigManager will pick it up automatically.
 
 import importlib.util
 
@@ -58,6 +68,17 @@ requested_hiddenimports = [
     'PySide6.QtCore',
     'PySide6.QtGui',
     'PySide6.QtWidgets',
+    # NeMo's submodules are loaded via hydra config + dynamic
+    # ``importlib`` calls — PyInstaller's static analysis misses
+    # most of them, so list the ones the ASR path actually needs.
+    'nemo',
+    'nemo.collections',
+    'nemo.collections.asr',
+    'nemo.collections.asr.models',
+    'nemo.collections.asr.modules',
+    'nemo.collections.asr.parts',
+    'nemo.utils',
+    'lhotse',
 ]
 
 hiddenimports = [m for m in requested_hiddenimports if importlib.util.find_spec(m) is not None]

@@ -47,6 +47,12 @@ class GigaamBackend:
         self._status = "stopped"
         self._load_thread: Optional[threading.Thread] = None
         self._shutdown = False
+        # Set to True when the user clicks Cancel while a load is in
+        # flight. The load worker keeps running until ``gigaam.load_model``
+        # returns (Python can't safely interrupt a foreign thread)
+        # but its result is discarded at the publish step. Reset on
+        # each fresh ``load()``.
+        self._cancel_requested = False
 
     # ---- public API ---------------------------------------------------------
 
@@ -72,6 +78,7 @@ class GigaamBackend:
             if self._status in ("loading", "ready"):
                 return
             self._status = "loading"
+            self._cancel_requested = False
             target_model = self._model_name
 
         thread = threading.Thread(
@@ -83,6 +90,20 @@ class GigaamBackend:
         with self._lock:
             self._load_thread = thread
         thread.start()
+
+    def cancel_load(self) -> None:
+        """Abandon an in-flight load — see ``NemoBackend.cancel_load``
+        for the full rationale. Idempotent; only acts when status is
+        ``loading``."""
+        with self._lock:
+            if self._shutdown:
+                return
+            if self._status != "loading":
+                return
+            log.info("GigaAM model load cancelled by user")
+            self._cancel_requested = True
+            self._model = None
+            self._status = "stopped"
 
     def change_model(
         self,
@@ -226,11 +247,18 @@ class GigaamBackend:
     def set_progress_callback(
         callback: Optional[Callable[[int, int, str], None]],
     ) -> None:
-        """GigaAM doesn't expose a download progress hook — its loader
-        prints to stderr. Kept on the API for symmetry with
-        ``FasterWhisperBackend.set_progress_callback`` so the
-        ``RoutedBackend`` facade can forward callbacks blindly."""
-        del callback  # no-op
+        """GigaAM's own loader downloads from Sber's CDN via plain
+        ``urllib`` (no tqdm), so progress for the .ckpt fetch can't
+        flow through the shared hook either way. But pyannote's
+        long-form deps (downloaded on first long-audio capture) DO
+        use ``huggingface_hub`` + tqdm — forward to FasterWhisper's
+        module-level ``_progress_callback`` so those at least
+        surface in the UI. Same pattern as ``NemoBackend``."""
+        from app.backends.faster_whisper_backend import (
+            FasterWhisperBackend as _FW,
+        )
+
+        _FW.set_progress_callback(callback)
 
     # ---- internal -----------------------------------------------------------
 
@@ -257,22 +285,45 @@ class GigaamBackend:
                     self._status = "error"
             return
 
+        # Honour ``GIGAAM_MODELS_DIR`` (set at startup from the
+        # configured ``storage.models_dir``); when unset, omit
+        # ``download_root`` entirely so the library uses its own
+        # default ``~/.cache/gigaam`` — keeps existing installs
+        # finding their weights after an upgrade.
+        load_kwargs: dict = {}
+        env_root = os.environ.get("GIGAAM_MODELS_DIR")
+        if env_root:
+            load_kwargs["download_root"] = env_root
+
         log.info("Loading GigaAM model %s (device=%s)", model_name, self._device)
         try:
-            model = gigaam.load_model(model_name)
+            model = gigaam.load_model(model_name, **load_kwargs)
         except Exception as exc:
             log.error(
                 "Failed to load GigaAM model %s: %s",
                 model_name, exc, exc_info=True,
             )
             with self._lock:
-                if not self._shutdown and self._model_name == model_name:
+                # If the user cancelled while load_model was running,
+                # don't promote the resulting failure to "error" — the
+                # cancelled state is what they asked for.
+                if (
+                    not self._shutdown
+                    and not self._cancel_requested
+                    and self._model_name == model_name
+                ):
                     self._model = None
                     self._status = "error"
             return
 
         with self._lock:
             if self._shutdown:
+                return
+            if self._cancel_requested:
+                log.info(
+                    "Discarding loaded GigaAM model %s — cancelled by user",
+                    model_name,
+                )
                 return
             if self._model_name != model_name:
                 log.info(

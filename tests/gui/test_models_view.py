@@ -69,6 +69,26 @@ def test_models_view_set_active_rejects_unknown(qtbot):
         view.set_active("does-not-exist")
 
 
+def test_models_view_set_active_none_clears_all(qtbot):
+    """``set_active(None)`` is the rollback hook used by the
+    cancel-load flow: when the user clicks Cancel before a
+    just-picked card finishes loading, the controller has to
+    un-mark it. Passing None means 'no card is Active'."""
+    from app.gui.views.models_view import ModelsView
+    from app.gui.widgets.model_card import ModelCard
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    view.set_active("large-v3")
+    view.set_active(None)
+
+    assert view.active_alias() is None
+    cards = {c.alias(): c for c in view.findChildren(ModelCard)}
+    for card in cards.values():
+        assert card.is_active() is False
+
+
 def test_models_view_emits_model_selected_when_card_emits(qtbot):
     from app.gui.views.models_view import ModelsView
     from app.gui.widgets.model_card import ModelCard
@@ -80,6 +100,23 @@ def test_models_view_emits_model_selected_when_card_emits(qtbot):
 
     with qtbot.waitSignal(view.model_selected, timeout=1000) as blocker:
         card.select_requested.emit(card.alias())
+
+    assert blocker.args == ["distil-large-v3"]
+
+
+def test_models_view_emits_model_delete_requested_when_card_emits(qtbot):
+    """Cards bubble their delete_requested up through the view so the
+    controller only has to listen to one signal source."""
+    from app.gui.views.models_view import ModelsView
+    from app.gui.widgets.model_card import ModelCard
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "distil-large-v3")
+
+    with qtbot.waitSignal(view.model_delete_requested, timeout=1000) as blocker:
+        card.delete_requested.emit(card.alias())
 
     assert blocker.args == ["distil-large-v3"]
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
@@ -17,9 +18,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+
+def _has_hf_token() -> bool:
+    """True if either ``HF_TOKEN`` or its legacy alias
+    ``HUGGING_FACE_HUB_TOKEN`` is set to a non-empty value."""
+    for name in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
+        value = os.environ.get(name)
+        if value and value.strip():
+            return True
+    return False
+
 from app.gui.widgets.flow_layout import FlowLayout
 from app.gui.widgets.inference_settings_panel import InferenceSettingsPanel
-from app.inference_settings import InferenceSettings
+from app.gui.widgets.nemo_inference_settings_panel import (
+    NemoInferenceSettingsPanel,
+)
+from app.inference_settings import InferenceSettings, NemoInferenceSettings
 from app.model_mapping import ModelInfo, model_url
 from app.utils import is_cached_for_info
 
@@ -68,11 +82,20 @@ def _compute_label(compute_type: str) -> str:
 
 class ModelCard(QFrame):
     select_requested = Signal(str)
+    # Emitted when the user clicks Delete on a cached model — arg is
+    # the alias. The controller is responsible for confirming with
+    # the user before actually wiping the cache, then calling
+    # ``refresh_cache_state`` so the button visibility and label
+    # update.
+    delete_requested = Signal(str)
     # Emitted when the user changes anything in the inline inference
-    # settings panel — args: ``(alias, InferenceSettings)`` so the
-    # controller can route to per-model config + push live to the
-    # backend without having to map widgets back to models.
-    inference_settings_changed = Signal(str, InferenceSettings)
+    # settings panel. Args: ``(alias, settings_object)``. The settings
+    # object is either ``InferenceSettings`` (faster-whisper cards)
+    # or ``NemoInferenceSettings`` (NeMo cards) — controller dispatches
+    # on the alias's backend kind. Declared as ``object`` because
+    # PySide signals can't express a sum type and the consumer only
+    # uses duck-typed ``.to_mapping()``.
+    inference_settings_changed = Signal(str, object)
 
     def __init__(self, info: ModelInfo, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -201,15 +224,21 @@ class ModelCard(QFrame):
             badges.addWidget(badge)
         root.addLayout(badges)
 
-        # Inline inference settings — only relevant for engines that
-        # actually accept transcribe-time tunables. GigaAM is
-        # end-to-end (Russian-only, deterministic, no prompt) so it
-        # gets no panel; inserting a greyed-out one looked like a
-        # rendering bug. faster-whisper-backed cards get the full
-        # panel, hidden until the card is active.
-        self._settings_panel: Optional[InferenceSettingsPanel] = None
-        if info.backend_kind != "gigaam":
+        # Inline inference settings — choice of panel keyed on
+        # backend kind:
+        #   - ``faster_whisper``: full 5-knob Whisper panel
+        #     (language, VAD, beam, temperature, prompt)
+        #   - ``nemo``: minimal Parakeet/Canary panel
+        #     (timestamps toggle — that's all NeMo's API exposes)
+        #   - ``gigaam``: no panel; the engine is end-to-end and
+        #     accepts no transcribe-time tunables. Inserting a
+        #     disabled panel looked like a rendering bug.
+        self._settings_panel: Optional[QWidget] = None
+        if info.backend_kind == "faster_whisper":
             self._settings_panel = InferenceSettingsPanel(self)
+        elif info.backend_kind == "nemo":
+            self._settings_panel = NemoInferenceSettingsPanel(self)
+        if self._settings_panel is not None:
             self._settings_panel.setVisible(False)
             self._settings_panel.settings_changed.connect(
                 lambda s: self.inference_settings_changed.emit(
@@ -218,8 +247,41 @@ class ModelCard(QFrame):
             )
             root.addWidget(self._settings_panel)
 
+        # HF-token warning — only on GigaAM cards, since GigaAM's
+        # long-form path (>25 s captures) routes through pyannote
+        # VAD which needs a token to download the gated
+        # ``pyannote/segmentation-3.0`` weights. Whisper's
+        # long-form is Silero VAD, no token required, so the
+        # widget is omitted entirely on faster_whisper cards.
+        self._hf_warning: Optional[QLabel] = None
+        if info.backend_kind == "gigaam":
+            self._hf_warning = QLabel(
+                "⚠ Long-form audio (>25 s) needs a Hugging Face "
+                "token — set one in Settings → Hugging Face.",
+                self,
+            )
+            self._hf_warning.setObjectName("HfTokenWarning")
+            self._hf_warning.setProperty("role", "warning")
+            self._hf_warning.setWordWrap(True)
+            root.addWidget(self._hf_warning)
+            self.refresh_hf_token_state()
+
         footer = QHBoxLayout()
         footer.addStretch(1)
+        # Delete sits to the LEFT of Select — destructive action stays
+        # visually subordinate to the primary one. Hidden by default;
+        # visibility is recomputed every time the cache / active /
+        # loading state changes (see ``_refresh_delete_visibility``).
+        self._delete_btn = QPushButton("Delete", self)
+        self._delete_btn.setObjectName("DeleteButton")
+        self._delete_btn.setProperty("role", "danger")
+        self._delete_btn.setFocusPolicy(Qt.NoFocus)
+        self._delete_btn.setVisible(False)
+        self._delete_btn.clicked.connect(
+            lambda: self.delete_requested.emit(self._info.alias)
+        )
+        footer.addWidget(self._delete_btn)
+
         self._select_btn = QPushButton("Select", self)
         self._select_btn.setObjectName("SelectButton")
         self._select_btn.setProperty("role", "primary")
@@ -271,18 +333,24 @@ class ModelCard(QFrame):
         # on cards that actually have one — GigaAM doesn't).
         if self._settings_panel is not None:
             self._settings_panel.setVisible(self._active)
+        self._refresh_delete_visibility()
         self.style().unpolish(self)
         self.style().polish(self)
 
-    def set_inference_settings(self, settings: InferenceSettings) -> None:
+    def set_inference_settings(self, settings) -> None:
         """Pre-fill the inline panel from the controller (called when
         the card becomes active and the controller has loaded the
         per-alias overrides out of config). No-op on engines that
-        don't have a panel (GigaAM)."""
+        don't have a panel (GigaAM). ``settings`` is the dataclass
+        appropriate for this card's backend (Whisper /
+        NeMo) — caller is responsible for sending the right type."""
         if self._settings_panel is not None:
             self._settings_panel.set_settings(settings)
 
-    def inference_settings(self) -> Optional[InferenceSettings]:
+    def inference_settings(self):
+        """Return the panel's current values (``InferenceSettings``
+        for Whisper, ``NemoInferenceSettings`` for NeMo) or ``None``
+        on cards that don't have a panel."""
         if self._settings_panel is None:
             return None
         return self._settings_panel.values()
@@ -297,11 +365,33 @@ class ModelCard(QFrame):
     def is_loading(self) -> bool:
         return self._loading
 
+    def refresh_hf_token_state(self) -> None:
+        """Recompute warning visibility from the current process env.
+        Called by the controller after the user pastes a token in
+        Settings; no-op on cards that don't carry the warning
+        (Whisper)."""
+        if self._hf_warning is None:
+            return
+        self._hf_warning.setVisible(not _has_hf_token())
+
     def refresh_cache_state(self) -> None:
         """Recompute whether the underlying model is downloaded and update
-        the action button label (``Download`` vs ``Select``)."""
+        the action button label (``Download`` vs ``Select``) plus the
+        Delete button's visibility."""
         cached = is_cached_for_info(self._info)
         self._select_btn.setText("Select" if cached else "Download")
+        self._refresh_delete_visibility()
+
+    def _refresh_delete_visibility(self) -> None:
+        """Delete is shown only when (a) weights are on disk, (b) the
+        card isn't currently the active model — yanking the cache out
+        from under a loaded backend would crash the next transcribe —
+        and (c) we aren't mid-load, when the cache state is undefined.
+        """
+        cached = is_cached_for_info(self._info)
+        self._delete_btn.setVisible(
+            cached and not self._active and not self._loading
+        )
 
     def set_loading(self, loading: bool) -> None:
         """Reflect backend load state on the active pill — swap 'Active' for
@@ -319,6 +409,7 @@ class ModelCard(QFrame):
             self._active_pill.setProperty("state", "ready")
         self._active_pill.style().unpolish(self._active_pill)
         self._active_pill.style().polish(self._active_pill)
+        self._refresh_delete_visibility()
 
     def set_loading_progress(self, current: int, total: int) -> None:
         """Update the active pill with download progress while the card

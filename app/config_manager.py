@@ -1,4 +1,6 @@
 import logging
+import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -6,16 +8,23 @@ from ruamel.yaml import YAML
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "whisper": {
-        "backend_mode": "local", # "local" or "external"
+        # Active model alias (or full HF canonical id). The
+        # registry maps user-friendly aliases like ``turbo`` to the
+        # actual HF repo path. See ``app/model_mapping.py``.
         "model": "Systran/faster-distil-whisper-base",
         "language": "auto",
         "beam_size": 5,
-        "local_url": "http://localhost:10300",
-        "external_url": "http://remote-host:10300",
     },
     "hotkey": {
         "start_recording_hotkey": "ctrl+f2",
         "stop_recording_hotkey": "ctrl+f3",
+        # 'Discard the current buffer without transcribing'. Empty
+        # string means no global key is bound — the runtime feature
+        # works through ``StateManager.cancel_active_recording`` but
+        # nothing fires it. ctrl+f6 sits in the same row as f2/f3
+        # without colliding with Alt+F4 (close window) or F5
+        # (refresh) muscle memory the way ctrl+f4 / ctrl+f5 would.
+        "cancel_recording_hotkey": "ctrl+f6",
     },
     "audio": {
         "channels": 1,
@@ -53,6 +62,23 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_entries": 1000,
         "auto_cleanup_days": 30,
     },
+    "storage": {
+        # Where downloaded model weights live. Empty string = use the
+        # built-in default (``<project>/models`` in dev,
+        # ``<exe-dir>/models`` when frozen). Settings → Storage card
+        # writes here. Both Whisper (HF hub) and GigaAM (.ckpt) live
+        # under this root, in ``hub/`` and ``gigaam/`` subdirs
+        # respectively.
+        "models_dir": "",
+    },
+    "huggingface": {
+        # Optional HF API token. Required ONLY for GigaAM long-form
+        # audio (>25 s) which routes through pyannote VAD; the
+        # underlying model ``pyannote/segmentation-3.0`` is gated and
+        # needs an authenticated download once. Empty = no token.
+        # Settings → "Hugging Face" card writes here.
+        "token": "",
+    },
 }
 
 
@@ -67,20 +93,103 @@ class ConfigManager:
         self.logger.info(f"Configuration loaded: {self.config_path}")
 
     def _resolve_base_dir(self) -> Path:
+        """Where ``config.yaml`` is read from and written to.
+
+        Frozen build → ``%APPDATA%/LazyToText/`` so the file is
+        per-user, writable without admin even when the binary is
+        installed in ``Program Files``. Falls back to
+        ``~/AppData/Roaming/LazyToText`` if ``APPDATA`` is unset
+        (sandboxed shells / unusual envs).
+
+        Dev build → walks up from CWD to the nearest
+        ``pyproject.toml`` so a developer running ``uv run …`` from
+        anywhere in the repo still reads the project's
+        ``config.yaml``.
+        """
         if getattr(sys, 'frozen', False):  # PyInstaller frozen
-            try:
-                return Path(sys.executable).resolve().parent
-            except Exception:
-                return Path.cwd()
+            return self._user_config_dir()
         cwd = Path.cwd()
         for p in [cwd, *cwd.parents]:
             if (p / 'pyproject.toml').exists():
                 return p
         return cwd
 
+    @staticmethod
+    def _user_config_dir() -> Path:
+        """Per-user config directory on Windows.
+
+        Honours ``%APPDATA%`` (the canonical Roaming path); falls
+        back to ``~/AppData/Roaming/LazyToText`` when the env var
+        isn't exposed (rare).
+        """
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return Path(appdata) / "LazyToText"
+        return Path.home() / "AppData" / "Roaming" / "LazyToText"
+
+    @staticmethod
+    def _bundled_defaults_path() -> Path:
+        """Where the build's 'factory defaults' ``config.yaml`` lives.
+
+        PyInstaller layout depends on the version: classic onedir
+        builds put datas alongside the exe, PyInstaller 6+ puts
+        them under ``_internal/``. ``sys._MEIPASS`` is the most
+        reliable hint when present. Returns the first candidate
+        that exists; falls back to the exe-dir candidate for the
+        'no bundled config' path so callers' ``.is_file()`` check
+        cleanly returns False.
+        """
+        exe_dir = Path(sys.executable).resolve().parent
+        meipass = getattr(sys, "_MEIPASS", None)
+        candidates = [exe_dir / "config.yaml"]
+        if meipass:
+            candidates.append(Path(meipass) / "config.yaml")
+        candidates.append(exe_dir / "_internal" / "config.yaml")
+        for c in candidates:
+            if c.is_file():
+                return c
+        return candidates[0]
+
     def _load_or_create(self):
         path = self.config_path
         if not path.exists():
+            seeded_from_bundle = False
+            if getattr(sys, 'frozen', False):
+                bundled = self._bundled_defaults_path()
+                if bundled.is_file():
+                    # Seed-copy 'factory defaults' shipped with the
+                    # build into the user dir on first launch — lets
+                    # a customised installer ship pre-tweaked
+                    # settings without requiring write access to
+                    # the install dir at runtime.
+                    try:
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(bundled, path)
+                        seeded_from_bundle = True
+                        self.logger.info(
+                            "Seeded user config from bundled defaults: %s -> %s",
+                            bundled, path,
+                        )
+                    except OSError as exc:
+                        self.logger.warning(
+                            "Failed to seed bundled defaults from %s: %s "
+                            "— falling back to in-code DEFAULT_CONFIG",
+                            bundled, exc,
+                        )
+            if seeded_from_bundle:
+                # Re-enter the load path to pick up bundled values
+                # through the regular YAML reader + defaults merge.
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = self.yaml.load(f) or {}
+                    self.config = self._fill_defaults(data, DEFAULT_CONFIG)
+                    self._migrate_legacy_whisper_section()
+                    return
+                except Exception as exc:
+                    self.logger.warning(
+                        "Bundled config %s unreadable (%s); using DEFAULT_CONFIG",
+                        path, exc,
+                    )
             self.logger.warning("config.yaml not found, creating with defaults")
             self.config = DEFAULT_CONFIG.copy()
             self._write_config_file()
@@ -116,6 +225,10 @@ class ConfigManager:
 
     def _write_config_file(self):
         try:
+            # Make sure the parent dir exists — on a fresh install
+            # the user-config dir under ``%APPDATA%`` may not have
+            # been created yet.
+            self.config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.config_path, "w", encoding="utf-8") as f:
                 self.yaml.dump(self.config, f)
             self.logger.info(f"Saved configuration to {self.config_path}")
@@ -124,12 +237,27 @@ class ConfigManager:
 
     # --- Migration from legacy schema (model_size / whisper_model / whisper_url) ---
     def _migrate_legacy_whisper_section(self, write_if_changed: bool = False):
+        """Strip / map fields that existed in the pre-in-process
+        Docker / Wyoming era of this app:
+
+          - ``model_size`` / ``whisper_model``  → ``model`` (current
+            schema), via the registry's canonical mapping.
+          - ``whisper_url`` / ``backend_mode`` / ``local_url`` /
+            ``external_url`` → dropped. We always run the inference
+            backend in-process now, so URLs and the local/external
+            switch have no consumers.
+        """
         wh = self.config.get("whisper", {})
         if not isinstance(wh, dict):  # sanity
             return
         legacy_model_size = wh.pop("model_size", None)
         legacy_model = wh.pop("whisper_model", None)
-        legacy_url = wh.pop("whisper_url", None)
+        # Older configs carried these — drop them silently. They're
+        # not read anywhere anymore.
+        wh.pop("whisper_url", None)
+        wh.pop("backend_mode", None)
+        wh.pop("local_url", None)
+        wh.pop("external_url", None)
         changed = False
         # Determine canonical model
         if legacy_model_size or legacy_model:
@@ -142,20 +270,8 @@ class ConfigManager:
         if "model" not in wh:
             wh["model"] = DEFAULT_CONFIG["whisper"]["model"]
             changed = True
-        # backend mode determination
-        if legacy_url:
-            # If user changed url from default local one -> treat as external
-            default_local = DEFAULT_CONFIG["whisper"]["local_url"]
-            if legacy_url != default_local:
-                wh["backend_mode"] = "external"
-                wh["external_url"] = legacy_url
-                changed = True
-            else:
-                wh["backend_mode"] = "local"
-                wh["local_url"] = legacy_url
-                changed = True
         # Ensure required keys exist
-        for k in ("backend_mode", "local_url", "external_url", "beam_size", "language"):
+        for k in ("beam_size", "language"):
             if k not in wh:
                 wh[k] = DEFAULT_CONFIG["whisper"][k]
                 changed = True

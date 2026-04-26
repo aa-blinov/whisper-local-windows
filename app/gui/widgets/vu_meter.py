@@ -27,8 +27,14 @@ class VUMeter(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("VUMeter")
-        self.setFixedSize(140, 8)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        # Fixed height so the bar reads as a slim strip; width grows
+        # with the parent layout so the meter spans the sidebar's
+        # full slot rather than sitting as a 140 px chip in the corner.
+        # Min-width keeps the bar wide enough to register at narrow
+        # window sizes.
+        self.setFixedHeight(8)
+        self.setMinimumWidth(120)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._level = 0.0  # smoothed display value, 0..1
 
     # ---- public API ---------------------------------------------------------

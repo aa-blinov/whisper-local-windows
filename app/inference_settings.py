@@ -89,3 +89,35 @@ class InferenceSettings:
         """Functional update — keep the dataclass frozen and produce
         a new instance with the supplied fields overridden."""
         return replace(self, **fields)
+
+
+@dataclass(frozen=True)
+class NemoInferenceSettings:
+    """Tunables applied to NeMo's ``ASRModel.transcribe``.
+
+    NeMo's API is deliberately narrower than faster-whisper's:
+    Parakeet TDT v3 auto-detects language across 25 supported
+    tongues and uses greedy decoding only — no ``language``,
+    ``beam_size``, ``temperature`` or ``initial_prompt`` knobs to
+    expose. The single useful per-call kwarg is ``timestamps``,
+    which makes the output object include word/segment offsets
+    (small overhead, off by default).
+
+    Kept in the same module as ``InferenceSettings`` so all three
+    layers (model_card, controller, backend) import a shared
+    schema location even if the actual fields differ per backend.
+    """
+
+    timestamps: bool = False
+
+    @classmethod
+    def from_mapping(cls, data: Optional[Mapping[str, Any]]) -> "NemoInferenceSettings":
+        if not data:
+            return cls()
+        return cls(timestamps=bool(data.get("timestamps", False)))
+
+    def to_mapping(self) -> dict:
+        return {"timestamps": bool(self.timestamps)}
+
+    def with_change(self, **fields: Any) -> "NemoInferenceSettings":
+        return replace(self, **fields)
