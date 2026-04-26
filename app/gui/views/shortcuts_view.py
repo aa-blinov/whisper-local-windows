@@ -180,15 +180,18 @@ class ShortcutsView(QWidget):
         self._cancel_edit.editingFinished.connect(self._emit_save)
         hotkeys_form.addRow("Cancel recording", self._cancel_edit)
 
+        # Hint goes into the card's OUTER VBox, not the form — adding
+        # it as a labelless form-row would offset it to the field
+        # column (under the inputs), inconsistent with the Storage
+        # card's hint which sits flush-left across the full card.
         hotkeys_hint = QLabel(
-            "Cancel discards the current buffer without transcribing — "
-            "useful if you mis-spoke or changed your mind mid-sentence.",
+            "Cancel discards the current buffer instead of transcribing.",
             hotkeys_card,
         )
         hotkeys_hint.setObjectName("HotkeysHint")
         hotkeys_hint.setProperty("role", "muted")
         hotkeys_hint.setWordWrap(True)
-        hotkeys_form.addRow("", hotkeys_hint)
+        hotkeys_card.layout().addWidget(hotkeys_hint)
         root.addWidget(hotkeys_card)
 
         # ---- Clipboard card ---------------------------------------------
