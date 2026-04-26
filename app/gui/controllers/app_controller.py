@@ -153,6 +153,15 @@ class AppController(QObject):
         self._vu_timer = QTimer(self)
         self._vu_timer.setInterval(33)
         self._vu_timer.timeout.connect(self._on_vu_tick)
+        # Independent polling timer for the mic-test VU meter on the
+        # Settings card. Separate from the recording one so a mic
+        # test can run while the recording state is anything other
+        # than ``recording`` (idle, processing, model_loading, …)
+        # without us trying to feed two meters from one tick with
+        # divergent on/off conditions.
+        self._mic_test_vu_timer = QTimer(self)
+        self._mic_test_vu_timer.setInterval(33)
+        self._mic_test_vu_timer.timeout.connect(self._on_mic_test_vu_tick)
         self._wire_models()
         self._wire_shortcuts()
         self._wire_history()
@@ -557,6 +566,12 @@ class AppController(QObject):
 
         self._mic_test_in_progress = True
         self._window.shortcuts_view.show_mic_test_running()
+        # Start the live-level poll right when the worker thread
+        # spins up — first audio block lands ~50 ms in, which is
+        # before the worker's first level update could otherwise be
+        # picked up.
+        if not self._mic_test_vu_timer.isActive():
+            self._mic_test_vu_timer.start()
 
         def worker():
             try:
@@ -575,11 +590,32 @@ class AppController(QObject):
 
     def _on_mic_test_completed(self, peak: float, rms: float) -> None:
         self._mic_test_in_progress = False
+        self._mic_test_vu_timer.stop()
         self._window.shortcuts_view.show_mic_test_result(peak, rms)
 
     def _on_mic_test_failed(self, reason: str) -> None:
         self._mic_test_in_progress = False
+        self._mic_test_vu_timer.stop()
         self._window.shortcuts_view.show_mic_test_error(reason)
+
+    def _on_mic_test_vu_tick(self) -> None:
+        """Poll the live audio level while a mic test is running and
+        push it into the Settings-card VU meter. Mirrors the topbar
+        VU pump but routed to a different sink."""
+        recorder = self._resolve_audio_recorder()
+        if recorder is None:
+            return
+        getter = getattr(recorder, "current_input_level", None)
+        if getter is None:
+            return
+        try:
+            level = float(getter())
+        except Exception:  # pragma: no cover — defensive
+            return
+        try:
+            self._window.shortcuts_view.set_mic_test_level(level)
+        except Exception:  # pragma: no cover — defensive
+            pass
 
     # ---- Inference-settings plumbing ---------------------------------------
 

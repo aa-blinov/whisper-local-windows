@@ -87,18 +87,25 @@ class AudioRecorder:
         return self.device
 
     def test_input_level(self, duration_s: float = 3.0) -> dict:
-        """Synchronous mic check — record from the currently-selected
-        device for ``duration_s`` seconds and report peak / RMS amplitude.
+        """Synchronous mic check — capture from the selected device for
+        ``duration_s`` seconds and report peak / RMS amplitude.
 
-        Captures at the device's native sample rate (so WASAPI doesn't
-        complain about 16 kHz like it does for the real recording
-        path), then we just need amplitude statistics — resampling is
-        unnecessary.
+        Uses ``sd.InputStream`` instead of the simpler blocking
+        ``sd.rec`` so the per-block callback can update
+        ``self._current_input_level`` in real time — the UI's VU
+        meter polls that field and follows the level live during
+        the test, same as during a real recording. Without this the
+        meter sat at zero for the whole 3 s window.
+
+        Captures at the device's native sample rate (so WASAPI
+        doesn't complain about 16 kHz like it does for the real
+        recording path); we only want amplitude statistics so no
+        resampling is needed.
 
         Returns ``{"peak": float, "rms": float, "duration_s": float}``.
-        Both amplitudes are normalised to the [0, 1] range. Raises any
-        underlying ``sounddevice`` error so the caller can surface a
-        readable message.
+        Both amplitudes are normalised to the [0, 1] range. Raises
+        any underlying ``sounddevice`` error so the caller can
+        surface a readable message.
         """
         device_idx = self.device
         if device_idx is not None:
@@ -110,16 +117,44 @@ class AudioRecorder:
         else:
             rate = self.sample_rate
 
-        samples = max(1, int(duration_s * rate))
-        audio = sd.rec(
-            samples,
-            samplerate=rate,
-            channels=self.channels,
-            device=device_idx,
-            dtype=self.STREAM_DTYPE,
-        )
-        sd.wait()
-        flat = np.asarray(audio).flatten()
+        # ~50 ms blocks — fast enough to feel responsive on the
+        # VU meter (~20 Hz updates) without piling up Python
+        # callbacks. Floor at 256 frames so very low rates don't
+        # trip sounddevice's minimum block size.
+        blocksize = max(256, int(rate * 0.05))
+        chunks: list = []
+
+        def _on_block(indata, frames, time_info, status):  # noqa: ARG001
+            chunks.append(np.asarray(indata).copy())
+            flat = np.asarray(indata).flatten()
+            if flat.size:
+                self._current_input_level = float(
+                    np.sqrt(np.mean(flat ** 2))
+                )
+
+        try:
+            with sd.InputStream(
+                samplerate=rate,
+                channels=self.channels,
+                device=device_idx,
+                dtype=self.STREAM_DTYPE,
+                blocksize=blocksize,
+                callback=_on_block,
+            ):
+                # Block the calling (worker) thread for the test
+                # window — sounddevice runs the callback on its own
+                # thread, so this sleep doesn't starve the audio
+                # pipeline.
+                time.sleep(float(duration_s))
+        finally:
+            # Reset the live level so the meter doesn't keep
+            # showing the last reading after the test ends.
+            self._current_input_level = 0.0
+
+        if not chunks:
+            return {"peak": 0.0, "rms": 0.0, "duration_s": float(duration_s)}
+        audio = np.concatenate(chunks, axis=0)
+        flat = audio.flatten()
         if flat.size == 0:
             return {"peak": 0.0, "rms": 0.0, "duration_s": float(duration_s)}
         peak = float(np.abs(flat).max())

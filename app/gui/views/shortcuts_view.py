@@ -136,6 +136,12 @@ class ShortcutsView(QWidget):
 
         # Quick verifier: capture ~3 s, report peak/RMS so the user
         # knows the chosen device is actually picking up sound.
+        # Layout: [Test button] [VU meter] [result label / progress].
+        # The VU meter mirrors the topbar's during-recording widget
+        # — without it the user sees nothing for 3 s and can't tell
+        # whether the device is alive or hung.
+        from app.gui.widgets.vu_meter import VUMeter
+
         mic_test_row = QHBoxLayout()
         mic_test_row.setSpacing(10)
         self._test_mic_btn = QPushButton("Test microphone", audio_card)
@@ -147,6 +153,12 @@ class ShortcutsView(QWidget):
         self._test_mic_btn.setFocusPolicy(Qt.NoFocus)
         self._test_mic_btn.clicked.connect(self.test_mic_requested.emit)
         mic_test_row.addWidget(self._test_mic_btn)
+
+        self._test_mic_meter = VUMeter(audio_card)
+        self._test_mic_meter.setObjectName("MicrophoneTestMeter")
+        self._test_mic_meter.setVisible(False)
+        mic_test_row.addWidget(self._test_mic_meter)
+
         self._test_mic_label = QLabel("", audio_card)
         self._test_mic_label.setObjectName("MicrophoneTestResult")
         self._test_mic_label.setProperty("role", "muted")
@@ -485,9 +497,25 @@ class ShortcutsView(QWidget):
         self._test_mic_label.setProperty("role", "muted")
         self._test_mic_label.style().unpolish(self._test_mic_label)
         self._test_mic_label.style().polish(self._test_mic_label)
+        # Show the live VU meter for the duration of the test.
+        # Controller starts a polling timer to feed it through
+        # ``set_mic_test_level`` — without that the bar would just
+        # sit at zero.
+        self._test_mic_meter.reset()
+        self._test_mic_meter.setVisible(True)
+
+    def set_mic_test_level(self, level: float) -> None:
+        """Push a fresh amplitude reading into the mic-test VU meter.
+        Called by the controller while a test is running. No-op when
+        the meter is hidden so a stray late tick can't paint over a
+        finished result."""
+        if self._test_mic_meter.isVisible():
+            self._test_mic_meter.set_level(level)
 
     def show_mic_test_result(self, peak: float, rms: float) -> None:
         self._test_mic_btn.setEnabled(True)
+        self._test_mic_meter.setVisible(False)
+        self._test_mic_meter.reset()
         if peak < 0.01:
             text = (
                 f"Silence detected (peak {peak:.3f}). "
@@ -512,6 +540,8 @@ class ShortcutsView(QWidget):
 
     def show_mic_test_error(self, reason: str) -> None:
         self._test_mic_btn.setEnabled(True)
+        self._test_mic_meter.setVisible(False)
+        self._test_mic_meter.reset()
         self._test_mic_label.setText(f"Test failed: {reason}")
         self._test_mic_label.setProperty("role", "test-result-bad")
         self._test_mic_label.style().unpolish(self._test_mic_label)
