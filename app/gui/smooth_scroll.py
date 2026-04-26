@@ -68,7 +68,15 @@ class _SmoothScrollFilter(QObject):
 
 
 def apply_smooth_scroll(area: QAbstractScrollArea) -> None:
-    """Enable browser-like smooth scrolling on *area*."""
-    area.setVerticalScrollMode(QAbstractScrollArea.ScrollMode.ScrollPerPixel)
+    """Enable browser-like smooth scrolling on *area*.
+
+    ``setVerticalScrollMode`` only exists on ``QAbstractItemView``
+    subclasses (tables, lists, trees) — ``QScrollArea`` already
+    moves its content per-pixel by default. We only need the
+    animation filter here.
+    """
+    from PySide6.QtWidgets import QAbstractItemView
+    if isinstance(area, QAbstractItemView):
+        area.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
     f = _SmoothScrollFilter(area)
     area.viewport().installEventFilter(f)
