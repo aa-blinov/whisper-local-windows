@@ -1,21 +1,16 @@
 """Browser-like smooth scrolling for Qt scroll areas.
 
-Qt's default wheel scroll is per-step and instant — each notch of the
-mouse wheel jumps the scrollbar by ``singleStep`` pixels with no
-animation. Browsers animate the scroll over ~200 ms with a decelerating
-curve and accumulate rapid notches into a single ongoing animation so
-fast flicks feel fluid.
+Qt's QPropertyAnimation is capped at ~60 updates/s regardless of the
+display refresh rate. On 144 Hz monitors this produces visible
+stutter because only 60 distinct scroll positions are generated per
+second while the display can show 144.
 
-``apply_smooth_scroll(area)`` installs a lightweight event filter on
-the viewport that:
-
-1. Intercepts ``Wheel`` events before Qt's handler sees them.
-2. Converts ``angleDelta`` to a pixel target (100 px per notch —
-   matches Chrome's default on Windows).
-3. Starts (or re-targets) a ``QPropertyAnimation`` on the vertical
-   scrollbar's ``value`` property with an ``OutCubic`` easing curve.
-4. Accumulates rapid wheel ticks into the running animation's end
-   value, so fast flicks build momentum instead of resetting.
+This module replaces the animation with a QTimer at 7 ms (≈144 Hz)
+that recalculates the scroll position from wall-clock time on every
+tick. The easing is computed from elapsed milliseconds, not frame
+count, so the curve shape is identical at any refresh rate — only
+the number of steps changes (more steps = smoother on high-Hz
+displays).
 
 Usage::
 
@@ -25,21 +20,46 @@ Usage::
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation
+import time
+
+from PySide6.QtCore import QEvent, QObject, QTimer
 from PySide6.QtWidgets import QAbstractScrollArea
 
-_DURATION_MS = 180
-_PX_PER_NOTCH = 100  # pixels scrolled per standard wheel notch (angleDelta=120)
+_DURATION_MS = 180.0   # total animation length (wall-clock ms)
+_PX_PER_NOTCH = 100.0  # pixels per standard wheel notch (angleDelta = 120)
+_TICK_MS = 7           # timer interval — just under 144 Hz
+
+
+def _ease_out_cubic(t: float) -> float:
+    return 1.0 - (1.0 - t) ** 3
 
 
 class _SmoothScrollFilter(QObject):
     def __init__(self, area: QAbstractScrollArea) -> None:
         super().__init__(area)
         self._area = area
-        self._anim = QPropertyAnimation(area.verticalScrollBar(), b"value", self)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._anim.setDuration(_DURATION_MS)
+        self._start: float = 0.0
         self._target: float = 0.0
+        self._t0: float = 0.0   # wall-clock start of current animation (seconds)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(_TICK_MS)
+        self._timer.timeout.connect(self._tick)
+
+    # ------------------------------------------------------------------ timer
+
+    def _tick(self) -> None:
+        elapsed_ms = (time.monotonic() - self._t0) * 1000.0
+        t = min(1.0, elapsed_ms / _DURATION_MS)
+        eased = _ease_out_cubic(t)
+
+        bar = self._area.verticalScrollBar()
+        bar.setValue(int(self._start + (self._target - self._start) * eased))
+
+        if t >= 1.0:
+            self._timer.stop()
+
+    # ----------------------------------------------------------- event filter
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() != QEvent.Type.Wheel:
@@ -49,32 +69,31 @@ class _SmoothScrollFilter(QObject):
         if angle == 0:
             return False
 
-        bar = self._area.verticalScrollBar()
         delta_px = -angle * _PX_PER_NOTCH / 120.0
+        bar = self._area.verticalScrollBar()
 
-        # Accumulate into running animation so rapid flicks build momentum.
-        if self._anim.state() == QPropertyAnimation.State.Running:
-            self._target = float(self._anim.endValue()) + delta_px
+        if self._timer.isActive():
+            # Re-anchor from wherever the animation is right now so rapid
+            # flicks accumulate into the running motion.
+            elapsed_ms = (time.monotonic() - self._t0) * 1000.0
+            t = min(1.0, elapsed_ms / _DURATION_MS)
+            current = self._start + (self._target - self._start) * _ease_out_cubic(t)
+            self._start = current
+            self._target = current + delta_px
+            self._timer.stop()
         else:
-            self._target = float(bar.value()) + delta_px
+            self._start = float(bar.value())
+            self._target = self._start + delta_px
 
-        self._target = max(float(bar.minimum()), min(float(bar.maximum()), self._target))
-
-        self._anim.stop()
-        self._anim.setStartValue(bar.value())
-        self._anim.setEndValue(int(self._target))
-        self._anim.start()
-        return True  # event consumed — Qt won't do its own jump-scroll
+        lo, hi = float(bar.minimum()), float(bar.maximum())
+        self._target = max(lo, min(hi, self._target))
+        self._t0 = time.monotonic()
+        self._timer.start()
+        return True  # consume — prevent Qt's own jump-scroll
 
 
 def apply_smooth_scroll(area: QAbstractScrollArea) -> None:
-    """Enable browser-like smooth scrolling on *area*.
-
-    ``setVerticalScrollMode`` only exists on ``QAbstractItemView``
-    subclasses (tables, lists, trees) — ``QScrollArea`` already
-    moves its content per-pixel by default. We only need the
-    animation filter here.
-    """
+    """Enable high-refresh-rate smooth scrolling on *area*."""
     from PySide6.QtWidgets import QAbstractItemView
     if isinstance(area, QAbstractItemView):
         area.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
