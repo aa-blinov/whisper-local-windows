@@ -86,3 +86,27 @@ if sys.stdout is None:
     sys.stdout = _NullStream()  # type: ignore[assignment]
 if sys.stderr is None:
     sys.stderr = _NullStream()  # type: ignore[assignment]
+
+
+# Hide subprocess console windows on Windows. PyAutoGUI / pyperclip /
+# numba JIT / gigaam audio-conversion paths spawn helper processes via
+# ``subprocess.Popen``; without ``creationflags=CREATE_NO_WINDOW`` each
+# spawn flashes a visible ``cmd.exe`` window in front of the user
+# (especially noticeable during transcribe — the user reported it
+# popping up on every paste).
+#
+# Wrap ``Popen.__init__`` so the flag is added by default; explicit
+# callers that pass their own ``creationflags`` override us, which is
+# the correct precedence (e.g. someone deliberately wants a console).
+if sys.platform == "win32":
+    import subprocess as _subprocess
+
+    _CREATE_NO_WINDOW = 0x08000000
+    _orig_popen_init = _subprocess.Popen.__init__
+
+    def _silent_popen_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if "creationflags" not in kwargs or kwargs["creationflags"] is None:
+            kwargs["creationflags"] = _CREATE_NO_WINDOW
+        return _orig_popen_init(self, *args, **kwargs)
+
+    _subprocess.Popen.__init__ = _silent_popen_init  # type: ignore[assignment]
