@@ -14,9 +14,18 @@ itself stays in place.
 
 States
 ------
-- ``idle`` / ``model_loading`` — pill hidden, meter hidden, slot blank
-- ``recording``                — pill 'Recording', meter live
-- ``processing``               — pill 'Processing', meter hidden
+The slot always shows its current state, the same way the
+topbar's CPU / RAM / GPU resource graphs always show their
+current values — hiding everything in idle made the slot look
+like a blank hole. Pill is always visible with a state-driven
+label; meter is always visible with its bar at 0 unless audio
+is actively flowing in.
+
+- ``idle``          — pill 'Idle' (muted),  meter visible, level 0
+- ``recording``     — pill '● Recording',   meter live
+- ``processing``    — pill 'Processing…',   meter visible, level 0
+- ``model_loading`` — same look as idle (the actual loading state
+  is reflected on the topbar's model pill; we don't compete)
 """
 
 from __future__ import annotations
@@ -35,9 +44,23 @@ from app.gui.widgets.vu_meter import VUMeter
 
 
 _RECORDING_STATES = ("idle", "recording", "processing", "model_loading")
-_RECORDING_LABELS = {
+
+# Pill text per active state. ``idle`` and ``model_loading`` both
+# render as the muted Idle pill — the topbar already shows
+# ``Loading: <model>`` during model_loading and we don't want to
+# compete with it.
+_PILL_LABELS = {
+    "idle": "● Idle",
+    "model_loading": "● Idle",
     "recording": "● Recording",
     "processing": "Processing…",
+}
+# Which property value the pill carries — drives the QSS variant.
+_PILL_VARIANTS = {
+    "idle": "idle",
+    "model_loading": "idle",
+    "recording": "recording",
+    "processing": "processing",
 }
 
 # Placeholder height — picked to fit the pill (~24 px) + spacing
@@ -58,17 +81,18 @@ class RecordingStatusWidget(QWidget):
         layout.setContentsMargins(14, 6, 14, 8)
         layout.setSpacing(4)
 
-        self._pill = QLabel("", self)
+        self._pill = QLabel(_PILL_LABELS["idle"], self)
         self._pill.setObjectName("RecordingStatusPill")
         self._pill.setProperty("role", "recording-pill")
         self._pill.setProperty("state", "idle")
+        # Text inside the pill is centered (looks balanced inside the
+        # rounded chip) but the pill chip itself hugs the left edge of
+        # the slot — same column as the sidebar nav items above.
         self._pill.setAlignment(Qt.AlignCenter)
-        self._pill.setVisible(False)
-        layout.addWidget(self._pill, 0, Qt.AlignHCenter)
+        layout.addWidget(self._pill, 0, Qt.AlignLeft)
 
         self._vu_meter = VUMeter(self)
-        self._vu_meter.setVisible(False)
-        layout.addWidget(self._vu_meter, 0, Qt.AlignHCenter)
+        layout.addWidget(self._vu_meter, 0, Qt.AlignLeft)
 
         layout.addStretch(1)
 
@@ -79,23 +103,16 @@ class RecordingStatusWidget(QWidget):
             raise ValueError(
                 f"state must be one of {_RECORDING_STATES}, got {state!r}"
             )
-        if state in _RECORDING_LABELS:
-            self._pill.setText(_RECORDING_LABELS[state])
-            self._pill.setProperty("state", state)
-            self._pill.setVisible(True)
-        else:
-            # idle / model_loading — slot stays empty, widget itself
-            # remains in place as the placeholder.
-            self._pill.setVisible(False)
-            self._pill.setProperty("state", "idle")
+        # Pill is always visible — placeholder semantics. Label and
+        # variant change with state.
+        self._pill.setText(_PILL_LABELS[state])
+        self._pill.setProperty("state", _PILL_VARIANTS[state])
         self._pill.style().unpolish(self._pill)
         self._pill.style().polish(self._pill)
 
-        # Live VU meter only matters during active capture.
-        if state == "recording":
-            self._vu_meter.setVisible(True)
-        else:
-            self._vu_meter.setVisible(False)
+        # Meter is always visible too — its bar just sits at 0
+        # whenever audio isn't actively being captured.
+        if state != "recording":
             self._vu_meter.reset()
 
     def set_input_level(self, level: float) -> None:

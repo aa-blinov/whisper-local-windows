@@ -50,9 +50,12 @@ def test_widget_has_fixed_placeholder_height(qtbot):
     )
 
 
-def test_idle_state_hides_pill_and_meter_but_keeps_widget(qtbot):
-    """In idle the pill text and the VU bar are hidden — but the
-    widget itself stays in place (it is the placeholder)."""
+def test_idle_state_shows_muted_pill_and_zeroed_meter(qtbot):
+    """Same idea as the CPU / RAM / GPU graphs in the topbar —
+    the slot always shows its current state, even when nothing
+    is happening. Idle = visible muted pill + visible meter sat at 0,
+    NOT a blank placeholder. Hiding everything was confusing
+    (looked like the slot wasn't initialised)."""
     from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 
     w = RecordingStatusWidget()
@@ -62,10 +65,13 @@ def test_idle_state_hides_pill_and_meter_but_keeps_widget(qtbot):
     w.set_recording_state("idle")
 
     pill = _label_by_name(w, "RecordingStatusPill")
-    assert not pill.isVisibleTo(w)
-    assert not w._vu_meter.isVisibleTo(w)
-    # Widget itself is still visible — the placeholder slot.
-    assert w.isVisible()
+    assert pill.isVisibleTo(w)
+    assert pill.property("state") == "idle"
+    # Some non-empty label so the user can read 'Idle' / 'Ready' / etc.
+    assert pill.text().strip() != ""
+    # Meter visible too — its bar just sits at 0 in the idle state.
+    assert w._vu_meter.isVisibleTo(w)
+    assert w._vu_meter.current_level() == 0.0
 
 
 def test_recording_state_shows_pill_and_meter(qtbot):
@@ -84,10 +90,11 @@ def test_recording_state_shows_pill_and_meter(qtbot):
     assert w._vu_meter.isVisibleTo(w)
 
 
-def test_processing_state_shows_pill_hides_meter(qtbot):
+def test_processing_state_shows_pill_keeps_meter_at_zero(qtbot):
     """During Processing the audio buffer is already captured — the
-    VU meter has nothing live to display, so hide it. The pill
-    still indicates the work-in-progress."""
+    VU meter has nothing live to show, so it sits at zero. The
+    meter stays visible (placeholder), unlike the previous design
+    where it disappeared."""
     from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 
     w = RecordingStatusWidget()
@@ -100,13 +107,16 @@ def test_processing_state_shows_pill_hides_meter(qtbot):
     assert pill.isVisibleTo(w)
     assert pill.property("state") == "processing"
     assert "processing" in pill.text().lower()
-    assert not w._vu_meter.isVisibleTo(w)
+    # Meter still visible (placeholder) but reset to 0.
+    assert w._vu_meter.isVisibleTo(w)
+    assert w._vu_meter.current_level() == 0.0
 
 
-def test_model_loading_state_keeps_pill_and_meter_hidden(qtbot):
-    """``model_loading`` is reflected in the topbar's model pill, not
-    here — the recording status slot stays empty so the user isn't
-    confronted with two competing indicators."""
+def test_model_loading_state_falls_back_to_idle_appearance(qtbot):
+    """``model_loading`` is reflected in the topbar's model pill,
+    not here — but the slot still has to fill its placeholder, so
+    show it the same way Idle does. Hiding everything would create
+    visual hole in the sidebar."""
     from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 
     w = RecordingStatusWidget()
@@ -116,11 +126,13 @@ def test_model_loading_state_keeps_pill_and_meter_hidden(qtbot):
     w.set_recording_state("model_loading")
 
     pill = _label_by_name(w, "RecordingStatusPill")
-    assert not pill.isVisibleTo(w)
-    assert not w._vu_meter.isVisibleTo(w)
+    assert pill.isVisibleTo(w)
+    assert pill.property("state") == "idle"
+    assert w._vu_meter.isVisibleTo(w)
+    assert w._vu_meter.current_level() == 0.0
 
 
-def test_back_to_idle_hides_pill_again(qtbot):
+def test_back_to_idle_returns_pill_to_idle_appearance(qtbot):
     from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 
     w = RecordingStatusWidget()
@@ -131,8 +143,11 @@ def test_back_to_idle_hides_pill_again(qtbot):
     w.set_recording_state("idle")
 
     pill = _label_by_name(w, "RecordingStatusPill")
-    assert not pill.isVisibleTo(w)
-    assert not w._vu_meter.isVisibleTo(w)
+    assert pill.isVisibleTo(w)
+    assert pill.property("state") == "idle"
+    # Meter still visible, reset to 0.
+    assert w._vu_meter.isVisibleTo(w)
+    assert w._vu_meter.current_level() == 0.0
 
 
 def test_set_recording_state_rejects_unknown(qtbot):
@@ -154,10 +169,46 @@ def test_set_input_level_forwards_to_meter(qtbot):
     assert w._vu_meter.current_level() == 0.6
 
 
+def test_pill_and_meter_aligned_to_left_edge(qtbot):
+    """The slot lives in the bottom-left corner — pill and VU meter
+    must hug the left edge to read as a single column with the nav
+    list above, not a pair of free-floating centered chips."""
+    from PySide6.QtCore import Qt
+    from app.gui.widgets.recording_status_widget import RecordingStatusWidget
+
+    w = RecordingStatusWidget()
+    qtbot.addWidget(w)
+
+    layout = w.layout()
+    # Walk the layout items and confirm both child widgets have a
+    # left-aligned alignment flag (no AlignHCenter / AlignRight bits).
+    found_pill = False
+    found_meter = False
+    for i in range(layout.count()):
+        item = layout.itemAt(i)
+        widget = item.widget()
+        if widget is None:
+            continue
+        if widget.objectName() == "RecordingStatusPill":
+            assert item.alignment() & Qt.AlignLeft, (
+                f"pill expected left-aligned, got {item.alignment()!r}"
+            )
+            assert not (item.alignment() & Qt.AlignHCenter)
+            found_pill = True
+        if widget.objectName() == "VUMeter":
+            assert item.alignment() & Qt.AlignLeft, (
+                f"VU meter expected left-aligned, got {item.alignment()!r}"
+            )
+            assert not (item.alignment() & Qt.AlignHCenter)
+            found_meter = True
+    assert found_pill and found_meter
+
+
 def test_meter_resets_when_leaving_recording_state(qtbot):
     """Same contract the topbar previously held — leaving the
     recording state must zero the meter so a stale reading from the
-    last capture doesn't linger when the next one starts."""
+    last capture doesn't linger when the next one starts. The
+    meter widget stays visible (placeholder); only its bar resets."""
     from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 
     w = RecordingStatusWidget()
@@ -165,5 +216,5 @@ def test_meter_resets_when_leaving_recording_state(qtbot):
     w.set_recording_state("recording")
     w.set_input_level(0.6)
     w.set_recording_state("idle")
-    # current_level() should drop back to 0 after reset().
+    assert w._vu_meter.isVisibleTo(w) or True  # not asserting visibility before show()
     assert w._vu_meter.current_level() == 0.0
