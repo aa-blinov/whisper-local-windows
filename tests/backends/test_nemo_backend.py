@@ -307,6 +307,56 @@ def test_transcribe_handles_string_output(monkeypatch):
     assert text == "plain string output"
 
 
+def test_transcribe_handles_tuple_of_lists_output(monkeypatch):
+    """Parakeet TDT v3 ``model.transcribe([wav])`` (greedy + beam
+    shapes) returns a tuple of two parallel lists:
+    ``(['greedy text'], ['beam text'])``. The first list is the
+    primary hypothesis we want; the second is the alternative the
+    decoder kept around.
+
+    Confirmed in production with a real recording — we logged the
+    raw shape as ``raw type=tuple, value preview=(['Теперь все работает.'],
+    ['Теперь все работает.'])`` and lost it to the previous
+    extractor. Must unwrap recursively."""
+    from app.backends.nemo_backend import NemoBackend
+
+    fake_model = MagicMock()
+    fake_model.transcribe = MagicMock(
+        return_value=(["Теперь все работает."], ["Теперь все работает."])
+    )
+    fake_class = MagicMock()
+    fake_class.from_pretrained = MagicMock(return_value=fake_model)
+    _install_fake_nemo(monkeypatch, asr_model_class=fake_class)
+
+    backend = NemoBackend(model="nvidia/parakeet-tdt-0.6b-v3")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    text = backend.transcribe(np.zeros(16000, dtype=np.float32))
+    assert text == "Теперь все работает."
+
+
+def test_extract_text_recursively_unwraps_nested_iterables():
+    """Direct unit test for the helper — covers shapes the
+    transcribe-level test doesn't (single tuple, deeply nested
+    list, mix of str and Hypothesis-like objects)."""
+    from app.backends.nemo_backend import NemoBackend
+
+    # Bare tuple of strings — first element wins.
+    assert NemoBackend._extract_text(("hello", "world")) == "hello"
+    # Nested list of lists.
+    assert NemoBackend._extract_text([["nested"]]) == "nested"
+    # Hypothesis-like at the top level.
+    h = MagicMock(text="from-hypothesis")
+    assert NemoBackend._extract_text(h) == "from-hypothesis"
+    # Hypothesis nested inside a tuple+list.
+    assert NemoBackend._extract_text(([h], [h])) == "from-hypothesis"
+    # Empty — None.
+    assert NemoBackend._extract_text(()) is None
+    assert NemoBackend._extract_text([[]]) is None
+    assert NemoBackend._extract_text(None) is None
+
+
 def test_transcribe_returns_none_on_empty_output(monkeypatch):
     from app.backends.nemo_backend import NemoBackend
 

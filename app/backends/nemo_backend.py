@@ -268,21 +268,45 @@ class NemoBackend:
 
     @staticmethod
     def _extract_text(result) -> Optional[str]:
-        """``ASRModel.transcribe`` returns ``List[Hypothesis]`` in
-        recent releases; older / mocked variants may yield a list
-        of strings or a single string. Accept all three shapes."""
+        """Pull the transcription text out of whatever shape NeMo
+        returned. Production has surfaced these:
+
+        * ``"hello"`` — bare string (older fakes / very old NeMo)
+        * ``Hypothesis(text="hello")`` — the canonical 2.0 shape
+        * ``[Hypothesis, ...]`` — list of Hypotheses (one per file)
+        * ``["hello"]`` — list of strings (some test fakes)
+        * ``(["hello"], ["hello"])`` — tuple of (greedy, beam)
+          parallel lists, observed with Parakeet TDT v3 on Windows
+          (``raw type=tuple`` confirmed in the user's log)
+
+        Recursive descent: take the first non-empty element, pull
+        ``.text`` if it has one, otherwise treat strings as the
+        terminal case. Anything else recurses. Returns ``None`` for
+        empty / unrecognisable structures so the caller can log a
+        clean "empty transcription" rather than crashing on
+        ``AttributeError`` against a list."""
         if result is None:
             return None
         if isinstance(result, str):
             return result
-        if not result:
-            # Empty list / tuple — no transcription produced.
+        # ``Hypothesis``-like with a ``.text`` attribute that's a
+        # string — short-circuit. Don't blindly trust ``.text`` to be
+        # a string; some NeMo internal types use it as a method.
+        text_attr = getattr(result, "text", None)
+        if isinstance(text_attr, str):
+            return text_attr
+        # Iterables: tuple / list — descend into the first element
+        # that yields something. Skip ``__iter__`` on objects we've
+        # already extracted from above.
+        try:
+            iterator = iter(result)
+        except TypeError:
             return None
-        first = result[0] if hasattr(result, "__getitem__") else result
-        text = getattr(first, "text", None)
-        if text is None and isinstance(first, str):
-            text = first
-        return text
+        for item in iterator:
+            extracted = NemoBackend._extract_text(item)
+            if extracted:
+                return extracted
+        return None
 
     @staticmethod
     def _patch_numpy_for_legacy_nemo_deps() -> None:
