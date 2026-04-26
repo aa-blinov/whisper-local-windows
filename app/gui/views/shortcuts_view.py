@@ -192,10 +192,18 @@ class ShortcutsView(QWidget):
         storage_path_row.addWidget(self._storage_path_label, 1)
         storage_v.addLayout(storage_path_row)
 
-        # Button row — flush left, stretch on the right.
-        storage_btn_row = QHBoxLayout()
+        # Button row — flush left, stretch on the right. Wrapped in a
+        # QWidget rather than added as a bare QHBoxLayout because the
+        # outer VBox doesn't reliably pick up the layout's sizeHint
+        # in this nesting (hint label was rendering on top of the
+        # button row's bottom edge).
+        storage_btn_widget = QWidget(storage_card)
+        storage_btn_widget.setObjectName("StorageButtonRow")
+        storage_btn_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        storage_btn_row = QHBoxLayout(storage_btn_widget)
+        storage_btn_row.setContentsMargins(0, 0, 0, 0)
         storage_btn_row.setSpacing(10)
-        self._change_storage_btn = QPushButton("Change…", storage_card)
+        self._change_storage_btn = QPushButton("Change…", storage_btn_widget)
         self._change_storage_btn.setObjectName("ChangeStorageButton")
         self._change_storage_btn.setFocusPolicy(Qt.NoFocus)
         self._change_storage_btn.clicked.connect(
@@ -203,7 +211,9 @@ class ShortcutsView(QWidget):
         )
         storage_btn_row.addWidget(self._change_storage_btn)
 
-        self._reset_storage_btn = QPushButton("Reset to default", storage_card)
+        self._reset_storage_btn = QPushButton(
+            "Reset to default", storage_btn_widget,
+        )
         self._reset_storage_btn.setObjectName("ResetStorageButton")
         self._reset_storage_btn.setFocusPolicy(Qt.NoFocus)
         # Disabled until a custom path is set — see ``set_storage_path``.
@@ -213,7 +223,12 @@ class ShortcutsView(QWidget):
         )
         storage_btn_row.addWidget(self._reset_storage_btn)
         storage_btn_row.addStretch(1)
-        storage_v.addLayout(storage_btn_row)
+        # Match the wrapper's height to the buttons' sizeHint so the
+        # outer VBox can't squish it below the button height.
+        storage_btn_widget.setMinimumHeight(
+            self._change_storage_btn.sizeHint().height(),
+        )
+        storage_v.addWidget(storage_btn_widget)
 
         storage_hint = QLabel(
             "Changes apply on next launch. Already-downloaded weights "

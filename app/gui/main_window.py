@@ -30,8 +30,12 @@ class MainWindow(QMainWindow):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Lazy to Text")
-        self.resize(1000, 660)
-        self.setMinimumSize(860, 560)
+        # Default size accommodates the Settings tab without scroll
+        # bars; the minimum keeps the user from squishing the window
+        # below the Storage card's natural height (any smaller and
+        # form labels start rendering on top of their inputs).
+        self.resize(1100, 780)
+        self.setMinimumSize(900, 720)
         self._close_to_tray = False
         self._quitting = False
 
