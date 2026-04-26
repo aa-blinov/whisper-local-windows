@@ -137,18 +137,15 @@ class ShortcutsView(QWidget):
         # Populated later via set_devices(); placeholder until then.
         self._device_combo.addItem("System default", None)
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
-        audio_form.addRow("Microphone", self._device_combo)
 
-        # Quick verifier: capture ~3 s, report peak/RMS so the user
-        # knows the chosen device is actually picking up sound.
-        # Layout: [Test button] [VU meter] [result label / progress].
-        # The VU meter mirrors the topbar's during-recording widget
-        # — without it the user sees nothing for 3 s and can't tell
-        # whether the device is alive or hung.
+        # Microphone row: dropdown + Test button inline. Same trick
+        # as the HF card — kills the empty space a button-on-its-
+        # own-row left next to the dropdown.
         from app.gui.widgets.vu_meter import VUMeter
 
-        mic_test_row = QHBoxLayout()
-        mic_test_row.setSpacing(10)
+        mic_input_row = QHBoxLayout()
+        mic_input_row.setSpacing(10)
+        mic_input_row.addWidget(self._device_combo, 1)
         self._test_mic_btn = QPushButton("Test microphone", audio_card)
         self._test_mic_btn.setObjectName("TestMicrophoneButton")
         # Without ``NoFocus`` clicking the button puts keyboard focus
@@ -157,19 +154,26 @@ class ShortcutsView(QWidget):
         # QLineEdit — and the cursor lands inside it. Annoying.
         self._test_mic_btn.setFocusPolicy(Qt.NoFocus)
         self._test_mic_btn.clicked.connect(self.test_mic_requested.emit)
-        mic_test_row.addWidget(self._test_mic_btn)
+        mic_input_row.addWidget(self._test_mic_btn)
+        audio_form.addRow("Microphone", mic_input_row)
 
+        # Result row: live VU meter (visible only during / after a
+        # test) + the textual result. Sits below the input row —
+        # collapses to a thin empty strip when nothing is running,
+        # blooms into a meter + verdict line during / after a test.
+        mic_result_row = QHBoxLayout()
+        mic_result_row.setSpacing(10)
         self._test_mic_meter = VUMeter(audio_card)
         self._test_mic_meter.setObjectName("MicrophoneTestMeter")
         self._test_mic_meter.setVisible(False)
-        mic_test_row.addWidget(self._test_mic_meter)
+        mic_result_row.addWidget(self._test_mic_meter)
 
         self._test_mic_label = QLabel("", audio_card)
         self._test_mic_label.setObjectName("MicrophoneTestResult")
         self._test_mic_label.setProperty("role", "muted")
         self._test_mic_label.setWordWrap(True)
-        mic_test_row.addWidget(self._test_mic_label, 1)
-        audio_form.addRow("", mic_test_row)
+        mic_result_row.addWidget(self._test_mic_label, 1)
+        audio_form.addRow("", mic_result_row)
         root.addWidget(audio_card)
 
         # ---- Hotkeys card -----------------------------------------------
