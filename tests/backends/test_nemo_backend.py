@@ -8,6 +8,7 @@ installed in the dev env.
 from __future__ import annotations
 
 import sys
+import threading
 import time
 import types
 from typing import Callable
@@ -335,3 +336,95 @@ def test_shutdown_blocks_subsequent_load(monkeypatch):
     # ``load`` is a no-op after shutdown.
     assert backend.status() == "stopped"
     fake_class.from_pretrained.assert_not_called()
+
+
+# ---- Cancel-load (user clicked Cancel during a slow download) -------------
+
+
+def test_cancel_load_returns_status_to_stopped(monkeypatch):
+    """The user mis-clicked a model and needs an out. ``cancel_load``
+    flips status back to ``stopped`` immediately so the watcher in
+    ``StateManager`` exits and the loading pill drops away — without
+    waiting for the underlying download/import to actually finish
+    (Python can't safely interrupt a foreign thread)."""
+    from app.backends.nemo_backend import NemoBackend
+
+    started = threading.Event()
+    finish = threading.Event()
+
+    def slow_loader(*_args, **_kwargs):
+        started.set()
+        # Hold the load thread inside ``from_pretrained`` until the
+        # test releases it — gives us a window where the backend is
+        # in the ``loading`` state for cancel_load to act on.
+        finish.wait(timeout=2.0)
+        return MagicMock()
+
+    fake_class = MagicMock()
+    fake_class.from_pretrained = MagicMock(side_effect=slow_loader)
+    _install_fake_nemo(monkeypatch, asr_model_class=fake_class)
+
+    backend = NemoBackend(model="nvidia/parakeet-tdt-0.6b-v3")
+    backend.load()
+    assert started.wait(2.0)
+    assert backend.status() == "loading"
+
+    backend.cancel_load()
+    assert backend.status() == "stopped"
+    # Now let the slow loader finish — its result must be discarded
+    # because we cancelled.
+    finish.set()
+    # Brief settle window so the load thread can exit.
+    assert _wait(lambda: backend.status() == "stopped")
+    assert backend._model is None
+
+
+def test_cancel_load_is_noop_when_not_loading(monkeypatch):
+    """Idempotent — calling cancel when there's nothing to cancel
+    must not raise or thrash state. Important because the UI cancel
+    button can race with a load that already finished."""
+    from app.backends.nemo_backend import NemoBackend
+
+    _install_fake_nemo(monkeypatch)
+
+    backend = NemoBackend(model="nvidia/parakeet-tdt-0.6b-v3")
+    # No load yet — status is "stopped".
+    backend.cancel_load()
+    assert backend.status() == "stopped"
+
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    # Already ready — cancel must not flip status back to stopped.
+    backend.cancel_load()
+    assert backend.status() == "ready"
+
+
+def test_load_after_cancel_resumes_normally(monkeypatch):
+    """After a cancel, the user might pick the same model again;
+    a fresh load() call must reset the cancel flag and proceed to
+    ready, otherwise the second click would silently no-op."""
+    from app.backends.nemo_backend import NemoBackend
+
+    started = threading.Event()
+    finish = threading.Event()
+
+    def slow_loader(*_args, **_kwargs):
+        if not started.is_set():
+            started.set()
+            finish.wait(timeout=2.0)
+        return MagicMock()
+
+    fake_class = MagicMock()
+    fake_class.from_pretrained = MagicMock(side_effect=slow_loader)
+    _install_fake_nemo(monkeypatch, asr_model_class=fake_class)
+
+    backend = NemoBackend(model="nvidia/parakeet-tdt-0.6b-v3")
+    backend.load()
+    assert started.wait(2.0)
+    backend.cancel_load()
+    finish.set()
+    assert _wait(lambda: backend.status() == "stopped")
+
+    # Second load — must succeed (cancel flag reset).
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")

@@ -807,6 +807,23 @@ class AppController(QObject):
                 progress_signal.connect(self._on_download_progress)
             except Exception:  # pragma: no cover — defensive
                 pass
+        # Topbar's Cancel button → recording controller's cancel.
+        # Wrapped in a thin lambda so we can keep recording strictly
+        # typed against the protocol (which only declares request_*).
+        self._window.topbar.cancel_load_requested.connect(
+            self._on_cancel_load_requested
+        )
+
+    def _on_cancel_load_requested(self) -> None:
+        if self._recording is None:
+            return
+        target = getattr(self._recording, "cancel_model_change", None)
+        if target is None:
+            return
+        try:
+            target()
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("cancel_model_change forward raised: %s", exc)
 
     def _on_download_progress(self, current: int, total: int, _desc: str) -> None:
         # Mirror progress in two places: the small pill in the topbar

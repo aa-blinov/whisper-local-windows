@@ -28,6 +28,12 @@ class FakeStateManager:
         self.model_change_requests.append((new_model_size, compute_type))
         return True
 
+    def cancel_model_change(self) -> bool:
+        self.cancel_model_change_calls = (
+            getattr(self, "cancel_model_change_calls", 0) + 1
+        )
+        return True
+
     def shutdown(self) -> None:
         self.shutdown_called = True
 
@@ -156,6 +162,22 @@ def test_request_model_change_proxies_to_state_manager(qtbot):
         ("deepdml/faster-whisper-large-v3-turbo-ct2", None),
         ("Systran/faster-whisper-large-v3", "int8_float16"),
     ]
+    rc.shutdown()
+
+
+def test_cancel_model_change_proxies_to_state_manager(qtbot):
+    """The topbar's cancel button click ends up here. The controller
+    is a thin marshall — the actual cancel logic lives in the state
+    manager / backend pair."""
+    from app.gui.controllers.recording_controller import RecordingController
+
+    sm = FakeStateManager()
+    rc = RecordingController(state_manager=sm, poll_interval_ms=10)
+
+    result = rc.cancel_model_change()
+
+    assert result is True
+    assert sm.cancel_model_change_calls == 1
     rc.shutdown()
 
 

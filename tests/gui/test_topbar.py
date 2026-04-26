@@ -2,11 +2,15 @@
 
 import pytest
 
-from PySide6.QtWidgets import QLabel
+from PySide6.QtWidgets import QLabel, QPushButton
 
 
 def _label_by_name(widget, name: str) -> QLabel:
     return widget.findChild(QLabel, name)
+
+
+def _button_by_name(widget, name: str) -> QPushButton:
+    return widget.findChild(QPushButton, name)
 
 
 def test_topbar_has_model_pill(qtbot):
@@ -268,3 +272,72 @@ def test_topbar_set_input_level_forwards_to_meter(qtbot):
     bar.set_recording_state("recording")
     bar.set_input_level(0.6)
     assert bar._vu_meter.current_level() == 0.6
+
+
+# ---- Cancel-load button -----------------------------------------------------
+
+
+def test_cancel_button_exists_and_hidden_by_default(qtbot):
+    """Cancel only makes sense while a load is in flight; the button
+    stays out of sight until ``set_recording_state('model_loading')``
+    flips it on."""
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.show()
+    button = _button_by_name(bar, "TopBarCancelLoadButton")
+    assert button is not None
+    assert not button.isVisibleTo(bar)
+
+
+def test_cancel_button_visible_during_model_loading(qtbot):
+    """When the backend goes into ``model_loading``, surface a cancel
+    button next to the loading pill so the user can back out of a
+    mis-clicked heavy model card without waiting for the deadlocked
+    NeMo import to finish."""
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.show()
+    bar.set_active_model("Parakeet TDT v3 (multilingual)")
+    bar.set_recording_state("model_loading")
+
+    button = _button_by_name(bar, "TopBarCancelLoadButton")
+    assert button.isVisibleTo(bar)
+
+
+def test_cancel_button_hidden_again_after_loading_ends(qtbot):
+    """Once loading finishes (or is itself cancelled), the button
+    disappears so the topbar isn't littered with a stale Cancel
+    that does nothing."""
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.show()
+    bar.set_active_model("Parakeet TDT v3 (multilingual)")
+    bar.set_recording_state("model_loading")
+    bar.set_recording_state("idle")
+
+    button = _button_by_name(bar, "TopBarCancelLoadButton")
+    assert not button.isVisibleTo(bar)
+
+
+def test_cancel_button_emits_signal_on_click(qtbot):
+    """The button is purely UI — its click emits a ``cancel_load_requested``
+    signal that the AppController routes to the recording controller's
+    ``cancel_model_change``. Keeps the topbar ignorant of the domain
+    layer."""
+    from app.gui.widgets.topbar import TopBar
+
+    bar = TopBar()
+    qtbot.addWidget(bar)
+    bar.show()
+    bar.set_active_model("Parakeet TDT v3 (multilingual)")
+    bar.set_recording_state("model_loading")
+
+    button = _button_by_name(bar, "TopBarCancelLoadButton")
+    with qtbot.waitSignal(bar.cancel_load_requested, timeout=500):
+        button.click()

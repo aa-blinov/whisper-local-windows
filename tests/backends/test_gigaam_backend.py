@@ -8,6 +8,7 @@ PyTorch dependency tree.
 from __future__ import annotations
 
 import sys
+import threading
 import time
 import types
 from typing import Callable
@@ -365,3 +366,78 @@ def test_shutdown_resets_state_to_stopped(monkeypatch):
 
     backend.shutdown()
     assert backend.status() == "stopped"
+
+
+# ---- Cancel-load (user clicked Cancel during a slow download) -------------
+
+
+def test_cancel_load_returns_status_to_stopped(monkeypatch):
+    """User picked the wrong card and needs an out. ``cancel_load``
+    flips status to ``stopped`` immediately so the watcher in
+    ``StateManager`` can exit and the topbar pill drops away — no
+    waiting on the underlying ``gigaam.load_model`` call to finish
+    (Python can't safely interrupt a foreign thread)."""
+    from app.backends.gigaam_backend import GigaamBackend
+
+    started = threading.Event()
+    finish = threading.Event()
+
+    def slow_load(*_args, **_kwargs):
+        started.set()
+        finish.wait(timeout=2.0)
+        return MagicMock()
+
+    _install_fake_gigaam(monkeypatch, load_model=slow_load)
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.load()
+    assert started.wait(2.0)
+    assert backend.status() == "loading"
+
+    backend.cancel_load()
+    assert backend.status() == "stopped"
+    finish.set()
+    assert _wait(lambda: backend.status() == "stopped")
+    assert backend._model is None
+
+
+def test_cancel_load_is_noop_when_not_loading(monkeypatch):
+    from app.backends.gigaam_backend import GigaamBackend
+
+    _install_fake_gigaam(monkeypatch)
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.cancel_load()  # nothing in flight
+    assert backend.status() == "stopped"
+
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    backend.cancel_load()  # already finished — leave ``ready`` alone
+    assert backend.status() == "ready"
+
+
+def test_load_after_cancel_resumes_normally(monkeypatch):
+    from app.backends.gigaam_backend import GigaamBackend
+
+    started = threading.Event()
+    finish = threading.Event()
+    call_n = {"n": 0}
+
+    def slow_load(*_args, **_kwargs):
+        call_n["n"] += 1
+        if call_n["n"] == 1:
+            started.set()
+            finish.wait(timeout=2.0)
+        return MagicMock()
+
+    _install_fake_gigaam(monkeypatch, load_model=slow_load)
+
+    backend = GigaamBackend(model="v2_ctc")
+    backend.load()
+    assert started.wait(2.0)
+    backend.cancel_load()
+    finish.set()
+    assert _wait(lambda: backend.status() == "stopped")
+
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")

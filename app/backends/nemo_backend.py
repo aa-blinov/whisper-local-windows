@@ -68,6 +68,13 @@ class NemoBackend:
         self._status = "stopped"
         self._load_thread: Optional[threading.Thread] = None
         self._shutdown = False
+        # Set to True when the user clicks Cancel during a load. The
+        # load worker still has to run to completion (Python can't
+        # safely interrupt a foreign thread that's blocked on a
+        # network read or numba compile), but it sees this flag at
+        # its publish step and discards the loaded model instead of
+        # transitioning to "ready". Reset on each fresh ``load()``.
+        self._cancel_requested = False
         # Inference-time tunables. Cached here so ``transcribe`` can
         # apply them without re-reading from config on every call.
         self._inference_settings = NemoInferenceSettings()
@@ -99,6 +106,7 @@ class NemoBackend:
             if self._status in ("loading", "ready"):
                 return
             self._status = "loading"
+            self._cancel_requested = False
             target_model = self._model_name
 
         thread = threading.Thread(
@@ -110,6 +118,31 @@ class NemoBackend:
         with self._lock:
             self._load_thread = thread
         thread.start()
+
+    def cancel_load(self) -> None:
+        """Abandon an in-flight load.
+
+        Flips status back to ``stopped`` immediately so the watcher
+        in ``StateManager`` exits and the loading pill drops away.
+        The load worker keeps running until ``from_pretrained`` /
+        ``import nemo.collections.asr`` returns — Python has no clean
+        way to interrupt a thread that's blocked on a network read,
+        numba JIT compile, or torch CUDA init — but its result is
+        discarded thanks to ``_cancel_requested``.
+
+        Idempotent — calling cancel when no load is in flight is a
+        no-op (important: the topbar's cancel button can race with
+        a load that already finished or failed).
+        """
+        with self._lock:
+            if self._shutdown:
+                return
+            if self._status != "loading":
+                return
+            log.info("NeMo model load cancelled by user")
+            self._cancel_requested = True
+            self._model = None
+            self._status = "stopped"
 
     def change_model(
         self,
@@ -279,7 +312,15 @@ class NemoBackend:
                 model_name, exc, exc_info=True,
             )
             with self._lock:
-                if not self._shutdown and self._model_name == model_name:
+                # If the user cancelled while we were inside
+                # from_pretrained, leave the cancelled state alone
+                # rather than promoting a download failure to "error"
+                # and confusing the UI with a popup they didn't ask for.
+                if (
+                    not self._shutdown
+                    and not self._cancel_requested
+                    and self._model_name == model_name
+                ):
                     self._model = None
                     self._status = "error"
             return
@@ -303,6 +344,12 @@ class NemoBackend:
 
         with self._lock:
             if self._shutdown:
+                return
+            if self._cancel_requested:
+                log.info(
+                    "Discarding loaded NeMo model %s — cancelled by user",
+                    model_name,
+                )
                 return
             if self._model_name != model_name:
                 log.info(

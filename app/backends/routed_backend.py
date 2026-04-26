@@ -156,6 +156,23 @@ class RoutedBackend:
     def shutdown(self) -> None:
         self._inner.shutdown()
 
+    def cancel_load(self) -> None:
+        """Forward cancel-load to the inner backend.
+
+        Silent if the inner doesn't expose ``cancel_load`` (older fakes
+        in tests; future engines that haven't been updated yet) — the
+        topbar's cancel button must never raise from a click. The
+        inner backends themselves are idempotent when status isn't
+        ``loading``, so it's safe to call this blindly from the UI.
+        """
+        target = getattr(self._inner, "cancel_load", None)
+        if target is None:
+            return
+        try:
+            target()
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("cancel_load on inner raised: %s", exc)
+
     def update_inference_settings(self, settings) -> None:
         """Forward per-model overrides to the inner backend if it
         accepts them. GigaAM's backend ignores the call (its engine

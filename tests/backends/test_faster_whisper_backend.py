@@ -7,6 +7,7 @@ and deterministic.
 
 from __future__ import annotations
 
+import threading
 import time
 from types import SimpleNamespace
 from typing import Callable
@@ -439,3 +440,80 @@ def test_shutdown_during_load_does_not_overwrite_state(monkeypatch):
     time.sleep(0.2)  # let the background load complete
 
     assert backend.status() == "stopped"
+
+
+# ---- Cancel-load (user clicked Cancel during a slow download) -------------
+
+
+def test_cancel_load_returns_status_to_stopped(monkeypatch):
+    """User picked the wrong model card and needs an out. ``cancel_load``
+    flips status to ``stopped`` immediately so the loading pill drops
+    away — no need to wait for the underlying ``WhisperModel`` call to
+    actually finish (Python can't safely interrupt a foreign thread)."""
+    from app.backends.faster_whisper_backend import FasterWhisperBackend
+
+    started = threading.Event()
+    finish = threading.Event()
+
+    def slow(*_args, **_kwargs):
+        started.set()
+        finish.wait(timeout=2.0)
+        return MagicMock()
+
+    monkeypatch.setattr("faster_whisper.WhisperModel", slow)
+
+    backend = FasterWhisperBackend(model="tiny", device="cpu", compute_type="int8")
+    backend.load()
+    assert started.wait(2.0)
+    assert backend.status() == "loading"
+
+    backend.cancel_load()
+    assert backend.status() == "stopped"
+    finish.set()
+    assert _wait(lambda: backend.status() == "stopped")
+    assert backend._model is None
+
+
+def test_cancel_load_is_noop_when_not_loading(monkeypatch):
+    from app.backends.faster_whisper_backend import FasterWhisperBackend
+
+    monkeypatch.setattr(
+        "faster_whisper.WhisperModel", lambda *a, **kw: MagicMock(),
+    )
+    backend = FasterWhisperBackend(model="tiny")
+    backend.cancel_load()  # nothing in flight — must not raise
+    assert backend.status() == "stopped"
+
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    backend.cancel_load()  # already finished — leave ``ready`` alone
+    assert backend.status() == "ready"
+
+
+def test_load_after_cancel_resumes_normally(monkeypatch):
+    """After a cancel, the user might re-pick the same model card;
+    a fresh ``load()`` must reset the cancel flag."""
+    from app.backends.faster_whisper_backend import FasterWhisperBackend
+
+    started = threading.Event()
+    finish = threading.Event()
+    call_n = {"n": 0}
+
+    def slow(*_args, **_kwargs):
+        call_n["n"] += 1
+        if call_n["n"] == 1:
+            started.set()
+            finish.wait(timeout=2.0)
+        return MagicMock()
+
+    monkeypatch.setattr("faster_whisper.WhisperModel", slow)
+
+    backend = FasterWhisperBackend(model="tiny")
+    backend.load()
+    assert started.wait(2.0)
+    backend.cancel_load()
+    finish.set()
+    assert _wait(lambda: backend.status() == "stopped")
+
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")

@@ -405,6 +405,32 @@ QLabel[role="recording-pill"][state="model_loading"] {
     color: {{color.bg_primary}};
 }
 
+/* Cancel button next to the loading model pill — visible only while
+   the backend is downloading / importing. Compact, danger-tinted so
+   the user sees it as the escape hatch it is, but soft enough that
+   it doesn't dominate the topbar. */
+QPushButton[role="cancel-load"] {
+    background-color: transparent;
+    color: {{color.danger}};
+    border: 1px solid {{color.danger}};
+    border-radius: {{radius.sm}};
+    padding: 3px {{space.sm}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+}
+
+QPushButton[role="cancel-load"]:hover {
+    background-color: {{color.danger}};
+    color: {{color.text_primary}};
+}
+
+QPushButton[role="cancel-load"]:pressed {
+    background-color: {{color.danger}};
+    color: {{color.text_primary}};
+    padding-top: 4px;
+    padding-bottom: 2px;
+}
+
 /* ---- Sidebar ------------------------------------------------------------- */
 
 #Sidebar {

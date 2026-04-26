@@ -323,6 +323,36 @@ class StateManager:
             pass
         return "idle"
     
+    def cancel_model_change(self) -> bool:
+        """Abandon an in-flight model load.
+
+        The user clicked Cancel on the topbar pill — almost always
+        because they mis-picked a heavy model card (or NeMo's cold
+        import deadlocked for half an hour). We tell the backend to
+        drop its in-flight result, clear ``is_model_loading`` so the
+        UI flips back to idle, and let the watcher thread exit on
+        its next poll when it sees ``backend.status() == 'stopped'``.
+
+        Returns ``True`` iff a load was actually cancelled, ``False``
+        if there was nothing to cancel (cancel button can race with
+        a load that already finished or failed).
+        """
+        with self._state_lock:
+            if not self.is_model_loading:
+                return False
+
+        self.logger.info(
+            "Cancelling model load…", extra={'user_message': True}
+        )
+        target = getattr(self.backend, "cancel_load", None)
+        if target is not None:
+            try:
+                target()
+            except Exception as exc:  # pragma: no cover — defensive
+                self.logger.warning("backend.cancel_load raised: %s", exc)
+        self.set_model_loading(False)
+        return True
+
     def request_model_change(
         self,
         new_model_size: str,
@@ -423,6 +453,14 @@ class StateManager:
                     f"Failed to load {model_size} model",
                     extra={'user_message': True},
                 )
+                self.set_model_loading(False)
+                return
+            if status == "stopped":
+                # The user (or app teardown) cancelled the in-flight
+                # load via ``cancel_model_change`` / backend
+                # ``cancel_load``. Exit cleanly without the timeout
+                # warning — the cancel path already logged the user-
+                # facing message.
                 self.set_model_loading(False)
                 return
             now = time.monotonic()

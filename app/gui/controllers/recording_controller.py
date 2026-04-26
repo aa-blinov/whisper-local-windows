@@ -91,6 +91,23 @@ class RecordingController(QObject):
             new_model_size, compute_type=compute_type
         )
 
+    def cancel_model_change(self) -> bool:
+        """Forward the topbar's Cancel click to the state manager.
+
+        Thin pass-through: cancel is a one-shot intent, no Qt-side
+        bookkeeping needed. Falls back gracefully when the underlying
+        state manager doesn't expose ``cancel_model_change`` (older
+        fakes in tests) so the cancel button never crashes the UI.
+        """
+        target = getattr(self._state_manager, "cancel_model_change", None)
+        if target is None:
+            return False
+        try:
+            return bool(target())
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("StateManager.cancel_model_change raised: %s", exc)
+            return False
+
     def list_input_devices(self) -> list:
         recorder = getattr(self._state_manager, "audio_recorder", None)
         if recorder is None or not hasattr(recorder, "list_input_devices"):

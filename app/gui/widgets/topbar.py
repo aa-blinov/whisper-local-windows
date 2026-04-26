@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QWidget,
 )
@@ -57,6 +58,13 @@ def _format_progress(current: int, total: int) -> str:
 
 
 class TopBar(QWidget):
+    # Emitted when the user clicks the Cancel button next to the
+    # loading model pill. The AppController routes this into the
+    # recording controller, which forwards it to StateManager →
+    # backend.cancel_load. Keeping the topbar ignorant of the
+    # domain layer makes it easy to test in isolation.
+    cancel_load_requested = Signal()
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("TopBar")
@@ -129,6 +137,20 @@ class TopBar(QWidget):
         self._model_display_name: Optional[str] = None
         self._loading_progress_text = ""
         self._loading_elapsed_s = 0
+
+        # Cancel button — visible only while the model pill is in its
+        # loading state. Gives the user an out when they mis-clicked a
+        # heavy model card, or when NeMo's cold import deadlocks for
+        # 8+ minutes (which is exactly what motivated this widget).
+        self._cancel_load_button = QPushButton("Cancel", content)
+        self._cancel_load_button.setObjectName("TopBarCancelLoadButton")
+        self._cancel_load_button.setProperty("role", "cancel-load")
+        self._cancel_load_button.setCursor(Qt.PointingHandCursor)
+        self._cancel_load_button.setVisible(False)
+        self._cancel_load_button.clicked.connect(
+            self.cancel_load_requested.emit
+        )
+        layout.addWidget(self._cancel_load_button)
 
         outer.addWidget(content, 1)
 
@@ -244,3 +266,6 @@ class TopBar(QWidget):
         self._model_pill.style().unpolish(self._model_pill)
         self._model_pill.style().polish(self._model_pill)
         self._model_state = state
+        # Cancel button shadows the loading state of the pill exactly
+        # — it has no purpose outside it.
+        self._cancel_load_button.setVisible(state == "loading")

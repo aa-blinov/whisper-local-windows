@@ -233,6 +233,12 @@ class FasterWhisperBackend:
         self._status = "stopped"
         self._load_thread: Optional[threading.Thread] = None
         self._shutdown = False
+        # Set to True when the user clicks Cancel while a load is in
+        # flight. The load worker keeps running until ``WhisperModel``
+        # returns (Python can't safely interrupt a foreign thread)
+        # but its result is discarded at the publish step. Reset on
+        # each fresh ``load()``.
+        self._cancel_requested = False
 
     # ---- public API ---------------------------------------------------------
 
@@ -258,6 +264,7 @@ class FasterWhisperBackend:
             if self._status in ("loading", "ready"):
                 return
             self._status = "loading"
+            self._cancel_requested = False
             target_model = self._model_name
 
         thread = threading.Thread(
@@ -269,6 +276,20 @@ class FasterWhisperBackend:
         with self._lock:
             self._load_thread = thread
         thread.start()
+
+    def cancel_load(self) -> None:
+        """Abandon an in-flight load — see ``NemoBackend.cancel_load``
+        for the full rationale. Idempotent; only acts when status is
+        ``loading``."""
+        with self._lock:
+            if self._shutdown:
+                return
+            if self._status != "loading":
+                return
+            log.info("faster-whisper model load cancelled by user")
+            self._cancel_requested = True
+            self._model = None
+            self._status = "stopped"
 
     def change_model(
         self,
@@ -414,7 +435,14 @@ class FasterWhisperBackend:
         except Exception as exc:
             log.error("Failed to load model %s: %s", model_name, exc, exc_info=True)
             with self._lock:
-                if not self._shutdown and self._model_name == model_name:
+                # If the user cancelled while WhisperModel was running,
+                # don't promote a partial-download failure to "error"
+                # — leave the cancelled state alone.
+                if (
+                    not self._shutdown
+                    and not self._cancel_requested
+                    and self._model_name == model_name
+                ):
                     self._model = None
                     self._status = "error"
             return
@@ -422,6 +450,12 @@ class FasterWhisperBackend:
         with self._lock:
             if self._shutdown:
                 # Backend was torn down while loading — discard the result.
+                return
+            if self._cancel_requested:
+                log.info(
+                    "Discarding loaded model %s — cancelled by user",
+                    model_name,
+                )
                 return
             if self._model_name != model_name:
                 # change_model was called mid-load; the new request will

@@ -22,6 +22,7 @@ class _FakeBackend:
         self.kwargs = kwargs
         self.shutdown_called = False
         self.load_called = False
+        self.cancel_load_called = False
         self.changed_to: list = []
         self.transcribe_calls: list = []
         self._status = "stopped"
@@ -57,6 +58,10 @@ class _FakeBackend:
 
     def set_progress_callback(self, callback) -> None:
         self._progress_cb = callback
+
+    def cancel_load(self) -> None:
+        self.cancel_load_called = True
+        self._status = "stopped"
 
 
 @pytest.fixture
@@ -224,3 +229,53 @@ def test_progress_callback_forwarded_to_new_backend(patch_builders, patch_regist
 
     new_inner = patch_builders[1]
     assert new_inner._progress_cb is callback
+
+
+# ---- Cancel-load forwarding -----------------------------------------------
+
+
+def test_cancel_load_forwards_to_inner(patch_builders, patch_registry):
+    """The user clicked Cancel on the topbar during a load. The
+    routed backend just hands the request through to whichever
+    engine is currently loading."""
+    from app.backends.routed_backend import RoutedBackend
+
+    backend = RoutedBackend(model="fw-model")
+    inner = patch_builders[0]
+    inner._status = "loading"  # simulate in-flight load
+
+    backend.cancel_load()
+    assert inner.cancel_load_called is True
+
+
+def test_cancel_load_silent_when_inner_lacks_method(patch_builders, patch_registry):
+    """Older fakes / future engines might not implement ``cancel_load``
+    yet — the routed backend must not raise in that case so the
+    cancel button stays harmless."""
+    from app.backends.routed_backend import RoutedBackend
+
+    class _NoCancelBackend:
+        def status(self) -> str:
+            return "loading"
+
+        def health_check(self) -> bool:
+            return False
+
+        def load(self) -> None:
+            return None
+
+        def shutdown(self) -> None:
+            return None
+
+        def transcribe(self, *_args, **_kwargs):
+            return None
+
+        def current_model(self) -> str:
+            return "x"
+
+        def current_language(self):
+            return None
+
+    backend = RoutedBackend(model="fw-model")
+    backend._inner = _NoCancelBackend()  # type: ignore[assignment]
+    backend.cancel_load()  # must not raise
