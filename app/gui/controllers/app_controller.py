@@ -16,8 +16,8 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 from app.gui.controllers.backend_status_poller import BackendStatusPoller
 from app.gui.main_window import MainWindow
 from app.inference_settings import InferenceSettings
-from app.model_mapping import alias_for, canonical_for, get_model
-from app.utils import is_cached_for_info
+from app.model_mapping import MODELS, alias_for, canonical_for, get_model
+from app.utils import delete_cached_for_info, is_cached_for_info
 
 
 log = logging.getLogger(__name__)
@@ -144,6 +144,7 @@ class AppController(QObject):
             )
 
         view.model_selected.connect(self._on_model_selected)
+        view.model_delete_requested.connect(self._on_model_delete_requested)
         view.inference_settings_changed.connect(
             self._on_inference_settings_changed
         )
@@ -185,6 +186,61 @@ class AppController(QObject):
 
     def _sync_topbar_model(self, info) -> None:
         self._window.topbar.set_active_model(info.display_name if info else None)
+
+    def _on_model_delete_requested(self, alias: str) -> None:
+        """Confirm with the user, then drop the cached weights for
+        ``alias`` and refresh the Models view so the buttons reflect
+        the new state.
+
+        Several aliases can share the same Hugging Face canonical
+        (``turbo`` and ``turbo-int8`` both point at
+        ``deepdml/faster-whisper-large-v3-turbo-ct2``). Deleting the
+        cache for one wipes weights for the other too — surface that
+        in the confirmation text so the user isn't surprised when
+        the sibling card flips back to 'Download'."""
+        try:
+            info = get_model(alias)
+        except KeyError:
+            log.warning("delete requested for unknown alias %s — ignoring", alias)
+            return
+
+        siblings = [
+            m.alias for m in MODELS
+            if m.canonical == info.canonical and m.alias != alias
+        ]
+        sibling_note = ""
+        if siblings:
+            sibling_note = (
+                "\n\nThis cache is shared with other variants and they "
+                f"will also flip to 'Download' after deletion: "
+                f"{', '.join(siblings)}."
+            )
+
+        answer = QMessageBox.question(
+            self._window,
+            "Delete cached model?",
+            (
+                f"Remove the downloaded weights for "
+                f"{info.display_name} ({info.size_mb / 1000:.1f} GB)?"
+                "\n\nYou'll need to download them again the next time "
+                "this model is selected."
+                f"{sibling_note}"
+            ),
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        if delete_cached_for_info(info):
+            log.info("Deleted cached weights for %s (%s)", alias, info.canonical)
+        else:
+            log.warning(
+                "Delete returned False for %s — see earlier log for the "
+                "filesystem error, or the cache was already empty",
+                alias,
+            )
+        self._window.models_view.refresh_cache_state()
 
     def _wire_shortcuts(self) -> None:
         view = self._window.shortcuts_view

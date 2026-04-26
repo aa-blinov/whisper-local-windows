@@ -117,6 +117,26 @@ QPushButton[role="primary"]:disabled {
     border-color: {{color.border}};
 }
 
+/* Destructive action — outlined in danger red, filled on hover. The
+   subdued resting state keeps it visually subordinate to the primary
+   action sitting next to it (Select/Download). */
+QPushButton[role="danger"] {
+    background-color: transparent;
+    color: {{color.danger}};
+    border: 1px solid {{color.danger}};
+    font-weight: 500;
+}
+
+QPushButton[role="danger"]:hover {
+    background-color: {{color.danger}};
+    color: {{color.text_primary}};
+}
+
+QPushButton[role="danger"]:disabled {
+    color: {{color.text_muted}};
+    border-color: {{color.border}};
+}
+
 /* ---- Cards --------------------------------------------------------------- */
 
 QFrame[role="card"] {

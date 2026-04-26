@@ -461,3 +461,125 @@ def test_model_card_emits_select_signal_with_alias(qtbot):
         qtbot.mouseClick(select_btn, Qt.LeftButton)
 
     assert blocker.args == ["large-v3"]
+
+
+# ---- Delete button ---------------------------------------------------------
+
+
+def _delete_btn(card) -> QPushButton:
+    return next(
+        b for b in card.findChildren(QPushButton)
+        if b.objectName() == "DeleteButton"
+    )
+
+
+def test_model_card_has_a_delete_button(qtbot):
+    """Every card carries a Delete affordance — cached state controls
+    its visibility, but the widget is always present."""
+    from app.gui.widgets.model_card import ModelCard
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    btns = [b.objectName() for b in card.findChildren(QPushButton)]
+    assert "DeleteButton" in btns
+
+
+def test_model_card_delete_button_hidden_when_not_cached(qtbot, monkeypatch):
+    """Nothing to delete → no button. Otherwise the user gets an
+    enabled control that does nothing (or worse, fires a confirm
+    dialog over an empty cache)."""
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: False)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    assert not _delete_btn(card).isVisible()
+
+
+def test_model_card_delete_button_visible_when_cached_and_inactive(qtbot, monkeypatch):
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.show()
+    qtbot.waitExposed(card)
+    assert _delete_btn(card).isVisible()
+
+
+def test_model_card_delete_button_hidden_when_active(qtbot, monkeypatch):
+    """Deleting the loaded model would crash the running backend —
+    hide the button until the user picks a different active card."""
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.show()
+    qtbot.waitExposed(card)
+    card.set_active(True)
+    assert not _delete_btn(card).isVisible()
+
+
+def test_model_card_delete_button_hidden_when_loading(qtbot, monkeypatch):
+    """Mid-download / mid-deserialise the cache state is undefined —
+    hiding Delete avoids confusing the user with a button that might
+    succeed or fail depending on timing."""
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.show()
+    qtbot.waitExposed(card)
+    card.set_loading(True)
+    assert not _delete_btn(card).isVisible()
+
+
+def test_model_card_delete_button_emits_signal_with_alias(qtbot, monkeypatch):
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.show()
+    qtbot.waitExposed(card)
+
+    with qtbot.waitSignal(card.delete_requested, timeout=1000) as blocker:
+        qtbot.mouseClick(_delete_btn(card), Qt.LeftButton)
+
+    assert blocker.args == ["large-v3"]
+
+
+def test_model_card_refresh_cache_state_toggles_delete_visibility(qtbot, monkeypatch):
+    """After a Download or Delete completes, the controller calls
+    ``refresh_cache_state`` — Delete's visibility must follow."""
+    import app.gui.widgets.model_card as model_card_module
+    from app.gui.widgets.model_card import ModelCard
+
+    cache_status = {"cached": True}
+    monkeypatch.setattr(
+        model_card_module,
+        "is_cached_for_info",
+        lambda info: cache_status["cached"],
+    )
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.show()
+    qtbot.waitExposed(card)
+    assert _delete_btn(card).isVisible()
+
+    cache_status["cached"] = False
+    card.refresh_cache_state()
+    assert not _delete_btn(card).isVisible()

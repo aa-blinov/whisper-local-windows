@@ -84,6 +84,23 @@ def test_models_view_emits_model_selected_when_card_emits(qtbot):
     assert blocker.args == ["distil-large-v3"]
 
 
+def test_models_view_emits_model_delete_requested_when_card_emits(qtbot):
+    """Cards bubble their delete_requested up through the view so the
+    controller only has to listen to one signal source."""
+    from app.gui.views.models_view import ModelsView
+    from app.gui.widgets.model_card import ModelCard
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "distil-large-v3")
+
+    with qtbot.waitSignal(view.model_delete_requested, timeout=1000) as blocker:
+        card.delete_requested.emit(card.alias())
+
+    assert blocker.args == ["distil-large-v3"]
+
+
 def test_models_view_starts_with_no_active(qtbot):
     from app.gui.views.models_view import ModelsView
 

@@ -443,6 +443,103 @@ def test_controller_clears_history_through_manager(qtbot, monkeypatch):
     assert window.history_view._source_model.rowCount() == 0
 
 
+def test_controller_deletes_cached_model_after_confirm(qtbot, monkeypatch):
+    """Yes on the confirmation dialog → delete is called with the
+    matching ModelInfo, then ``refresh_cache_state`` is invoked so the
+    Download/Select label and the Delete-button visibility update."""
+    from PySide6.QtWidgets import QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.Yes)
+
+    deleted: list = []
+
+    def fake_delete(info):
+        deleted.append(info.alias)
+        return True
+
+    monkeypatch.setattr(controller_module, "delete_cached_for_info", fake_delete)
+
+    refreshed = {"called": False}
+
+    def fake_refresh():
+        refreshed["called"] = True
+
+    monkeypatch.setattr(window.models_view, "refresh_cache_state", fake_refresh)
+
+    AppController(config=config, window=window)
+    window.models_view.model_delete_requested.emit("turbo-int8")
+
+    assert deleted == ["turbo-int8"]
+    assert refreshed["called"] is True
+
+
+def test_controller_does_not_delete_when_user_cancels(qtbot, monkeypatch):
+    """Cancel on the confirmation dialog → cache stays put and no
+    refresh fires (UI was already correct)."""
+    from PySide6.QtWidgets import QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.Cancel)
+
+    deleted: list = []
+    monkeypatch.setattr(
+        controller_module,
+        "delete_cached_for_info",
+        lambda info: deleted.append(info.alias) or True,
+    )
+
+    AppController(config=config, window=window)
+    window.models_view.model_delete_requested.emit("turbo-int8")
+
+    assert deleted == []
+
+
+def test_controller_delete_dialog_warns_about_shared_canonical(qtbot, monkeypatch):
+    """``turbo`` and ``turbo-int8`` point at the same HF repo; deleting
+    one wipes weights for both. The confirm-dialog text must mention
+    the sibling so the user isn't surprised when the other card flips
+    back to 'Download'."""
+    from PySide6.QtWidgets import QMessageBox
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+
+    captured: dict = {}
+
+    def fake_question(parent, title, text, *args, **kwargs):
+        captured["title"] = title
+        captured["text"] = text
+        return QMessageBox.Cancel
+
+    monkeypatch.setattr(QMessageBox, "question", fake_question)
+    monkeypatch.setattr(
+        controller_module, "delete_cached_for_info", lambda info: True
+    )
+
+    AppController(config=config, window=window)
+    window.models_view.model_delete_requested.emit("turbo")
+
+    # Sibling alias mentioned somewhere in the dialog body.
+    assert "turbo-int8" in captured["text"]
+
+
 def test_controller_clear_cancelled_keeps_entries(qtbot, monkeypatch):
     """If the user clicks Cancel on the confirm dialog, history must
     stay intact."""

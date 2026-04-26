@@ -28,6 +28,10 @@ _FILTER_ALL = "All"
 
 class ModelsView(QWidget):
     model_selected = Signal(str)
+    # Re-emitted from whichever card the user clicked Delete on. The
+    # controller is responsible for confirming with the user before
+    # actually wiping the cache.
+    model_delete_requested = Signal(str)
     # Re-emitted from whichever card had its inline panel touched —
     # ``(alias, InferenceSettings)``.
     inference_settings_changed = Signal(str, InferenceSettings)
@@ -103,6 +107,7 @@ class ModelsView(QWidget):
         for info in resolved:
             card = ModelCard(info, parent=content)
             card.select_requested.connect(self.model_selected.emit)
+            card.delete_requested.connect(self.model_delete_requested.emit)
             card.inference_settings_changed.connect(
                 self.inference_settings_changed.emit
             )

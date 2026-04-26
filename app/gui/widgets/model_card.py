@@ -68,6 +68,12 @@ def _compute_label(compute_type: str) -> str:
 
 class ModelCard(QFrame):
     select_requested = Signal(str)
+    # Emitted when the user clicks Delete on a cached model — arg is
+    # the alias. The controller is responsible for confirming with
+    # the user before actually wiping the cache, then calling
+    # ``refresh_cache_state`` so the button visibility and label
+    # update.
+    delete_requested = Signal(str)
     # Emitted when the user changes anything in the inline inference
     # settings panel — args: ``(alias, InferenceSettings)`` so the
     # controller can route to per-model config + push live to the
@@ -220,6 +226,20 @@ class ModelCard(QFrame):
 
         footer = QHBoxLayout()
         footer.addStretch(1)
+        # Delete sits to the LEFT of Select — destructive action stays
+        # visually subordinate to the primary one. Hidden by default;
+        # visibility is recomputed every time the cache / active /
+        # loading state changes (see ``_refresh_delete_visibility``).
+        self._delete_btn = QPushButton("Delete", self)
+        self._delete_btn.setObjectName("DeleteButton")
+        self._delete_btn.setProperty("role", "danger")
+        self._delete_btn.setFocusPolicy(Qt.NoFocus)
+        self._delete_btn.setVisible(False)
+        self._delete_btn.clicked.connect(
+            lambda: self.delete_requested.emit(self._info.alias)
+        )
+        footer.addWidget(self._delete_btn)
+
         self._select_btn = QPushButton("Select", self)
         self._select_btn.setObjectName("SelectButton")
         self._select_btn.setProperty("role", "primary")
@@ -271,6 +291,7 @@ class ModelCard(QFrame):
         # on cards that actually have one — GigaAM doesn't).
         if self._settings_panel is not None:
             self._settings_panel.setVisible(self._active)
+        self._refresh_delete_visibility()
         self.style().unpolish(self)
         self.style().polish(self)
 
@@ -299,9 +320,22 @@ class ModelCard(QFrame):
 
     def refresh_cache_state(self) -> None:
         """Recompute whether the underlying model is downloaded and update
-        the action button label (``Download`` vs ``Select``)."""
+        the action button label (``Download`` vs ``Select``) plus the
+        Delete button's visibility."""
         cached = is_cached_for_info(self._info)
         self._select_btn.setText("Select" if cached else "Download")
+        self._refresh_delete_visibility()
+
+    def _refresh_delete_visibility(self) -> None:
+        """Delete is shown only when (a) weights are on disk, (b) the
+        card isn't currently the active model — yanking the cache out
+        from under a loaded backend would crash the next transcribe —
+        and (c) we aren't mid-load, when the cache state is undefined.
+        """
+        cached = is_cached_for_info(self._info)
+        self._delete_btn.setVisible(
+            cached and not self._active and not self._loading
+        )
 
     def set_loading(self, loading: bool) -> None:
         """Reflect backend load state on the active pill — swap 'Active' for
@@ -319,6 +353,7 @@ class ModelCard(QFrame):
             self._active_pill.setProperty("state", "ready")
         self._active_pill.style().unpolish(self._active_pill)
         self._active_pill.style().polish(self._active_pill)
+        self._refresh_delete_visibility()
 
     def set_loading_progress(self, current: int, total: int) -> None:
         """Update the active pill with download progress while the card
