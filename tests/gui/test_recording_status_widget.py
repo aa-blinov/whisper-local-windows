@@ -201,8 +201,7 @@ def test_label_left_value_right_in_chip(qtbot):
 def test_meter_resets_when_leaving_recording_state(qtbot):
     """Same contract the topbar previously held — leaving the
     recording state must zero the meter so a stale reading from the
-    last capture doesn't linger when the next one starts. The
-    meter widget stays visible (placeholder); only its bar resets."""
+    last capture doesn't linger when the next one starts."""
     from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 
     w = RecordingStatusWidget()
@@ -210,5 +209,9 @@ def test_meter_resets_when_leaving_recording_state(qtbot):
     w.set_recording_state("recording")
     w.set_input_level(0.6)
     w.set_recording_state("idle")
-    assert w._vu_meter.isVisibleTo(w) or True  # not asserting visibility before show()
+    # Visibility check intentionally omitted — qtbot.addWidget() doesn't
+    # call show() and isVisibleTo would always be False here. The level
+    # reset is the actual behaviour under test; visibility is exercised
+    # in test_idle_state_shows_muted_pill_and_zeroed_meter where the
+    # widget is explicitly shown.
     assert w._vu_meter.current_level() == 0.0

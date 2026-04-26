@@ -21,8 +21,23 @@ from __future__ import annotations
 # (a Whisper-only setup) still boot.
 try:  # noqa: SIM105 — keep the explicit comment + import-time placement
     import pyarrow  # noqa: F401  (warmup-only, value unused)
-except ImportError:
-    pass
+except Exception as _pyarrow_exc:  # noqa: BLE001 — boot-time resilience
+    # ImportError is the obvious case (pyarrow not installed in a
+    # Whisper-only setup), but binary wheels can also raise
+    # OSError / RuntimeError at import time when their DLL
+    # dependencies are missing or shadowed by a conflicting load.
+    # Letting any of those escape would crash the whole app at
+    # import time, which is exactly the failure mode this pre-
+    # import is supposed to prevent — fall through to stderr and
+    # let the rest of the app boot, NeMo will surface a real error
+    # later if it actually needed pyarrow.
+    import sys as _sys
+    print(
+        f"[lazy-to-text] pyarrow pre-import skipped: "
+        f"{type(_pyarrow_exc).__name__}: {_pyarrow_exc}",
+        file=_sys.stderr,
+    )
+    del _pyarrow_exc, _sys
 
 
 import os

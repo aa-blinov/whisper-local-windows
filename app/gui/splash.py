@@ -18,8 +18,9 @@ Public surface
 --------------
 - ``make_splash(app_name)`` — build a QSplashScreen pixmap.
 - ``wait_for_backend(splash, backend, display_name, app, timeout_s)``
-  — pump events while the backend warms up; returns ``"ready"`` /
-  ``"error"`` / ``"timeout"``.
+  — pump events while the backend warms up; returns one of
+  ``"ready"``, ``"error"``, ``"stopped"`` (cancel / shutdown), or
+  ``"timeout"``.
 """
 
 from __future__ import annotations
@@ -116,8 +117,14 @@ def wait_for_backend(
     timeout_s: float = 1800.0,
 ) -> str:
     """Block on ``backend.load()`` while pumping Qt events through the
-    splash. Returns the terminal status — ``"ready"`` / ``"error"`` /
-    ``"timeout"``.
+    splash. Returns the terminal status — one of:
+
+    - ``"ready"``   — backend reported ready
+    - ``"error"``   — backend reported error
+    - ``"stopped"`` — backend reported stopped (cancel-load,
+      shutdown, or any other non-error abort path)
+    - ``"timeout"`` — wall-clock deadline exceeded without a
+      terminal status
 
     Wires the backend's progress callback so the splash message shows
     a climbing percentage (or byte count when total is unknown — same
