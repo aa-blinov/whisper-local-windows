@@ -1627,17 +1627,24 @@ def test_controller_runs_mic_test_and_reports_result(qtbot):
 
     window.shortcuts_view.test_mic_requested.emit()
 
-    # Result text is now expressed as a percentage (peak 0.42 → 42%);
-    # numeric peak/rms still surface in the label's tooltip for
-    # power users.
+    # Result text is purely descriptive now — the VU meter, frozen
+    # at the captured peak level, IS the visual "how loud" answer.
+    # Numeric peak/rms still surface in the tooltip for bug reports.
     qtbot.waitUntil(
-        lambda: "42%" in window.shortcuts_view._test_mic_label.text(),
+        lambda: "Looks good"
+        in window.shortcuts_view._test_mic_label.text(),
         timeout=2000,
     )
     assert recorder.test_calls == 1
     assert window.shortcuts_view._test_mic_btn.isEnabled()
     tooltip = window.shortcuts_view._test_mic_label.toolTip()
     assert "0.42" in tooltip and "0.18" in tooltip
+    # Meter stays visible after the test, holding the peak level so
+    # the user sees how loud they actually were. ``isHidden()`` is
+    # the right check in unit tests — ``isVisible()`` requires the
+    # parent chain to be on screen, but here we only assert the
+    # widget's own visibility flag.
+    assert not window.shortcuts_view._test_mic_meter.isHidden()
 
 
 def test_controller_mic_test_blocked_during_recording(qtbot):

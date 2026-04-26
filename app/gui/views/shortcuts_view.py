@@ -514,25 +514,29 @@ class ShortcutsView(QWidget):
 
     def show_mic_test_result(self, peak: float, rms: float) -> None:
         self._test_mic_btn.setEnabled(True)
-        self._test_mic_meter.setVisible(False)
-        self._test_mic_meter.reset()
-        # Express peak amplitude (the loudest moment in the 3-s
-        # capture, normalised to 0–1) as a simple percentage —
-        # ``peak / rms`` are audio-engineering jargon that mean
-        # nothing to most users. The full numbers live in the
-        # tooltip for anyone who wants them (debug / bug reports).
-        pct = int(round(max(0.0, min(1.0, peak)) * 100))
+        # Keep the meter visible and frozen at the peak amplitude
+        # — the bar IS the visual "how loud were you" answer, no
+        # numeric % needed in the text. ``set_level`` once + no
+        # follow-up calls = the peak-and-decay envelope just holds
+        # the value indefinitely (decay only fires on subsequent
+        # ``set_level`` calls). Reset happens on the next test.
+        self._test_mic_meter.setVisible(True)
+        self._test_mic_meter.set_level(max(0.0, min(1.0, peak)))
+
+        # Plain English result: descriptive only, no jargon, no
+        # mystery numbers. Power users / bug-reporters still get
+        # the raw 0–1 ``peak`` and ``rms`` via the tooltip.
         if peak < 0.01:
             text = "No sound detected — check the selected microphone."
             role = "test-result-bad"
         elif peak < 0.08:
             text = (
-                f"Very quiet ({pct}%). Speak louder or raise the "
-                "input level in Windows sound settings."
+                "Very quiet. Speak louder or raise the input "
+                "level in Windows sound settings."
             )
             role = "test-result-warn"
         else:
-            text = f"Looks good ({pct}%)."
+            text = "Looks good."
             role = "test-result-good"
         self._test_mic_label.setText(text)
         self._test_mic_label.setToolTip(
