@@ -60,8 +60,13 @@ def _make_section_card(title: str, parent: QWidget) -> tuple[QFrame, QFormLayout
 
 class ShortcutsView(QWidget):
     save_requested = Signal(dict)
-    reset_requested = Signal()
     test_mic_requested = Signal()
+    # Per-card reset signals — granular replacements for the old
+    # single ``reset_requested`` footer button. Each card now owns
+    # its own affordance so the user can revert one section without
+    # nuking unrelated state.
+    hotkeys_reset_requested = Signal()
+    hf_token_reset_requested = Signal()
     # Storage card — view delegates path-picking to the controller so
     # QFileDialog stays out of the widget code (cleaner tests).
     storage_path_change_requested = Signal()
@@ -191,6 +196,22 @@ class ShortcutsView(QWidget):
         self._cancel_edit.setPlaceholderText("e.g. ctrl+f6 — leave empty to disable")
         self._cancel_edit.editingFinished.connect(self._emit_save)
         hotkeys_form.addRow("Cancel recording", self._cancel_edit)
+
+        # "Reset to defaults" lives inside the card now (next to its
+        # owned content) instead of a footer at the bottom of the
+        # whole tab — matches the Storage card's button placement
+        # and means each card's reset only touches its own settings.
+        hotkeys_btn_row = QHBoxLayout()
+        hotkeys_btn_row.setSpacing(10)
+        hotkeys_btn_row.addStretch(1)
+        self._reset_hotkeys_btn = QPushButton("Reset to defaults", hotkeys_card)
+        self._reset_hotkeys_btn.setObjectName("ResetHotkeysButton")
+        self._reset_hotkeys_btn.setFocusPolicy(Qt.NoFocus)
+        self._reset_hotkeys_btn.clicked.connect(
+            self.hotkeys_reset_requested.emit
+        )
+        hotkeys_btn_row.addWidget(self._reset_hotkeys_btn)
+        hotkeys_card.layout().addLayout(hotkeys_btn_row)
 
         # Hint goes into the card's OUTER VBox, not the form — adding
         # it as a labelless form-row would offset it to the field
@@ -345,6 +366,18 @@ class ShortcutsView(QWidget):
         hf_row.addWidget(self._hf_token_edit, 1)
         hf_v.addLayout(hf_row)
 
+        hf_btn_row = QHBoxLayout()
+        hf_btn_row.setSpacing(10)
+        hf_btn_row.addStretch(1)
+        self._clear_hf_token_btn = QPushButton("Clear token", hf_card)
+        self._clear_hf_token_btn.setObjectName("ClearHfTokenButton")
+        self._clear_hf_token_btn.setFocusPolicy(Qt.NoFocus)
+        self._clear_hf_token_btn.clicked.connect(
+            self.hf_token_reset_requested.emit
+        )
+        hf_btn_row.addWidget(self._clear_hf_token_btn)
+        hf_v.addLayout(hf_btn_row)
+
         hf_hint = QLabel(
             "Optional. Used when downloading gated or private "
             "Hugging Face models — the app passes it to "
@@ -364,15 +397,11 @@ class ShortcutsView(QWidget):
         hf_v.addWidget(hf_hint)
         root.addWidget(hf_card)
 
-        footer = QHBoxLayout()
-        footer.addStretch(1)
-        self._reset_btn = QPushButton("Reset to defaults", self)
-        self._reset_btn.setObjectName("ResetShortcutsButton")
-        self._reset_btn.setFocusPolicy(Qt.NoFocus)
-        self._reset_btn.clicked.connect(self.reset_requested.emit)
-        footer.addWidget(self._reset_btn)
-        root.addLayout(footer)
-
+        # Footer reset button retired — each card now owns its own
+        # 'Reset' / 'Clear' affordance. The previous global button
+        # was misleading: it advertised 'Reset to defaults' but
+        # only touched hotkeys + auto_paste, leaving Storage / HF
+        # untouched. Per-card buttons make the scope explicit.
         root.addStretch(1)
 
     # ---- public API ---------------------------------------------------------

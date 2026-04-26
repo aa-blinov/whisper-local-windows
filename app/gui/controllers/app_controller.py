@@ -340,7 +340,8 @@ class AppController(QObject):
             view.set_devices(devices, current)
 
         view.save_requested.connect(self._on_shortcuts_save)
-        view.reset_requested.connect(self._on_shortcuts_reset)
+        view.hotkeys_reset_requested.connect(self._on_hotkeys_reset)
+        view.hf_token_reset_requested.connect(self._on_hf_token_reset)
         view.test_mic_requested.connect(self._on_test_mic_requested)
 
         # Storage card — render the resolved path on first paint so
@@ -679,15 +680,17 @@ class AppController(QObject):
             return None
         return getattr(sm, "clipboard_manager", None)
 
-    def _on_shortcuts_reset(self) -> None:
+    def _on_hotkeys_reset(self) -> None:
+        """Reset only the three hotkey fields to their built-in
+        defaults — leaves auto-paste, storage, HF token alone.
+        Per-card reset replaces the old global 'Reset to defaults'
+        footer button which conflated unrelated settings."""
         from app.config_manager import DEFAULT_CONFIG
 
         defaults_hotkey = DEFAULT_CONFIG.get("hotkey", {})
-        defaults_clipboard = DEFAULT_CONFIG.get("clipboard", {})
         start = defaults_hotkey.get("start_recording_hotkey", "")
         stop = defaults_hotkey.get("stop_recording_hotkey", "")
         cancel = defaults_hotkey.get("cancel_recording_hotkey", "")
-        auto_paste = bool(defaults_clipboard.get("auto_paste", True))
 
         self._config.update_user_setting(
             "hotkey", "start_recording_hotkey", start
@@ -698,14 +701,24 @@ class AppController(QObject):
         self._config.update_user_setting(
             "hotkey", "cancel_recording_hotkey", cancel
         )
-        self._config.update_user_setting("clipboard", "auto_paste", auto_paste)
-        # set_values uses the suspend-emit guard so this won't fire save_requested.
-        self._window.shortcuts_view.set_values(
+        # Refresh the three fields without disturbing the rest of the
+        # form (current auto-paste / device / HF token / storage path
+        # all stay where they are). ``set_values`` is suspend-guarded
+        # so this won't bounce ``save_requested`` back at us.
+        view = self._window.shortcuts_view
+        view.set_values(
             start_hotkey=start,
             stop_hotkey=stop,
-            auto_paste=auto_paste,
+            auto_paste=view.auto_paste(),
             cancel_hotkey=cancel,
         )
+
+    def _on_hf_token_reset(self) -> None:
+        """Per-card 'Clear token' on the Hugging Face card. Routes
+        through the same path the textbox-edit handler uses so the
+        env var, model-card warnings, and view all update."""
+        self._on_hf_token_changed("")
+        self._window.shortcuts_view.set_hf_token("")
 
     def _wire_history(self) -> None:
         view = self._window.history_view

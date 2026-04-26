@@ -16,8 +16,12 @@ def _auto_paste_cb(view) -> QCheckBox:
     return view.findChild(QCheckBox, "AutoPasteCheckbox")
 
 
-def _reset_btn(view) -> QPushButton:
-    return view.findChild(QPushButton, "ResetShortcutsButton")
+def _reset_hotkeys_btn(view) -> QPushButton:
+    return view.findChild(QPushButton, "ResetHotkeysButton")
+
+
+def _clear_hf_token_btn(view) -> QPushButton:
+    return view.findChild(QPushButton, "ClearHfTokenButton")
 
 
 def test_shortcuts_view_has_expected_widgets(qtbot):
@@ -29,7 +33,21 @@ def test_shortcuts_view_has_expected_widgets(qtbot):
     assert _start_edit(view) is not None
     assert _stop_edit(view) is not None
     assert _auto_paste_cb(view) is not None
-    assert _reset_btn(view) is not None
+    # Each card now owns its own reset/clear button — the global
+    # footer button is gone.
+    assert _reset_hotkeys_btn(view) is not None
+    assert _clear_hf_token_btn(view) is not None
+
+
+def test_global_reset_footer_button_no_longer_exists(qtbot):
+    """Per-card buttons replaced the catch-all 'Reset to defaults'
+    footer; that button used to mislead by only resetting hotkeys
+    + auto_paste. Asserting it's gone keeps the migration honest."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    assert view.findChild(QPushButton, "ResetShortcutsButton") is None
 
 
 def test_save_button_no_longer_exists(qtbot):
@@ -168,15 +186,32 @@ def test_toggling_auto_paste_emits_save_requested_immediately(qtbot):
     assert blocker.args[0]["auto_paste"] is True
 
 
-def test_reset_button_emits_reset_requested(qtbot):
+def test_reset_hotkeys_button_emits_hotkeys_reset_requested(qtbot):
+    """Per-card 'Reset to defaults' inside the Hotkeys card emits
+    the new card-scoped signal. Replaces the global ``reset_requested``
+    that used to also reset auto-paste."""
     from app.gui.views.shortcuts_view import ShortcutsView
 
     view = ShortcutsView()
     qtbot.addWidget(view)
     view.show()
 
-    btn = _reset_btn(view)
-    with qtbot.waitSignal(view.reset_requested, timeout=1000):
+    btn = _reset_hotkeys_btn(view)
+    with qtbot.waitSignal(view.hotkeys_reset_requested, timeout=1000):
+        qtbot.mouseClick(btn, Qt.LeftButton)
+
+
+def test_clear_hf_token_button_emits_request(qtbot):
+    """The HF card's 'Clear token' button emits its own signal —
+    controller wipes the token from config + env."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+
+    btn = _clear_hf_token_btn(view)
+    with qtbot.waitSignal(view.hf_token_reset_requested, timeout=1000):
         qtbot.mouseClick(btn, Qt.LeftButton)
 
 

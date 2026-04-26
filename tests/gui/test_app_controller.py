@@ -270,15 +270,20 @@ def test_reset_shortcuts_restores_defaults_in_config(qtbot):
     )
 
     AppController(config=config, window=window)
-    window.shortcuts_view.reset_requested.emit()
+    window.shortcuts_view.hotkeys_reset_requested.emit()
 
     expected_start = DEFAULT_CONFIG["hotkey"]["start_recording_hotkey"]
     expected_stop = DEFAULT_CONFIG["hotkey"]["stop_recording_hotkey"]
-    expected_paste = DEFAULT_CONFIG["clipboard"]["auto_paste"]
 
     assert ("hotkey", "start_recording_hotkey", expected_start) in config.writes
     assert ("hotkey", "stop_recording_hotkey", expected_stop) in config.writes
-    assert ("clipboard", "auto_paste", expected_paste) in config.writes
+    # Per-card reset: ``auto_paste`` is no longer reset by the
+    # hotkeys button — it's a separate setting and would have its
+    # own reset path on the Clipboard card if we wanted one.
+    assert not any(
+        write[0] == "clipboard" and write[1] == "auto_paste"
+        for write in config.writes
+    )
 
 
 def test_reset_shortcuts_updates_view_to_defaults(qtbot):
@@ -299,12 +304,14 @@ def test_reset_shortcuts_updates_view_to_defaults(qtbot):
     )
 
     AppController(config=config, window=window)
-    window.shortcuts_view.reset_requested.emit()
+    window.shortcuts_view.hotkeys_reset_requested.emit()
 
     sv = window.shortcuts_view
     assert sv.start_hotkey() == DEFAULT_CONFIG["hotkey"]["start_recording_hotkey"]
     assert sv.stop_hotkey() == DEFAULT_CONFIG["hotkey"]["stop_recording_hotkey"]
-    assert sv.auto_paste() == bool(DEFAULT_CONFIG["clipboard"]["auto_paste"])
+    # auto_paste preserved (was False, still False) — hotkeys reset
+    # doesn't touch it.
+    assert sv.auto_paste() is False
 
 
 def test_reset_does_not_re_emit_save_requested(qtbot):
@@ -320,12 +327,12 @@ def test_reset_does_not_re_emit_save_requested(qtbot):
 
     # Capture only writes that happen AFTER the reset.
     writes_before = len(config.writes)
-    window.shortcuts_view.reset_requested.emit()
+    window.shortcuts_view.hotkeys_reset_requested.emit()
     writes_during = len(config.writes) - writes_before
 
-    # Reset writes 4 settings: start, stop, cancel, auto_paste.
-    # If save_requested re-fired from set_values, we'd see extra writes.
-    assert writes_during == 4
+    # Reset writes exactly 3 settings: start, stop, cancel.
+    # If save_requested re-fired from set_values, we'd see extras.
+    assert writes_during == 3
 
 
 # ---- Topbar sync ------------------------------------------------------------
@@ -1070,11 +1077,41 @@ def test_controller_reset_restores_cancel_hotkey_default(qtbot):
     })
 
     AppController(config=config, window=window)
-    window.shortcuts_view.reset_requested.emit()
+    window.shortcuts_view.hotkeys_reset_requested.emit()
 
     expected_default = DEFAULT_CONFIG["hotkey"]["cancel_recording_hotkey"]
     assert config._data["hotkey"]["cancel_recording_hotkey"] == expected_default
     assert window.shortcuts_view.cancel_hotkey() == expected_default
+
+
+def test_controller_hf_token_clear_button_wipes_config_and_env(
+    qtbot, monkeypatch,
+):
+    """Per-card 'Clear token' on the HF card must do the same as
+    typing an empty value into the field: drop config + env, repaint
+    the field, refresh the GigaAM warning banner."""
+    import os
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setenv("HF_TOKEN", "")
+    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"huggingface": {"token": "hf_persisted"}})
+
+    AppController(config=config, window=window)
+    # Sanity: the prefill plus init's apply-to-env populates env.
+    assert os.environ.get("HF_TOKEN") == "hf_persisted"
+    assert window.shortcuts_view.hf_token() == "hf_persisted"
+
+    window.shortcuts_view.hf_token_reset_requested.emit()
+
+    assert config._data["huggingface"]["token"] == ""
+    assert "HF_TOKEN" not in os.environ
+    assert "HUGGING_FACE_HUB_TOKEN" not in os.environ
+    assert window.shortcuts_view.hf_token() == ""
 
 
 def test_controller_storage_reset_clears_config_and_updates_env(
@@ -1731,7 +1768,11 @@ def test_test_microphone_button_does_not_grab_focus(qtbot):
     view = ShortcutsView()
     qtbot.addWidget(view)
     assert view._test_mic_btn.focusPolicy() == Qt.NoFocus
-    assert view._reset_btn.focusPolicy() == Qt.NoFocus
+    # Per-card reset / clear buttons replaced the old single
+    # ``_reset_btn`` footer — same NoFocus discipline applies so
+    # they don't steal focus when clicked.
+    assert view._reset_hotkeys_btn.focusPolicy() == Qt.NoFocus
+    assert view._clear_hf_token_btn.focusPolicy() == Qt.NoFocus
 
 
 def test_controller_loads_persisted_inference_overrides_on_init(qtbot):
