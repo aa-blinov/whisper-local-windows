@@ -1,4 +1,12 @@
-"""Top bar — recording status, current/loading model, backend health, stats."""
+"""Top bar — current/loading model pill, cancel-load button, resource stats.
+
+The recording-state pill and live VU meter used to live here too but
+moved to ``RecordingStatusWidget`` in the sidebar's bottom slot —
+they overlapped the resource graphs and pushed the model pill off the
+edge on narrow windows. The topbar now reflects model_loading state
+on its own pill (yellow ``Loading: …`` variant) but knows nothing
+about the recording pill.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +22,6 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.widgets.resource_widget import ResourceWidget
-from app.gui.widgets.vu_meter import VUMeter
 
 
 # Sidebar's fixed width — duplicated here so the topbar can leave
@@ -27,14 +34,11 @@ _SIDEBAR_WIDTH_PX = 200
 
 _NO_MODEL_TEXT = "No model"
 
-# The recording pill no longer handles model-load progress — that
-# moved into the model pill below to avoid showing two near-
-# duplicate "Loading model…" indicators side by side.
+# ``set_recording_state`` still accepts the same vocabulary (kept
+# uniform with the other widgets the controller pumps state into),
+# but the topbar only acts on ``model_loading`` — the rest is owned
+# by the sidebar's ``RecordingStatusWidget``.
 _RECORDING_STATES = ("idle", "recording", "processing", "model_loading")
-_RECORDING_LABELS = {
-    "recording": "● Recording",
-    "processing": "Processing…",
-}
 
 
 def _format_size(num_bytes: int) -> str:
@@ -104,24 +108,9 @@ class TopBar(QWidget):
         self._resources = ResourceWidget(content)
         layout.addWidget(self._resources)
 
-        # Push the rest of the topbar (recording + model pills)
-        # to the right.
+        # Push the model pill cluster to the right edge.
         layout.addStretch(1)
 
-        # Slim live-input meter — visible only while a recording is
-        # in flight. Sits next to the recording pill so the eye
-        # associates the two.
-        self._vu_meter = VUMeter(content)
-        self._vu_meter.setVisible(False)
-        layout.addWidget(self._vu_meter)
-
-        self._recording_pill = QLabel("", content)
-        self._recording_pill.setObjectName("TopBarRecordingPill")
-        self._recording_pill.setProperty("role", "recording-pill")
-        self._recording_pill.setProperty("state", "idle")
-        self._recording_pill.setAlignment(Qt.AlignCenter)
-        self._recording_pill.setVisible(False)
-        layout.addWidget(self._recording_pill)
         self._recording_state = "idle"
 
         # Model pill: empty / loading / active. ``loading`` shows
@@ -177,45 +166,20 @@ class TopBar(QWidget):
             raise ValueError(
                 f"state must be one of {_RECORDING_STATES}, got {state!r}"
             )
-        # ``model_loading`` is reflected in the model pill, not in
-        # the recording pill — the latter only shows actively-
-        # recording / actively-processing states.
-        if state in _RECORDING_LABELS:
-            self._recording_pill.setText(_RECORDING_LABELS[state])
-            self._recording_pill.setProperty("state", state)
-            self._recording_pill.setVisible(True)
-        else:
-            self._recording_pill.setVisible(False)
-            self._recording_pill.setProperty("state", "idle")
-        self._recording_pill.style().unpolish(self._recording_pill)
-        self._recording_pill.style().polish(self._recording_pill)
         self._recording_state = state
 
-        # Model pill loading state mirrors the backend's
-        # ``model_loading`` phase exactly.
+        # The topbar only owns the model pill — flip it to its
+        # yellow loading variant when the backend is in
+        # ``model_loading`` and back to active/empty otherwise.
         if state == "model_loading":
             self._render_model_pill(state_override="loading")
         else:
-            # Drop loading text when leaving the loading state.
             if self._model_state == "loading":
                 self._loading_progress_text = ""
                 self._loading_elapsed_s = 0
                 self._render_model_pill(
                     state_override="active" if self._model_display_name else "empty"
                 )
-
-        # VU meter only matters while audio is actively flowing in.
-        if state == "recording":
-            self._vu_meter.setVisible(True)
-        else:
-            self._vu_meter.setVisible(False)
-            self._vu_meter.reset()
-
-    def set_input_level(self, level: float) -> None:
-        """Push a fresh amplitude reading into the VU meter — called
-        from a Qt-side polling timer that reads
-        ``AudioRecorder.current_input_level`` while recording."""
-        self._vu_meter.set_level(level)
 
     def set_resource_metrics(self, metrics: dict) -> None:
         """Forward a sample from ``ResourceMonitor`` into the live

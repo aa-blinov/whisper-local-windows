@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.gui.theme import icon_path
+from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 
 
 NavItem = Tuple[str, str]
@@ -64,7 +65,17 @@ class Sidebar(QWidget):
         self._list.verticalScrollBar().setSingleStep(20)
         # Heroicons render best at ~20 px in a 14-px-text row.
         self._list.setIconSize(QSize(20, 20))
-        layout.addWidget(self._list)
+        # Stretch=1 so the nav list eats whatever vertical space the
+        # bottom recording-status slot doesn't claim.
+        layout.addWidget(self._list, 1)
+
+        # Recording status slot pinned to the bottom-left of the
+        # sidebar — recording pill stacked over the live VU meter,
+        # always reserves its placeholder height even when idle.
+        # Lives here (not in the topbar) so it doesn't overlap the
+        # CPU / RAM / GPU resource graphs that occupy the topbar.
+        self.recording_status = RecordingStatusWidget(self)
+        layout.addWidget(self.recording_status)
 
         resolved = tuple(items) if items is not None else _DEFAULT_ITEMS
         for key, label in resolved:

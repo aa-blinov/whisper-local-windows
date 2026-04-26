@@ -24,6 +24,11 @@ def test_topbar_has_model_pill(qtbot):
     assert _label_by_name(bar, "TopBarModelPill") is not None
     # Backend status pill removed alongside the BackendStatusPoller.
     assert _label_by_name(bar, "TopBarStatusPill") is None
+    # Recording pill + VU meter moved to the sidebar's
+    # RecordingStatusWidget so they don't overlap the resource graphs.
+    assert _label_by_name(bar, "TopBarRecordingPill") is None
+    from app.gui.widgets.vu_meter import VUMeter
+    assert bar.findChild(VUMeter) is None
 
 
 def test_topbar_does_not_duplicate_window_title(qtbot):
@@ -82,61 +87,15 @@ def test_set_active_model_none_clears(qtbot):
 
 
 # ---- Recording state indicator ---------------------------------------------
-
-
-def _recording_pill(bar) -> QLabel:
-    return _label_by_name(bar, "TopBarRecordingPill")
-
-
-def test_recording_pill_exists_and_hidden_by_default(qtbot):
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-    pill = _recording_pill(bar)
-    assert pill is not None
-    assert not pill.isVisibleTo(bar)
-
-
-def test_set_recording_state_idle_keeps_pill_hidden(qtbot):
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-    bar.set_recording_state("idle")
-    assert not _recording_pill(bar).isVisibleTo(bar)
-
-
-def test_set_recording_state_recording_shows_pill(qtbot):
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-    bar.show()
-    bar.set_recording_state("recording")
-    pill = _recording_pill(bar)
-    assert pill.isVisibleTo(bar)
-    assert pill.property("state") == "recording"
-    assert "recording" in pill.text().lower()
-
-
-def test_set_recording_state_processing_shows_pill(qtbot):
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-    bar.show()
-    bar.set_recording_state("processing")
-    pill = _recording_pill(bar)
-    assert pill.isVisibleTo(bar)
-    assert pill.property("state") == "processing"
-    assert "processing" in pill.text().lower()
+# (Recording pill / VU meter moved to RecordingStatusWidget — see its
+# dedicated test module. The topbar still accepts the same state vocab
+# so the controller can fan it out, but only acts on ``model_loading``.)
 
 
 def test_set_recording_state_model_loading_flips_model_pill(qtbot):
-    """``model_loading`` is reflected on the model pill (yellow
-    'Loading: …' state), not on the recording pill — keeps the
-    topbar from showing two near-duplicate loading indicators."""
+    """``model_loading`` flips the topbar's model pill into its
+    yellow loading variant. The recording-pill side of the state
+    is the sidebar widget's job, not the topbar's."""
     from app.gui.widgets.topbar import TopBar
 
     bar = TopBar()
@@ -145,7 +104,6 @@ def test_set_recording_state_model_loading_flips_model_pill(qtbot):
     bar.set_active_model("Large v3 Turbo (int8)")
     bar.set_recording_state("model_loading")
 
-    assert not _recording_pill(bar).isVisibleTo(bar)
     model_pill = _label_by_name(bar, "TopBarModelPill")
     assert model_pill.property("state") == "loading"
     assert "loading" in model_pill.text().lower()
@@ -165,17 +123,6 @@ def test_model_pill_returns_to_active_when_loading_ends(qtbot):
     pill = _label_by_name(bar, "TopBarModelPill")
     assert pill.property("state") == "active"
     assert "Current model" in pill.text()
-
-
-def test_set_recording_state_back_to_idle_hides_pill(qtbot):
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-    bar.show()
-    bar.set_recording_state("recording")
-    bar.set_recording_state("idle")
-    assert not _recording_pill(bar).isVisibleTo(bar)
 
 
 def test_set_recording_state_rejects_unknown(qtbot):
@@ -242,36 +189,6 @@ def test_topbar_back_to_idle_clears_elapsed_state(qtbot):
     bar.set_recording_state("model_loading")
     text = _label_by_name(bar, "TopBarModelPill").text()
     assert "4" not in text
-
-
-def test_topbar_vu_meter_only_visible_in_recording_state(qtbot):
-    """The VU meter is meaningless outside the ``recording`` state —
-    show it only while audio is actually being captured."""
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-    bar.show()
-
-    # idle on construction → hidden.
-    assert not bar._vu_meter.isVisible()
-
-    bar.set_recording_state("recording")
-    assert bar._vu_meter.isVisibleTo(bar)
-
-    bar.set_recording_state("processing")
-    # Past recording — back to hidden.
-    assert not bar._vu_meter.isVisibleTo(bar) or bar._vu_meter.isHidden()
-
-
-def test_topbar_set_input_level_forwards_to_meter(qtbot):
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-    bar.set_recording_state("recording")
-    bar.set_input_level(0.6)
-    assert bar._vu_meter.current_level() == 0.6
 
 
 # ---- Cancel-load button -----------------------------------------------------

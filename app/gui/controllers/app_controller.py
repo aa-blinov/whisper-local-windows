@@ -851,6 +851,12 @@ class AppController(QObject):
 
     def _wire_recording(self, recording: _RecordingLike) -> None:
         recording.state_changed.connect(self._window.topbar.set_recording_state)
+        # Sidebar bottom-left slot owns the recording pill + VU meter
+        # since they moved out of the topbar (where they overlapped
+        # the resource graphs). Same state vocab, fanned out.
+        recording.state_changed.connect(
+            self._window.sidebar.recording_status.set_recording_state
+        )
         recording.state_changed.connect(self._on_recording_state_changed)
         recording.history_updated.connect(self._on_history_updated_signal)
         # Optional: download progress (only the real RecordingController
@@ -956,7 +962,7 @@ class AppController(QObject):
         else:
             self._vu_timer.stop()
             try:
-                self._window.topbar.set_input_level(0.0)
+                self._window.sidebar.recording_status.set_input_level(0.0)
             except Exception:  # pragma: no cover — defensive
                 pass
         # Block destructive interactions while not idle.
@@ -1002,7 +1008,7 @@ class AppController(QObject):
         except Exception:  # pragma: no cover — defensive
             return
         try:
-            self._window.topbar.set_input_level(level)
+            self._window.sidebar.recording_status.set_input_level(level)
         except Exception:  # pragma: no cover — defensive
             pass
 

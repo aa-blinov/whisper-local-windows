@@ -383,7 +383,7 @@ QLabel[role="model-pill"][state="loading"] {
 
 QLabel[role="recording-pill"] {
     border-radius: {{radius.sm}};
-    padding: 4px {{space.md}};
+    padding: 3px {{space.md}};
     font-size: {{font.size_small}};
     font-weight: 600;
     background-color: {{color.bg_elevated}};
@@ -403,6 +403,14 @@ QLabel[role="recording-pill"][state="processing"] {
 QLabel[role="recording-pill"][state="model_loading"] {
     background-color: {{color.warning}};
     color: {{color.bg_primary}};
+}
+
+/* Sidebar's bottom-left status slot — gets a quiet top divider so
+   the placeholder area reads as its own zone rather than blending
+   into the nav list above. */
+#RecordingStatusWidget {
+    border-top: 1px solid {{color.border}};
+    background-color: transparent;
 }
 
 /* Cancel button next to the loading model pill — visible only while

@@ -1368,7 +1368,10 @@ class FakeRecordingController:
         return self._current_state
 
 
-def test_controller_updates_topbar_recording_pill_on_state_change(qtbot):
+def test_controller_updates_sidebar_recording_pill_on_state_change(qtbot):
+    """Recording pill lives in the sidebar's bottom-left slot now —
+    the controller fans recording state out to it the same way it
+    used to fan it to the topbar's pill."""
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
 
@@ -1379,13 +1382,13 @@ def test_controller_updates_topbar_recording_pill_on_state_change(qtbot):
 
     AppController(config=config, window=window, recording=rec)
 
+    pill = window.sidebar.recording_status._pill
+
     rec.state_changed.emit("recording")
-    assert window.topbar._recording_pill.property("state") == "recording"
-    assert window.topbar._recording_pill.isVisibleTo(window.topbar) or True
-    # visibility depends on parent visibility — property change is the contract
+    assert pill.property("state") == "recording"
 
     rec.state_changed.emit("idle")
-    assert window.topbar._recording_pill.property("state") == "idle"
+    assert pill.property("state") == "idle"
 
 
 def test_controller_routes_topbar_cancel_to_recording_controller(qtbot):
