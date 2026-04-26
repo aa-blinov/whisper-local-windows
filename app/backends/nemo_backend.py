@@ -275,6 +275,36 @@ class NemoBackend:
             text = first
         return text
 
+    @staticmethod
+    def _patch_signal_for_windows() -> None:
+        """Make ``nemo.utils.exp_manager`` importable on Windows.
+
+        NeMo's ``FaultToleranceParams`` dataclass has a class-level
+        default ``rank_termination_signal: signal.Signals = signal.SIGKILL``
+        — but ``SIGKILL`` only exists on POSIX. Touching the class
+        body on Windows raises ``AttributeError: module 'signal' has
+        no attribute 'SIGKILL'`` and brings down the whole
+        ``import nemo.collections.asr`` graph. Patching ``signal``
+        with a stub before the import lets the module load. NeMo's
+        fault-tolerance subsystem isn't actually exercised by our
+        single-process inference path, so the stub never gets sent
+        anywhere — it just satisfies the dataclass default at class
+        definition time.
+
+        Idempotent. No-op on POSIX where ``SIGKILL`` is already
+        present.
+        """
+        import signal as _signal
+
+        if not hasattr(_signal, "SIGKILL"):
+            # ``SIGTERM`` is the closest POSIX equivalent that does
+            # exist on Windows. Whichever value we pick is never
+            # actually delivered — NeMo's exp_manager only reads the
+            # field in the fault-tolerance subsystem, which we don't
+            # use — but it must be a real ``signal.Signals`` member
+            # so the dataclass validates.
+            _signal.SIGKILL = _signal.SIGTERM  # type: ignore[attr-defined]
+
     def _do_load(self, model_name: str) -> None:
         # Same tqdm progress hook the other backends install before
         # importing their loader; NeMo's HF-backed downloads will
@@ -283,6 +313,12 @@ class NemoBackend:
         from app.backends.faster_whisper_backend import _install_tqdm_progress
 
         _install_tqdm_progress()
+
+        # See ``_patch_signal_for_windows`` — without this the import
+        # below dies on Windows with ``AttributeError: module 'signal'
+        # has no attribute 'SIGKILL'`` because NeMo's exp_manager
+        # touches it at class-definition time.
+        self._patch_signal_for_windows()
 
         # NeMo's first import pulls in PyTorch Lightning, hydra,
         # lhotse, omegaconf, librosa, … — easily 30-90 s on a cold
@@ -293,8 +329,20 @@ class NemoBackend:
         log.info("Importing nemo_toolkit (cold import is slow)…")
         try:
             import nemo.collections.asr as nemo_asr  # type: ignore
-        except ImportError as exc:
-            log.error("nemo_toolkit is not installed: %s", exc)
+        except Exception as exc:
+            # Catch broadly — ``ImportError`` is the obvious one, but
+            # NeMo's import graph also raises ``AttributeError`` (e.g.
+            # missing ``signal.SIGKILL`` on Windows when our patch
+            # above didn't cover the failure mode), ``OSError`` from
+            # missing CUDA libs, etc. Letting an unhandled exception
+            # escape leaves the load thread dead and ``_status`` stuck
+            # at ``loading`` — exactly the "8 minutes of silence"
+            # bug we hit before. Promote everything to a clean
+            # ``error`` state so the watcher exits and the UI gets a
+            # real failure signal.
+            log.error(
+                "Failed to import nemo_toolkit: %s", exc, exc_info=True,
+            )
             with self._lock:
                 if not self._shutdown and self._model_name == model_name:
                     self._model = None

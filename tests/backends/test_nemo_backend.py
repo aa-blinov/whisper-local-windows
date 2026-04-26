@@ -113,6 +113,45 @@ def test_load_failure_transitions_to_error(monkeypatch):
     assert backend.health_check() is False
 
 
+def test_import_attribute_error_transitions_to_error(monkeypatch):
+    """NeMo's exp_manager touches ``signal.SIGKILL`` at class-definition
+    time, which is POSIX-only — on Windows the import graph used to die
+    with an unhandled ``AttributeError`` and the worker thread silently
+    exited while ``_status`` stayed at ``loading``. The watcher then
+    sat through the full timeout (8+ minutes) reporting heartbeats on a
+    dead thread.
+
+    The fix: ``_do_load`` catches ``Exception`` (not just
+    ``ImportError``) on the import line, so any failure mode promotes
+    cleanly to ``error`` and the UI gets a real failure signal."""
+    from app.backends.nemo_backend import NemoBackend
+
+    # Wipe any cached real/fake nemo modules so the importer is forced
+    # to re-resolve and run our raising loader below.
+    for mod in [
+        "nemo",
+        "nemo.collections",
+        "nemo.collections.asr",
+    ]:
+        monkeypatch.delitem(sys.modules, mod, raising=False)
+
+    real_import = __import__
+
+    def raising_import(name, *args, **kwargs):
+        if name == "nemo.collections.asr":
+            raise AttributeError(
+                "module 'signal' has no attribute 'SIGKILL'"
+            )
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", raising_import)
+
+    backend = NemoBackend(model="nvidia/parakeet-tdt-0.6b-v3")
+    backend.load()
+    assert _wait(lambda: backend.status() == "error")
+    assert backend.health_check() is False
+
+
 def test_load_passes_model_name_to_loader(monkeypatch):
     from app.backends.nemo_backend import NemoBackend
 
