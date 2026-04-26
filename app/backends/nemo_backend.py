@@ -223,10 +223,19 @@ class NemoBackend:
                     pass
 
         text = self._extract_text(result)
-        if text is None:
+        if text is None or not str(text).strip():
+            # Parakeet returns an empty Hypothesis when it hears
+            # silence or near-silence; surfacing the raw shape helps
+            # the user tell apart "mic gain was too low" (peak < 0.1)
+            # from "transcribe path mis-handled the result type" (we
+            # got something but didn't extract text from it).
+            log.info(
+                "NeMo transcribe returned empty result; raw type=%s, "
+                "value preview=%.200r",
+                type(result).__name__, result,
+            )
             return None
-        text = str(text).strip()
-        return text or None
+        return str(text).strip() or None
 
     def shutdown(self) -> None:
         with self._lock:
