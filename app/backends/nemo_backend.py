@@ -251,6 +251,13 @@ class NemoBackend:
 
         _install_tqdm_progress()
 
+        # NeMo's first import pulls in PyTorch Lightning, hydra,
+        # lhotse, omegaconf, librosa, … — easily 30-90 s on a cold
+        # process. Log the entry / exit of each phase so the user
+        # can see in the Logs view that something IS happening
+        # while the model pill counter ticks; otherwise long
+        # silences feel like a hang.
+        log.info("Importing nemo_toolkit (cold import is slow)…")
         try:
             import nemo.collections.asr as nemo_asr  # type: ignore
         except ImportError as exc:
@@ -260,8 +267,8 @@ class NemoBackend:
                     self._model = None
                     self._status = "error"
             return
+        log.info("nemo_toolkit imported, fetching weights for %s", model_name)
 
-        log.info("Loading NeMo model %s (device=%s)", model_name, self._device)
         try:
             model = nemo_asr.models.ASRModel.from_pretrained(
                 model_name=model_name,
@@ -276,6 +283,7 @@ class NemoBackend:
                     self._model = None
                     self._status = "error"
             return
+        log.info("NeMo model %s downloaded; configuring attention…", model_name)
 
         # Switch to local attention for long-audio support. Cheap on
         # short clips (the model was trained with both layouts) and
