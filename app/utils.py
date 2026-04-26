@@ -1,7 +1,11 @@
+import logging
 import os
+import shutil
 import sys
 import importlib.resources
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 class OptionalComponent:
     def __init__(self, component):
@@ -131,6 +135,78 @@ def is_cached_for_info(info) -> bool:
     if kind == "gigaam":
         return is_gigaam_cached(getattr(info, "canonical", ""))
     return is_model_cached(getattr(info, "canonical", ""))
+
+
+def _hf_hub_root() -> Path:
+    """Resolve the HF hub cache root the same way ``is_model_cached``
+    does — keeps the reader and the deleter pointing at the same dir."""
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return Path(hf_home) / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def delete_cached_model(canonical: str) -> bool:
+    """Remove the entire HF hub repo directory for ``canonical``.
+
+    Faster-whisper / huggingface_hub stores each model as
+    ``models--<owner>--<repo>/`` containing ``snapshots/``, ``blobs/``
+    and ``refs/``. We blow away the whole subtree in one call so no
+    half-deleted state can survive — the next ``is_model_cached`` read
+    must agree with the deletion outcome (no flicker between
+    'Download' and 'Select' on the next refresh).
+
+    Returns True iff the directory existed and was successfully
+    removed; False on missing input, missing dir, or filesystem error
+    (logged at WARNING — the UI surfaces failure as 'still cached').
+    """
+    if not canonical:
+        return False
+    repo_dir = _hf_hub_root() / f"models--{canonical.replace('/', '--')}"
+    if not repo_dir.is_dir():
+        return False
+    try:
+        shutil.rmtree(repo_dir)
+    except OSError as exc:
+        log.warning(
+            "Failed to delete cached model %s at %s: %s",
+            canonical, repo_dir, exc,
+        )
+        return False
+    return True
+
+
+def delete_gigaam_cached(model_name: str) -> bool:
+    """Remove the GigaAM checkpoint file for ``model_name``.
+
+    GigaAM keeps every weights file as a single ``.ckpt`` inside
+    ``~/.cache/gigaam/`` — no shared blobs, no metadata sidecars to
+    worry about. Returns True iff the file existed and was unlinked.
+    """
+    if not model_name:
+        return False
+    candidate = Path.home() / ".cache" / "gigaam" / f"{model_name}.ckpt"
+    if not candidate.is_file():
+        return False
+    try:
+        candidate.unlink()
+    except OSError as exc:
+        log.warning(
+            "Failed to delete GigaAM checkpoint %s at %s: %s",
+            model_name, candidate, exc,
+        )
+        return False
+    return True
+
+
+def delete_cached_for_info(info) -> bool:
+    """Dispatch the deletion by ``info.backend_kind`` — mirror of
+    ``is_cached_for_info`` so the UI can ask one question regardless
+    of which engine backs a model."""
+    kind = getattr(info, "backend_kind", "faster_whisper")
+    if kind == "gigaam":
+        return delete_gigaam_cached(getattr(info, "canonical", ""))
+    return delete_cached_model(getattr(info, "canonical", ""))
 
 
 def resolve_asset_path(relative_path: str) -> str:
