@@ -1,31 +1,23 @@
-"""Recording status slot for the sidebar's bottom-left corner.
+"""Recording status chip for the sidebar's bottom-left corner.
 
-Holds the recording-state pill stacked vertically over the live
-VU meter. Replaces the equivalent two widgets that used to live in
-the TopBar — they overlapped the resource graphs (CPU / RAM / GPU
-bars) and pushed the model pill to the edge on narrow windows.
-
-Sizing strategy
----------------
-The widget reserves a fixed minimum height (placeholder) so that
-toggling visibility of pill/meter content doesn't reflow the
-sidebar's nav list. Idle state keeps the slot empty but the slot
-itself stays in place.
+Same visual shape as the CPU / RAM / GPU chips in the topbar's
+``ResourceWidget`` — a single rounded card with a muted label on
+the top-left, the state value on the top-right, and a thin
+progress bar (the live VU meter) running along the bottom.
+Reads as a sibling of the resource graphs rather than a pair of
+free-floating chips.
 
 States
 ------
-The slot always shows its current state, the same way the
-topbar's CPU / RAM / GPU resource graphs always show their
-current values — hiding everything in idle made the slot look
-like a blank hole. Pill is always visible with a state-driven
-label; meter is always visible with its bar at 0 unless audio
-is actively flowing in.
+The chip is always present in the slot — same convention as the
+resource graphs (they show 0% rather than disappearing). Only the
+text and bar fill change with state:
 
-- ``idle``          — pill 'Idle' (muted),  meter visible, level 0
-- ``recording``     — pill '● Recording',   meter live
-- ``processing``    — pill 'Processing…',   meter visible, level 0
-- ``model_loading`` — same look as idle (the actual loading state
-  is reflected on the topbar's model pill; we don't compete)
+- ``idle``          — value 'Idle'         (muted), bar at 0
+- ``recording``     — value '● Recording'  (red),   bar live
+- ``processing``    — value '● Processing' (accent), bar at 0
+- ``model_loading`` — same look as idle (the topbar's model pill
+  already shows the load state; we don't compete)
 """
 
 from __future__ import annotations
@@ -34,6 +26,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
     QSizePolicy,
     QVBoxLayout,
@@ -45,17 +38,14 @@ from app.gui.widgets.vu_meter import VUMeter
 
 _RECORDING_STATES = ("idle", "recording", "processing", "model_loading")
 
-# Pill text per active state. ``idle`` and ``model_loading`` both
-# render as the muted Idle pill — the topbar already shows
-# ``Loading: <model>`` during model_loading and we don't want to
-# compete with it.
+# Pill text per active state — model_loading collapses onto the
+# idle look so we don't compete with the topbar's loading pill.
 _PILL_LABELS = {
     "idle": "● Idle",
     "model_loading": "● Idle",
     "recording": "● Recording",
-    "processing": "Processing…",
+    "processing": "● Processing",
 }
-# Which property value the pill carries — drives the QSS variant.
 _PILL_VARIANTS = {
     "idle": "idle",
     "model_loading": "idle",
@@ -63,38 +53,46 @@ _PILL_VARIANTS = {
     "processing": "processing",
 }
 
-# Placeholder height — picked to fit the pill (~24 px) + spacing
-# (~6 px) + VU meter (8 px) + outer margins, with a couple of pixels
-# of breathing room. Constant so the sidebar nav list above doesn't
-# jump when the slot's contents toggle visibility.
-_SLOT_HEIGHT_PX = 56
+# Fixed height for the whole chip — matches the visual weight of
+# ResourceWidget's 32-px chip plus a row for the VU bar.
+_CHIP_HEIGHT_PX = 48
 
 
 class RecordingStatusWidget(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("RecordingStatusWidget")
-        self.setMinimumHeight(_SLOT_HEIGHT_PX)
+        self.setFixedHeight(_CHIP_HEIGHT_PX)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 6, 14, 8)
-        layout.setSpacing(4)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 6, 10, 6)
+        outer.setSpacing(4)
+
+        # Top row — STATUS label on the left, state value on the right.
+        # Mirrors how ResourceWidget paints "CPU  12%".
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+
+        self._label = QLabel("STATUS", self)
+        self._label.setObjectName("RecordingStatusLabel")
+        self._label.setProperty("role", "chip-label")
+        row.addWidget(self._label)
+        row.addStretch(1)
 
         self._pill = QLabel(_PILL_LABELS["idle"], self)
         self._pill.setObjectName("RecordingStatusPill")
-        self._pill.setProperty("role", "recording-pill")
+        self._pill.setProperty("role", "chip-value")
         self._pill.setProperty("state", "idle")
-        # Text inside the pill is centered (looks balanced inside the
-        # rounded chip) but the pill chip itself hugs the left edge of
-        # the slot — same column as the sidebar nav items above.
-        self._pill.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._pill, 0, Qt.AlignLeft)
+        self._pill.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        row.addWidget(self._pill)
 
+        outer.addLayout(row)
+
+        # VU meter sits below the row, full width of the chip.
         self._vu_meter = VUMeter(self)
-        layout.addWidget(self._vu_meter, 0, Qt.AlignLeft)
-
-        layout.addStretch(1)
+        outer.addWidget(self._vu_meter)
 
     # ---- public API ---------------------------------------------------------
 
@@ -103,15 +101,14 @@ class RecordingStatusWidget(QWidget):
             raise ValueError(
                 f"state must be one of {_RECORDING_STATES}, got {state!r}"
             )
-        # Pill is always visible — placeholder semantics. Label and
-        # variant change with state.
         self._pill.setText(_PILL_LABELS[state])
         self._pill.setProperty("state", _PILL_VARIANTS[state])
         self._pill.style().unpolish(self._pill)
         self._pill.style().polish(self._pill)
 
-        # Meter is always visible too — its bar just sits at 0
-        # whenever audio isn't actively being captured.
+        # Bar runs only during active capture; idle / processing /
+        # model_loading all sit at 0 — they share the same chip
+        # placeholder look.
         if state != "recording":
             self._vu_meter.reset()
 

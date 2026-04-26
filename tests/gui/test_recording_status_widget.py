@@ -20,12 +20,19 @@ def _label_by_name(widget, name: str) -> QLabel:
     return widget.findChild(QLabel, name)
 
 
-def test_widget_has_recording_pill_and_vu_meter(qtbot):
+def test_widget_has_status_label_pill_and_vu_meter(qtbot):
+    """Chip layout — same shape as ResourceWidget's CPU/RAM blocks:
+    a muted ``STATUS`` label on the top-left, the state value on the
+    top-right, and a thin progress bar (the VU meter) underneath."""
     from app.gui.widgets.recording_status_widget import RecordingStatusWidget
     from app.gui.widgets.vu_meter import VUMeter
 
     w = RecordingStatusWidget()
     qtbot.addWidget(w)
+
+    label = _label_by_name(w, "RecordingStatusLabel")
+    assert label is not None
+    assert "STATUS" in label.text().upper()
 
     pill = _label_by_name(w, "RecordingStatusPill")
     assert pill is not None
@@ -35,18 +42,16 @@ def test_widget_has_recording_pill_and_vu_meter(qtbot):
 
 
 def test_widget_has_fixed_placeholder_height(qtbot):
-    """The slot in the sidebar must reserve constant vertical space so
-    the navigation list doesn't jump when audio starts/stops. A
-    ``setMinimumHeight`` >= 50 px is enough for pill + meter + spacing."""
+    """Chip reserves constant vertical space so the sidebar nav
+    list above doesn't jump when state changes."""
     from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 
     w = RecordingStatusWidget()
     qtbot.addWidget(w)
 
-    # Either a fixed height or a minimum that won't collapse.
     min_h = w.minimumHeight()
-    assert min_h >= 50, (
-        f"placeholder must reserve >=50 px height, got {min_h}"
+    assert min_h >= 44, (
+        f"chip must reserve >=44 px height, got {min_h}"
     )
 
 
@@ -169,39 +174,28 @@ def test_set_input_level_forwards_to_meter(qtbot):
     assert w._vu_meter.current_level() == 0.6
 
 
-def test_pill_and_meter_aligned_to_left_edge(qtbot):
-    """The slot lives in the bottom-left corner — pill and VU meter
-    must hug the left edge to read as a single column with the nav
-    list above, not a pair of free-floating centered chips."""
-    from PySide6.QtCore import Qt
+def test_label_left_value_right_in_chip(qtbot):
+    """Mirrors ResourceWidget's block layout — STATUS label hugs the
+    left edge of the top row, the state value hugs the right edge,
+    so the user reads it as 'STATUS: Idle' the same way they read
+    'CPU: 12%' next to it."""
     from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 
     w = RecordingStatusWidget()
     qtbot.addWidget(w)
+    w.resize(200, 60)
+    w.show()
+    qtbot.waitExposed(w)
 
-    layout = w.layout()
-    # Walk the layout items and confirm both child widgets have a
-    # left-aligned alignment flag (no AlignHCenter / AlignRight bits).
-    found_pill = False
-    found_meter = False
-    for i in range(layout.count()):
-        item = layout.itemAt(i)
-        widget = item.widget()
-        if widget is None:
-            continue
-        if widget.objectName() == "RecordingStatusPill":
-            assert item.alignment() & Qt.AlignLeft, (
-                f"pill expected left-aligned, got {item.alignment()!r}"
-            )
-            assert not (item.alignment() & Qt.AlignHCenter)
-            found_pill = True
-        if widget.objectName() == "VUMeter":
-            assert item.alignment() & Qt.AlignLeft, (
-                f"VU meter expected left-aligned, got {item.alignment()!r}"
-            )
-            assert not (item.alignment() & Qt.AlignHCenter)
-            found_meter = True
-    assert found_pill and found_meter
+    label = _label_by_name(w, "RecordingStatusLabel")
+    pill = _label_by_name(w, "RecordingStatusPill")
+
+    # Label sits to the left of the value pill within the same row.
+    assert label.x() < pill.x(), (
+        f"STATUS label x={label.x()} should be left of value x={pill.x()}"
+    )
+    # And both share the top row — y coordinate within a few px.
+    assert abs(label.y() - pill.y()) <= 4
 
 
 def test_meter_resets_when_leaving_recording_state(qtbot):

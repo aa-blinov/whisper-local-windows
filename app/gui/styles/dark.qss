@@ -405,12 +405,40 @@ QLabel[role="recording-pill"][state="model_loading"] {
     color: {{color.bg_primary}};
 }
 
-/* Sidebar's bottom-left status slot — gets a quiet top divider so
-   the placeholder area reads as its own zone rather than blending
-   into the nav list above. */
+/* Sidebar's bottom-left status chip — same shape as a single
+   ResourceWidget block (CPU / RAM): rounded card with a muted
+   label on top-left, state value on top-right, VU bar underneath. */
 #RecordingStatusWidget {
-    border-top: 1px solid {{color.border}};
-    background-color: transparent;
+    background-color: {{color.bg_elevated}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.sm}};
+    margin: 8px 12px 12px 12px;
+}
+
+QLabel[role="chip-label"] {
+    color: {{color.text_muted}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    background: transparent;
+}
+
+QLabel[role="chip-value"] {
+    font-size: {{font.size_small}};
+    font-weight: 600;
+    background: transparent;
+}
+
+QLabel[role="chip-value"][state="idle"] {
+    color: {{color.text_secondary}};
+}
+
+QLabel[role="chip-value"][state="recording"] {
+    color: {{color.danger}};
+}
+
+QLabel[role="chip-value"][state="processing"] {
+    color: {{color.accent}};
 }
 
 /* Cancel button next to the loading model pill — visible only while
