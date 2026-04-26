@@ -257,9 +257,19 @@ class GigaamBackend:
                     self._status = "error"
             return
 
+        # Honour ``GIGAAM_MODELS_DIR`` (set at startup from the
+        # configured ``storage.models_dir``); when unset, omit
+        # ``download_root`` entirely so the library uses its own
+        # default ``~/.cache/gigaam`` — keeps existing installs
+        # finding their weights after an upgrade.
+        load_kwargs: dict = {}
+        env_root = os.environ.get("GIGAAM_MODELS_DIR")
+        if env_root:
+            load_kwargs["download_root"] = env_root
+
         log.info("Loading GigaAM model %s (device=%s)", model_name, self._device)
         try:
-            model = gigaam.load_model(model_name)
+            model = gigaam.load_model(model_name, **load_kwargs)
         except Exception as exc:
             log.error(
                 "Failed to load GigaAM model %s: %s",

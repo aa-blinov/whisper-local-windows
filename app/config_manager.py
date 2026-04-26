@@ -53,6 +53,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "max_entries": 1000,
         "auto_cleanup_days": 30,
     },
+    "storage": {
+        # Where downloaded model weights live. Empty string = use the
+        # built-in default (``<project>/models`` in dev,
+        # ``<exe-dir>/models`` when frozen). Settings → Storage card
+        # writes here. Both Whisper (HF hub) and GigaAM (.ckpt) live
+        # under this root, in ``hub/`` and ``gigaam/`` subdirs
+        # respectively.
+        "models_dir": "",
+    },
 }
 
 

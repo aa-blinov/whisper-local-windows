@@ -96,6 +96,46 @@ def test_load_passes_model_name_to_loader(monkeypatch):
     assert args[0] == "v2_rnnt"
 
 
+def test_load_forwards_gigaam_models_dir_as_download_root(monkeypatch, tmp_path):
+    """``GIGAAM_MODELS_DIR`` (set by ``app.py`` from the configured
+    storage path) must reach ``gigaam.load_model`` as ``download_root``
+    — without this the model would still go to the library's default
+    ``~/.cache/gigaam`` regardless of what the user picked in
+    Settings."""
+    from app.backends.gigaam_backend import GigaamBackend
+
+    custom_root = str(tmp_path / "custom-models" / "gigaam")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", custom_root)
+
+    load_model = MagicMock(return_value=MagicMock())
+    _install_fake_gigaam(monkeypatch, load_model=load_model)
+
+    backend = GigaamBackend(model="v3_e2e_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    load_model.assert_called_once()
+    _args, kwargs = load_model.call_args
+    assert kwargs.get("download_root") == custom_root
+
+
+def test_load_omits_download_root_when_env_unset(monkeypatch):
+    """Env var unset → don't pass ``download_root`` (let the library
+    use its own default). Lets existing installs keep finding their
+    weights at ``~/.cache/gigaam`` after upgrading."""
+    from app.backends.gigaam_backend import GigaamBackend
+
+    monkeypatch.delenv("GIGAAM_MODELS_DIR", raising=False)
+    load_model = MagicMock(return_value=MagicMock())
+    _install_fake_gigaam(monkeypatch, load_model=load_model)
+
+    backend = GigaamBackend(model="v3_e2e_ctc")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    load_model.assert_called_once()
+    _args, kwargs = load_model.call_args
+    assert "download_root" not in kwargs
+
+
 # ---- Transcription ---------------------------------------------------------
 
 

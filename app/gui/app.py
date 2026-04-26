@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from PySide6.QtGui import QIcon
@@ -159,19 +160,42 @@ def build_application(
     return app, window
 
 
+def _apply_storage_path(configured: Optional[str]) -> str:
+    """Resolve and apply the user's chosen models directory to env vars.
+
+    Both ``HF_HOME`` (faster-whisper / huggingface_hub) and the new
+    ``GIGAAM_MODELS_DIR`` are set so the two engines write into the
+    same root. Returns the resolved root for logging. Idempotent —
+    safe to call multiple times.
+
+    Must run before any ``huggingface_hub`` or ``gigaam`` import: HF
+    reads ``HF_HOME`` once at module load, GigaAM doesn't but its
+    download_root parameter is read per-call so the env var has to
+    be in place by the time ``GigaamBackend.load`` runs.
+    """
+    from app.utils import get_models_root
+
+    root = get_models_root(configured)
+    os.environ["HF_HOME"] = root
+    os.environ["GIGAAM_MODELS_DIR"] = str(Path(root) / "gigaam")
+    return root
+
+
 def main() -> int:
     import logging
 
-    # Redirect Hugging Face downloads into <project>/models/ before any
-    # huggingface_hub / faster_whisper code is imported — these libs read
-    # HF_HOME at import time. Without this the cache lands in
-    # ``~/.cache/huggingface/hub``, which is invisible to most users and
-    # eats the system drive.
-    from app.utils import get_project_models_path
-
-    os.environ.setdefault("HF_HOME", get_project_models_path())
-
+    # Read the configured ``storage.models_dir`` (may be empty for
+    # 'use the default') from config.yaml, then plant ``HF_HOME`` and
+    # ``GIGAAM_MODELS_DIR`` BEFORE the libraries that need them get
+    # imported. ConfigManager itself doesn't pull in HF/torch so we
+    # can safely import it first.
     from app.config_manager import ConfigManager
+
+    _early_config = ConfigManager()
+    storage_root = _apply_storage_path(
+        _early_config.get_setting("storage", "models_dir")
+    )
+
     from app.gui.controllers.recording_controller import RecordingController
     from app.gui.recording_factory import build_recording_stack
     from app.gui.widgets.tray_icon import AppTrayIcon
@@ -245,7 +269,17 @@ def main() -> int:
     )
     _logging.getLogger().addHandler(_file_handler)
 
-    config = ConfigManager()
+    # Reuse the early config — re-creating it would re-read the YAML
+    # and just produce identical state, but the early one was made
+    # before the logging file handler was attached, so log messages
+    # from the load path went to stderr only. That's fine; we don't
+    # need them in app.log.
+    config = _early_config
+    logging.getLogger(__name__).info(
+        "Models root: %s (configured=%r)",
+        storage_root,
+        _early_config.get_setting("storage", "models_dir"),
+    )
 
     state_manager = None
     hotkey_listener = None

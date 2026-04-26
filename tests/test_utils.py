@@ -217,3 +217,95 @@ def test_is_gigaam_cached_then_delete_then_is_not_cached(tmp_path, monkeypatch):
     assert is_gigaam_cached("v3_e2e_ctc") is True
     assert delete_gigaam_cached("v3_e2e_ctc") is True
     assert is_gigaam_cached("v3_e2e_ctc") is False
+
+
+# ---- GIGAAM_MODELS_DIR override --------------------------------------------
+
+
+def test_is_gigaam_cached_honours_env_var(tmp_path, monkeypatch):
+    """When ``GIGAAM_MODELS_DIR`` is set, the reader must look there
+    instead of the default ``~/.cache/gigaam`` — same contract as
+    ``HF_HOME`` for faster-whisper."""
+    custom_root = tmp_path / "custom-models" / "gigaam"
+    custom_root.mkdir(parents=True)
+    (custom_root / "v3_e2e_ctc.ckpt").write_bytes(b"x" * 1024)
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", str(custom_root))
+    # Make sure the default path is empty so we know we're reading the
+    # env-pointed one, not the default.
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake-home")
+
+    from app.utils import is_gigaam_cached
+
+    assert is_gigaam_cached("v3_e2e_ctc") is True
+
+
+def test_is_gigaam_cached_env_var_misses_when_dir_empty(tmp_path, monkeypatch):
+    """Env var set but the file isn't there → False, no fallback to
+    the default path (otherwise the user would be confused why the
+    card says 'Select' and then tries to download to the configured
+    location and the existing copy in ~/.cache is ignored)."""
+    custom_root = tmp_path / "custom-models" / "gigaam"
+    custom_root.mkdir(parents=True)
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", str(custom_root))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake-home")
+    # Place a ckpt in the *default* location — must not be picked up
+    # because the env var redirects.
+    (tmp_path / "fake-home" / ".cache" / "gigaam").mkdir(parents=True)
+    (tmp_path / "fake-home" / ".cache" / "gigaam" / "v3_e2e_ctc.ckpt").write_bytes(b"x")
+
+    from app.utils import is_gigaam_cached
+
+    assert is_gigaam_cached("v3_e2e_ctc") is False
+
+
+def test_delete_gigaam_cached_honours_env_var(tmp_path, monkeypatch):
+    """The deleter mirrors the reader — when ``GIGAAM_MODELS_DIR`` is
+    set, deletion targets that directory."""
+    custom_root = tmp_path / "custom-models" / "gigaam"
+    custom_root.mkdir(parents=True)
+    ckpt = custom_root / "v3_e2e_ctc.ckpt"
+    ckpt.write_bytes(b"x" * 1024)
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", str(custom_root))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake-home")
+
+    from app.utils import delete_gigaam_cached
+
+    assert delete_gigaam_cached("v3_e2e_ctc") is True
+    assert not ckpt.exists()
+
+
+def test_gigaam_helpers_unset_env_var_uses_default(tmp_path, monkeypatch):
+    """Env var unset → fall back to ``~/.cache/gigaam``. Existing
+    deployments must keep finding their old downloads."""
+    monkeypatch.delenv("GIGAAM_MODELS_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    _make_gigaam_ckpt(tmp_path, "v3_e2e_ctc")
+
+    from app.utils import is_gigaam_cached
+
+    assert is_gigaam_cached("v3_e2e_ctc") is True
+
+
+# ---- get_models_root ------------------------------------------------------
+
+
+def test_get_models_root_returns_configured_value(tmp_path):
+    """The helper used by ``app.py`` to set HF_HOME / GIGAAM_MODELS_DIR
+    must echo back whatever the user picked, with no surprise
+    rewriting (e.g. appending ``/hub`` or normalising case)."""
+    from app.utils import get_models_root
+
+    custom = str(tmp_path / "drive-d-models")
+    assert get_models_root(custom) == custom
+
+
+def test_get_models_root_returns_default_when_empty(tmp_path, monkeypatch):
+    """Empty / None / whitespace input → caller's default — same path
+    the app has used since day one (``<project>/models``). Means the
+    config schema can ship a blank value to mean 'unchanged'."""
+    from app.utils import get_models_root, get_project_models_path
+
+    default = get_project_models_path()
+    assert get_models_root("") == default
+    assert get_models_root(None) == default
+    assert get_models_root("   ") == default

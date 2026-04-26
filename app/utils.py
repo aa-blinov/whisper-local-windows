@@ -4,6 +4,7 @@ import shutil
 import sys
 import importlib.resources
 from pathlib import Path
+from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +84,24 @@ def get_project_models_path() -> str:
     return str(models_dir)
 
 
+def get_models_root(configured: Optional[str]) -> str:
+    """Resolve the root directory for downloaded model weights.
+
+    Returns ``configured`` when it's a non-empty, non-whitespace
+    string; otherwise falls back to the same default ``app.py`` has
+    used since day one (``<project>/models`` in dev,
+    ``<exe-dir>/models`` when frozen).
+
+    Used by ``app.py`` at startup to decide what to put into
+    ``HF_HOME`` and ``GIGAAM_MODELS_DIR``. Doesn't touch the
+    filesystem itself — both subdirs are created lazily by the
+    libraries on first download.
+    """
+    if configured and configured.strip():
+        return configured
+    return get_project_models_path()
+
+
 def is_model_cached(canonical: str) -> bool:
     """Return True if the given Hugging Face model id has at least one
     snapshot present in the local hub cache.
@@ -111,17 +130,31 @@ def is_model_cached(canonical: str) -> bool:
     return False
 
 
+def _gigaam_cache_dir() -> Path:
+    """Resolve the GigaAM checkpoint directory.
+
+    Honours ``GIGAAM_MODELS_DIR`` (set by ``app.py`` at startup from
+    the configured ``storage.models_dir``); falls back to the
+    library's own default ``~/.cache/gigaam`` so existing installs
+    keep finding their downloads after upgrading to a build that
+    supports the override.
+    """
+    env_dir = os.environ.get("GIGAAM_MODELS_DIR")
+    if env_dir:
+        return Path(env_dir)
+    return Path.home() / ".cache" / "gigaam"
+
+
 def is_gigaam_cached(model_name: str) -> bool:
     """Return True if GigaAM has the given model checkpoint on disk.
 
-    GigaAM downloads to ``~/.cache/gigaam/<model_name>.ckpt`` (NOT the
-    HF hub layout) — every weights file lives next to the others as a
+    GigaAM downloads to ``<cache_dir>/<model_name>.ckpt`` (NOT the HF
+    hub layout) — every weights file lives next to the others as a
     single ``.ckpt``. Checks the file is present and non-empty.
     """
     if not model_name:
         return False
-    cache_dir = Path.home() / ".cache" / "gigaam"
-    candidate = cache_dir / f"{model_name}.ckpt"
+    candidate = _gigaam_cache_dir() / f"{model_name}.ckpt"
     try:
         return candidate.is_file() and candidate.stat().st_size > 0
     except OSError:
@@ -180,12 +213,14 @@ def delete_gigaam_cached(model_name: str) -> bool:
     """Remove the GigaAM checkpoint file for ``model_name``.
 
     GigaAM keeps every weights file as a single ``.ckpt`` inside
-    ``~/.cache/gigaam/`` — no shared blobs, no metadata sidecars to
-    worry about. Returns True iff the file existed and was unlinked.
+    ``<cache_dir>`` (configurable via ``GIGAAM_MODELS_DIR``, defaults
+    to ``~/.cache/gigaam``) — no shared blobs, no metadata sidecars
+    to worry about. Returns True iff the file existed and was
+    unlinked.
     """
     if not model_name:
         return False
-    candidate = Path.home() / ".cache" / "gigaam" / f"{model_name}.ckpt"
+    candidate = _gigaam_cache_dir() / f"{model_name}.ckpt"
     if not candidate.is_file():
         return False
     try:
