@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -77,17 +78,44 @@ class ShortcutsView(QWidget):
         # programmatically (e.g. controller prefilling from config).
         self._suspend_emit = False
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(28, 22, 28, 22)
-        root.setSpacing(14)
+        # Outer layout = top hint pinned + scrollable card stack.
+        # Without the scroll area Qt tried to fit every card into
+        # whatever vertical space the window had; once we pushed
+        # past 4-5 cards Qt started squishing form rows below
+        # their min-height and labels rendered on top of inputs.
+        # Mirrors the Models view's pattern exactly.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
+        hint_wrapper = QWidget(self)
+        hint_wrapper_layout = QVBoxLayout(hint_wrapper)
+        hint_wrapper_layout.setContentsMargins(28, 22, 28, 0)
+        hint_wrapper_layout.setSpacing(0)
         hint = QLabel(
             "Microphone, global hotkeys, paste behaviour. "
             "Changes save automatically.",
-            self,
+            hint_wrapper,
         )
         hint.setProperty("role", "muted")
-        root.addWidget(hint)
+        hint_wrapper_layout.addWidget(hint)
+        outer.addWidget(hint_wrapper)
+
+        scroll = QScrollArea(self)
+        scroll.setObjectName("ShortcutsScrollArea")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        scroll.verticalScrollBar().setSingleStep(20)
+        outer.addWidget(scroll, 1)
+
+        scroll_content = QWidget(scroll)
+        scroll_content.setObjectName("ShortcutsScrollContent")
+        scroll.setWidget(scroll_content)
+        root = QVBoxLayout(scroll_content)
+        root.setContentsMargins(28, 14, 28, 22)
+        root.setSpacing(14)
 
         # ---- Audio input card -------------------------------------------
         audio_card, audio_form = _make_section_card("Audio input", self)

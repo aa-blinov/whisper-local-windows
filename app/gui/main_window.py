@@ -30,12 +30,13 @@ class MainWindow(QMainWindow):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Lazy to Text")
-        # Default size accommodates the Settings tab without scroll
-        # bars; the minimum keeps the user from squishing the window
-        # below the Storage card's natural height (any smaller and
-        # form labels start rendering on top of their inputs).
+        # Settings + Models views both wrap their card stacks in a
+        # QScrollArea, so we can drop back to a sane minimum that
+        # fits a 1366×768 laptop with Windows scaling on. Default
+        # has breathing room for 4-5 cards visible without
+        # scrolling on most desktops.
         self.resize(1100, 780)
-        self.setMinimumSize(900, 720)
+        self.setMinimumSize(900, 620)
         self._close_to_tray = False
         self._quitting = False
 
