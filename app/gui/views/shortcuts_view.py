@@ -236,8 +236,9 @@ class ShortcutsView(QWidget):
         storage_v.addWidget(storage_btn_widget)
 
         storage_hint = QLabel(
-            "Changes apply on next launch. Already-downloaded weights "
-            "stay where they are.",
+            "New downloads land here immediately. Already-downloaded "
+            "weights stay in their current folder unless you choose "
+            "to move them.",
             storage_card,
         )
         storage_hint.setObjectName("StorageHint")
