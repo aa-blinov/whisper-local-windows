@@ -516,24 +516,30 @@ class ShortcutsView(QWidget):
         self._test_mic_btn.setEnabled(True)
         self._test_mic_meter.setVisible(False)
         self._test_mic_meter.reset()
+        # Express peak amplitude (the loudest moment in the 3-s
+        # capture, normalised to 0–1) as a simple percentage —
+        # ``peak / rms`` are audio-engineering jargon that mean
+        # nothing to most users. The full numbers live in the
+        # tooltip for anyone who wants them (debug / bug reports).
+        pct = int(round(max(0.0, min(1.0, peak)) * 100))
         if peak < 0.01:
-            text = (
-                f"Silence detected (peak {peak:.3f}). "
-                "Check the device or speak louder."
-            )
+            text = "No sound detected — check the selected microphone."
             role = "test-result-bad"
         elif peak < 0.08:
             text = (
-                f"Quiet input (peak {peak:.3f}, rms {rms:.3f}). "
-                "Audible but on the low side."
+                f"Very quiet ({pct}%). Speak louder or raise the "
+                "input level in Windows sound settings."
             )
             role = "test-result-warn"
         else:
-            text = (
-                f"Looks good — peak {peak:.3f}, rms {rms:.3f}."
-            )
+            text = f"Looks good ({pct}%)."
             role = "test-result-good"
         self._test_mic_label.setText(text)
+        self._test_mic_label.setToolTip(
+            f"peak={peak:.3f}, rms={rms:.3f}\n"
+            "(amplitude on a 0–1 scale; peak = loudest sample, "
+            "rms = average power)"
+        )
         self._test_mic_label.setProperty("role", role)
         self._test_mic_label.style().unpolish(self._test_mic_label)
         self._test_mic_label.style().polish(self._test_mic_label)
