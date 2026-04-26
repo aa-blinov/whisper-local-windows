@@ -63,7 +63,16 @@ AppMutex={#AppMutex}
 SetupIconFile=..\app\assets\tray_idle.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 LicenseFile=..\LICENSE
-DisableDirPage=auto
+; Always show the "Select Destination Location" wizard page.
+; ``auto`` would hide it when Inno deems the default acceptable
+; (most fresh installs) — but the bundle is 5 GB and a non-trivial
+; share of users want their models on a dedicated SSD or a D:
+; drive with more space. ``no`` keeps the page visible with
+; a Browse button + free-form text entry, so the user can pick
+; whatever path makes sense for their setup. Default is still
+; ``%LOCALAPPDATA%\Programs\LazyToText`` which works without
+; admin and matches modern per-user-app conventions.
+DisableDirPage=no
 DisableReadyPage=no
 ShowLanguageDialog=auto
 CloseApplications=yes
