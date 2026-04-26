@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.smooth_scroll import apply_smooth_scroll
 from app.gui.widgets.flow_layout import FlowLayout
 from app.gui.widgets.model_card import ModelCard
 from app.inference_settings import InferenceSettings
@@ -91,9 +92,7 @@ class ModelsView(QWidget):
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        # Smaller wheel step → smooth pixel-ish scrolling instead of a
-        # whole-card jump per notch.
-        scroll.verticalScrollBar().setSingleStep(20)
+        apply_smooth_scroll(scroll)
 
         content = QWidget(scroll)
         content.setObjectName("ModelsScrollContent")

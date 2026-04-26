@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.gui.smooth_scroll import apply_smooth_scroll
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -112,7 +114,7 @@ class ShortcutsView(QWidget):
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        scroll.verticalScrollBar().setSingleStep(20)
+        apply_smooth_scroll(scroll)
         outer.addWidget(scroll, 1)
 
         scroll_content = QWidget(scroll)
