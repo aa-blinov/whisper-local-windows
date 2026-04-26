@@ -393,14 +393,25 @@ class FasterWhisperBackend:
             device = self._device
             compute_type = self._compute_type
 
+        # Honour ``HF_HOME`` at the moment of load — passing it as
+        # ``download_root`` makes the user's Storage-tab path change
+        # apply to the very next model load, no restart needed
+        # (faster-whisper forwards this straight to
+        # ``huggingface_hub.snapshot_download(cache_dir=...)``).
+        # When unset, omit the kwarg entirely so the default
+        # ``~/.cache/huggingface/hub`` location is used.
+        load_kwargs: dict = {"device": device, "compute_type": compute_type}
+        hf_home = os.environ.get("HF_HOME")
+        if hf_home:
+            load_kwargs["download_root"] = os.path.join(hf_home, "hub")
+
         log.info(
-            "Loading faster-whisper model %s (device=%s, compute_type=%s)",
-            model_name, device, compute_type,
+            "Loading faster-whisper model %s (device=%s, compute_type=%s, "
+            "download_root=%s)",
+            model_name, device, compute_type, load_kwargs.get("download_root"),
         )
         try:
-            model = WhisperModel(
-                model_name, device=device, compute_type=compute_type,
-            )
+            model = WhisperModel(model_name, **load_kwargs)
         except Exception as exc:
             log.error("Failed to load model %s: %s", model_name, exc, exc_info=True)
             with self._lock:

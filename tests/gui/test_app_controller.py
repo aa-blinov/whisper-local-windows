@@ -590,27 +590,44 @@ def test_controller_prefill_marks_default_when_config_empty(qtbot, monkeypatch):
     assert "default" in text.lower()
 
 
-def test_controller_storage_change_writes_config_and_warns_about_restart(
+def test_controller_storage_change_writes_config_and_updates_env(
     qtbot, monkeypatch,
 ):
     """Picking a folder via QFileDialog → controller writes
-    ``storage.models_dir`` and pops an info dialog telling the user
-    a restart is needed (env vars are baked at startup)."""
+    ``storage.models_dir`` AND mirrors the new path into the live
+    process environment so the next ``WhisperModel`` /
+    ``gigaam.load_model`` call uses it without a restart.
+
+    The info dialog no longer mentions restarting (it would be a
+    lie now)."""
+    import os
     from PySide6.QtWidgets import QFileDialog, QMessageBox
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
 
+    # Tell monkeypatch about both env vars up-front so it tracks
+    # them and reverts on teardown — without this the production
+    # code's direct ``os.environ`` writes leak into other tests.
+    # ``setenv`` to a placeholder forces monkeypatch to track the
+    # variable; production code under test will overwrite it with
+    # ``os.environ[...] = ...`` which monkeypatch can then restore on
+    # teardown. ``delenv(raising=False)`` doesn't track unset vars
+    # — leaks env changes into other tests.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
+
     window = MainWindow()
     qtbot.addWidget(window)
     config = FakeConfig({"storage": {"models_dir": ""}})
 
+    chosen = "D:/lazy-to-text-models"
     monkeypatch.setattr(
         controller_module, "get_models_root", lambda v: v or "C:/default"
     )
     monkeypatch.setattr(
         QFileDialog, "getExistingDirectory",
-        lambda *a, **kw: "D:/lazy-to-text-models",
+        lambda *a, **kw: chosen,
     )
     info_calls: list = []
     monkeypatch.setattr(
@@ -621,12 +638,21 @@ def test_controller_storage_change_writes_config_and_warns_about_restart(
     AppController(config=config, window=window)
     window.shortcuts_view.storage_path_change_requested.emit()
 
-    assert config._data.get("storage", {}).get("models_dir") == "D:/lazy-to-text-models"
-    # An info dialog fired — its body must mention restarting / next launch.
+    assert config._data.get("storage", {}).get("models_dir") == chosen
+    # Env vars updated live so the next backend load picks up the
+    # new path. ``HF_HOME`` is the root; ``GIGAAM_MODELS_DIR`` is
+    # always the ``gigaam`` subdir of that root.
+    from pathlib import Path as _Path
+
+    assert os.environ.get("HF_HOME") == chosen
+    assert os.environ.get("GIGAAM_MODELS_DIR") == str(_Path(chosen) / "gigaam")
+    # Info dialog body must NOT mention restart/next-launch — that
+    # wording is now a lie since the change applies live.
     assert info_calls, "expected QMessageBox.information to fire after change"
     args, _kwargs = info_calls[0]
     body_text = " ".join(str(a) for a in args).lower()
-    assert "restart" in body_text or "next launch" in body_text
+    assert "restart" not in body_text
+    assert "next launch" not in body_text
 
 
 def test_controller_storage_change_cancelled_writes_nothing(qtbot, monkeypatch):
@@ -663,6 +689,13 @@ def test_controller_storage_change_cancelled_writes_nothing(qtbot, monkeypatch):
 def test_controller_storage_change_offers_migration_when_old_has_weights(
     qtbot, monkeypatch, tmp_path,
 ):
+    # ``setenv`` to a placeholder forces monkeypatch to track the
+    # variable; production code under test will overwrite it with
+    # ``os.environ[...] = ...`` which monkeypatch can then restore on
+    # teardown. ``delenv(raising=False)`` doesn't track unset vars
+    # — leaks env changes into other tests.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
     """Old root has cached weights → controller pops a Yes/No/Cancel
     prompt offering to move them. ``Yes`` triggers ``move_cached_dir``
     for both ``hub/`` and ``gigaam/`` (whichever exist) and writes
@@ -723,6 +756,13 @@ def test_controller_storage_change_offers_migration_when_old_has_weights(
 def test_controller_storage_change_no_prompt_when_old_root_is_empty(
     qtbot, monkeypatch, tmp_path,
 ):
+    # ``setenv`` to a placeholder forces monkeypatch to track the
+    # variable; production code under test will overwrite it with
+    # ``os.environ[...] = ...`` which monkeypatch can then restore on
+    # teardown. ``delenv(raising=False)`` doesn't track unset vars
+    # — leaks env changes into other tests.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
     """Old root has nothing → skip the migration prompt entirely.
     The user only sees the standard 'restart required' info."""
     from PySide6.QtWidgets import QFileDialog, QMessageBox
@@ -765,6 +805,13 @@ def test_controller_storage_change_no_prompt_when_old_root_is_empty(
 def test_controller_storage_change_no_on_migration_writes_config_only(
     qtbot, monkeypatch, tmp_path,
 ):
+    # ``setenv`` to a placeholder forces monkeypatch to track the
+    # variable; production code under test will overwrite it with
+    # ``os.environ[...] = ...`` which monkeypatch can then restore on
+    # teardown. ``delenv(raising=False)`` doesn't track unset vars
+    # — leaks env changes into other tests.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
     """Old has weights, user clicks ``No`` on the migration prompt →
     config still updates (so future downloads go to new place) but
     nothing moves on disk."""
@@ -813,6 +860,13 @@ def test_controller_storage_change_no_on_migration_writes_config_only(
 def test_controller_storage_change_cancel_on_migration_aborts(
     qtbot, monkeypatch, tmp_path,
 ):
+    # ``setenv`` to a placeholder forces monkeypatch to track the
+    # variable; production code under test will overwrite it with
+    # ``os.environ[...] = ...`` which monkeypatch can then restore on
+    # teardown. ``delenv(raising=False)`` doesn't track unset vars
+    # — leaks env changes into other tests.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
     """Cancel on the migration prompt → don't write config either,
     so the user can pick a different folder without leaving a
     half-applied state."""
@@ -851,13 +905,26 @@ def test_controller_storage_change_cancel_on_migration_aborts(
     assert config._data["storage"]["models_dir"] == "C:/initial"
 
 
-def test_controller_storage_reset_clears_config_and_warns_about_restart(
+def test_controller_storage_reset_clears_config_and_updates_env(
     qtbot, monkeypatch,
 ):
+    """Reset clears ``storage.models_dir`` and mirrors the change
+    into the live env: ``HF_HOME`` snaps back to the resolved
+    default and ``GIGAAM_MODELS_DIR`` is removed entirely so GigaAM
+    falls back to its library default ``~/.cache/gigaam``."""
+    import os
     from PySide6.QtWidgets import QMessageBox
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
+
+    # ``setenv`` to a placeholder forces monkeypatch to track the
+    # variable; production code under test will overwrite it with
+    # ``os.environ[...] = ...`` which monkeypatch can then restore on
+    # teardown. ``delenv(raising=False)`` doesn't track unset vars
+    # — leaks env changes into other tests.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "")
 
     window = MainWindow()
     qtbot.addWidget(window)
@@ -866,6 +933,9 @@ def test_controller_storage_reset_clears_config_and_warns_about_restart(
     monkeypatch.setattr(
         controller_module, "get_models_root", lambda v: v or "C:/default"
     )
+    # Make sure GIGAAM_MODELS_DIR starts set so we can verify it's
+    # cleared by the reset.
+    monkeypatch.setenv("GIGAAM_MODELS_DIR", "D:/old/gigaam")
     info_calls: list = []
     monkeypatch.setattr(
         QMessageBox, "information",
@@ -876,7 +946,10 @@ def test_controller_storage_reset_clears_config_and_warns_about_restart(
     window.shortcuts_view.storage_reset_requested.emit()
 
     assert config._data["storage"]["models_dir"] == ""
-    assert info_calls, "expected restart-required info dialog after reset"
+    # HF_HOME → resolved default; GIGAAM_MODELS_DIR removed.
+    assert os.environ.get("HF_HOME") == "C:/default"
+    assert "GIGAAM_MODELS_DIR" not in os.environ
+    assert info_calls, "expected info dialog after reset"
 
 
 def test_controller_clear_cancelled_keeps_entries(qtbot, monkeypatch):

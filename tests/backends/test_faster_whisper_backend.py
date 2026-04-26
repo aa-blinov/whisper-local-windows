@@ -64,6 +64,65 @@ def test_load_transitions_through_loading_to_ready(monkeypatch):
     assert backend.health_check() is True
 
 
+def test_load_passes_hf_home_as_download_root(monkeypatch, tmp_path):
+    """``HF_HOME`` is the source of truth for the user-configured
+    storage path. faster-whisper's ``WhisperModel`` accepts a
+    ``download_root`` that's forwarded straight to
+    ``huggingface_hub.snapshot_download(cache_dir=...)``. Reading the
+    env var at construction time + passing it explicitly is what
+    makes a runtime path change take effect on the next model load
+    without restarting the process — same dynamic-path pattern we
+    already use for GigaAM."""
+    from app.backends.faster_whisper_backend import FasterWhisperBackend
+
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+
+    captured: list = []
+
+    def fake_whisper(*args, **kwargs):
+        captured.append((args, kwargs))
+        return MagicMock()
+
+    monkeypatch.setattr("faster_whisper.WhisperModel", fake_whisper)
+
+    backend = FasterWhisperBackend(model="tiny", device="cpu", compute_type="int8")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    assert captured, "WhisperModel was not constructed"
+    _args, kwargs = captured[0]
+    expected = str(tmp_path / "hub")
+    assert kwargs.get("download_root") == expected, (
+        f"expected download_root={expected!r}, got {kwargs.get('download_root')!r}"
+    )
+
+
+def test_load_omits_download_root_when_hf_home_unset(monkeypatch):
+    """No ``HF_HOME`` → don't pass ``download_root`` so faster-whisper
+    falls back to its / huggingface_hub's default cache path. Lets
+    users who haven't customised storage keep their existing
+    downloads."""
+    from app.backends.faster_whisper_backend import FasterWhisperBackend
+
+    monkeypatch.delenv("HF_HOME", raising=False)
+
+    captured: list = []
+
+    def fake_whisper(*args, **kwargs):
+        captured.append((args, kwargs))
+        return MagicMock()
+
+    monkeypatch.setattr("faster_whisper.WhisperModel", fake_whisper)
+
+    backend = FasterWhisperBackend(model="tiny", device="cpu", compute_type="int8")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    assert captured
+    _args, kwargs = captured[0]
+    assert "download_root" not in kwargs
+
+
 def test_load_failure_transitions_to_error(monkeypatch):
     from app.backends.faster_whisper_backend import FasterWhisperBackend
 

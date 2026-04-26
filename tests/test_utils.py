@@ -12,6 +12,16 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _clean_storage_env(monkeypatch):
+    """Each test starts with no env-level cache overrides — otherwise
+    a leaked ``GIGAAM_MODELS_DIR`` / ``HF_HOME`` from a controller
+    test (which writes them directly via ``os.environ[...] = ...``)
+    sends the helpers under test at the wrong directory."""
+    monkeypatch.delenv("GIGAAM_MODELS_DIR", raising=False)
+    monkeypatch.delenv("HF_HOME", raising=False)
+
+
 # ---- Helpers ----------------------------------------------------------------
 
 

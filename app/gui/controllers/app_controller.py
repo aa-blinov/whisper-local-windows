@@ -31,6 +31,32 @@ from app.utils import (
 log = logging.getLogger(__name__)
 
 
+def _apply_env_for_models_root(configured: str) -> str:
+    """Mirror the user's chosen models root into the live process
+    environment so the next ``WhisperModel(download_root=…)`` and
+    ``gigaam.load_model(download_root=…)`` calls pick it up without
+    a restart.
+
+    Mirrors the startup logic in ``app.gui.app._apply_storage_path``
+    — kept in lockstep so 'change live' and 'apply on next launch'
+    end up at the same env state.
+
+    Returns the resolved root for logging.
+    """
+    import os as _os
+
+    root = get_models_root(configured)
+    _os.environ["HF_HOME"] = root
+    if configured and configured.strip():
+        _os.environ["GIGAAM_MODELS_DIR"] = str(Path(root) / "gigaam")
+    else:
+        # Reset → drop the env override so GigaAM goes back to its
+        # library default ``~/.cache/gigaam`` (and existing-install
+        # ckpt files there stay reachable).
+        _os.environ.pop("GIGAAM_MODELS_DIR", None)
+    return root
+
+
 def _human_size(num_bytes: int) -> str:
     """Compact human size for status / dialog text. KB/MB/GB to one
     decimal — close enough for 'will this fit?' reasoning."""
@@ -372,6 +398,10 @@ class AppController(QObject):
                     QApplication.restoreOverrideCursor()
 
         self._config.update_user_setting("storage", "models_dir", chosen)
+        # Mirror into the live process env — both backends read these
+        # at every load, so the change takes effect on the very next
+        # ``Download`` click without a restart.
+        _apply_env_for_models_root(chosen)
         self._refresh_storage_path()
 
         # Build a user-friendly summary so they know what landed
@@ -398,25 +428,27 @@ class AppController(QObject):
                 f"{old_root}\n"
             )
         summary_lines.append(
-            "Restart the app for the new location to take effect."
+            "New downloads will land at the new location immediately."
         )
 
         QMessageBox.information(
             self._window,
-            "Restart required",
+            "Models folder updated",
             "\n".join(summary_lines),
         )
 
     def _on_storage_reset(self) -> None:
-        """Reset Storage to default — same restart caveat applies."""
+        """Reset Storage to default and mirror that into the live
+        env so subsequent loads/downloads use the default path."""
         self._config.update_user_setting("storage", "models_dir", "")
+        resolved = _apply_env_for_models_root("")
         self._refresh_storage_path()
         QMessageBox.information(
             self._window,
-            "Restart required",
+            "Models folder reset",
             (
-                "Models folder reset to default.\n\n"
-                "Restart the app for the new location to take effect."
+                f"Models folder set to default:\n{resolved}\n\n"
+                "New downloads will land there immediately."
             ),
         )
 
