@@ -2,6 +2,29 @@
 
 from __future__ import annotations
 
+
+# DLL-ordering workaround for a pyarrow ↔ Qt segfault on Windows.
+#
+# pyarrow's ``arrow.dll`` and Qt's runtime end up sharing some Windows-
+# global state (CRT / OpenSSL / something else — the EventLog points at
+# arrow.dll offset 0xbc5431 with exception 0xC0000005 every time). If
+# Qt loads first and pyarrow comes later — through the NeMo backend
+# pulling in lhotse → pyarrow on a worker thread — pyarrow segfaults
+# the entire process during ``import pyarrow.arrow.dll``. Importing
+# pyarrow FIRST puts arrow.dll into the loader's address space before
+# Qt has a chance to claim conflicting slots, and the rest of the day
+# is fine.
+#
+# Reproduced cleanly with ``scripts/diag_parakeet_with_qt.py`` (segfault
+# inside ``import nemo.collections.asr``) vs ``diag_parakeet_qt_preimport``
+# (ALL DONE). Wrapped in try/except so machines without pyarrow installed
+# (a Whisper-only setup) still boot.
+try:  # noqa: SIM105 — keep the explicit comment + import-time placement
+    import pyarrow  # noqa: F401  (warmup-only, value unused)
+except ImportError:
+    pass
+
+
 import os
 import sys
 from pathlib import Path
