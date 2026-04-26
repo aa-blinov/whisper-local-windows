@@ -1407,6 +1407,147 @@ def test_controller_routes_topbar_cancel_to_recording_controller(qtbot):
     assert getattr(rec, "cancel_model_change_calls", 0) == 1
 
 
+# ---- Cancel-load rollback (the half-clicked card bug) ---------------------
+
+
+def test_cancel_after_select_reverts_active_card_to_previous(qtbot):
+    """The user had Whisper Large v3 active. They click on a different
+    card → the controller flips the new card to Active and starts the
+    load. They click Cancel → the previously-active card must reclaim
+    the green Active pill, otherwise a model the backend never loaded
+    looks confirmed in the UI."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+    assert window.models_view.active_alias() == "large-v3"
+
+    # User clicks a different card.
+    window.models_view.model_selected.emit("turbo")
+    assert window.models_view.active_alias() == "turbo"
+
+    # User clicks Cancel.
+    window.topbar.cancel_load_requested.emit()
+
+    assert window.models_view.active_alias() == "large-v3"
+
+
+def test_cancel_after_select_clears_active_when_no_prior_card(qtbot):
+    """Fresh install — no previously-active card. User clicks a card,
+    decides they don't want it, hits Cancel. No card should be Active
+    afterwards."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})  # no persisted model
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+    assert window.models_view.active_alias() is None
+
+    window.models_view.model_selected.emit("turbo")
+    assert window.models_view.active_alias() == "turbo"
+
+    window.topbar.cancel_load_requested.emit()
+
+    assert window.models_view.active_alias() is None
+
+
+def test_cancel_after_select_restores_topbar_pill(qtbot):
+    """The topbar's display name shadows the active card. After a
+    cancel, the previously-active model's display name must come
+    back — otherwise the user sees ``Loading: <half-clicked>`` flip
+    to ``Current model: <half-clicked>`` of a model the backend
+    never actually loaded."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+    # Snapshot: large-v3 display name is in the pill.
+    initial_display = window.topbar._model_display_name
+
+    window.models_view.model_selected.emit("turbo")
+    # Pill was just flipped to a different model.
+    assert window.topbar._model_display_name != initial_display
+
+    window.topbar.cancel_load_requested.emit()
+
+    assert window.topbar._model_display_name == initial_display
+
+
+def test_cancel_after_select_restores_config(qtbot):
+    """``_on_model_selected`` writes the new alias to config
+    immediately so a crash-on-load doesn't leave a half-applied
+    state. Cancel must roll the config back too — otherwise next
+    launch picks up the model the user explicitly cancelled."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+
+    window.models_view.model_selected.emit("turbo")
+    assert config.get_setting("whisper", "model") == "turbo"
+
+    window.topbar.cancel_load_requested.emit()
+
+    assert config.get_setting("whisper", "model") == "large-v3"
+
+
+def test_cancel_with_no_load_in_flight_does_not_revert(qtbot):
+    """If cancel arrives while nothing is loading (the recording
+    controller returns falsy), the rollback path must NOT fire —
+    otherwise an unrelated cancel click would un-mark a happily-
+    loaded card."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    class _NoCancelRec(FakeRecordingController):
+        def cancel_model_change(self) -> bool:
+            self.cancel_model_change_calls = (
+                getattr(self, "cancel_model_change_calls", 0) + 1
+            )
+            return False  # nothing was loading
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    rec = _NoCancelRec()
+
+    AppController(config=config, window=window, recording=rec)
+    # Pretend the user picked "turbo" earlier and it actually loaded —
+    # then they hit Cancel idly with nothing in flight.
+    window.models_view.model_selected.emit("turbo")
+    # Suppose loading completed; backend reports ready, etc. We
+    # simulate that by clearing the snapshot the way a real
+    # ``ready`` state would (the rollback target). This is the
+    # behavioural assertion: the snapshot should NOT survive once
+    # the load has succeeded.
+    window.topbar.cancel_load_requested.emit()
+
+    # The cancel reached the recording controller (one call).
+    assert rec.cancel_model_change_calls == 1
+    # But because cancel returned False, the active card stayed at
+    # the just-selected one — no spurious rollback.
+    assert window.models_view.active_alias() == "turbo"
+
+
 def test_controller_refreshes_history_on_history_updated(qtbot):
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow

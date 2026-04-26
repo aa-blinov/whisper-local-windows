@@ -153,11 +153,15 @@ class ModelsView(QWidget):
     def active_alias(self) -> Optional[str]:
         return self._active_alias
 
-    def set_active(self, alias: str) -> None:
-        if alias not in self._cards:
+    def set_active(self, alias: Optional[str]) -> None:
+        """Mark a card as the currently active one. ``None`` clears
+        the active state on every card — the rollback hook used by
+        the cancel-load flow when the user backs out of a
+        just-clicked model before its load finishes."""
+        if alias is not None and alias not in self._cards:
             raise KeyError(alias)
         for card_alias, card in self._cards.items():
-            card.set_active(card_alias == alias)
+            card.set_active(alias is not None and card_alias == alias)
         self._active_alias = alias
 
     def is_locked(self) -> bool:

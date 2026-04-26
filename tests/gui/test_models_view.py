@@ -69,6 +69,26 @@ def test_models_view_set_active_rejects_unknown(qtbot):
         view.set_active("does-not-exist")
 
 
+def test_models_view_set_active_none_clears_all(qtbot):
+    """``set_active(None)`` is the rollback hook used by the
+    cancel-load flow: when the user clicks Cancel before a
+    just-picked card finishes loading, the controller has to
+    un-mark it. Passing None means 'no card is Active'."""
+    from app.gui.views.models_view import ModelsView
+    from app.gui.widgets.model_card import ModelCard
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+
+    view.set_active("large-v3")
+    view.set_active(None)
+
+    assert view.active_alias() is None
+    cards = {c.alias(): c for c in view.findChildren(ModelCard)}
+    for card in cards.values():
+        assert card.is_active() is False
+
+
 def test_models_view_emits_model_selected_when_card_emits(qtbot):
     from app.gui.views.models_view import ModelsView
     from app.gui.widgets.model_card import ModelCard

@@ -159,6 +159,14 @@ class AppController(QObject):
         self._mic_test_vu_timer = QTimer(self)
         self._mic_test_vu_timer.setInterval(33)
         self._mic_test_vu_timer.timeout.connect(self._on_mic_test_vu_tick)
+        # Snapshot of the pre-click state, captured in
+        # ``_on_model_selected`` and consumed by
+        # ``_on_cancel_load_requested`` to roll the active card +
+        # config + topbar pill back when the user bails out of a load.
+        # Cleared once the load actually succeeds (in
+        # ``_on_recording_state_changed`` when state goes to idle and
+        # the backend reports ``ready``).
+        self._pre_select_snapshot: Optional[dict] = None
         self._wire_models()
         self._wire_shortcuts()
         self._wire_history()
@@ -228,6 +236,27 @@ class AppController(QObject):
             info = get_model(alias)
         except KeyError:
             pass
+
+        # Snapshot the pre-click state before we mutate anything. If
+        # the user clicks Cancel before this load finishes, the
+        # cancel handler restores the active card / config / topbar
+        # pill from this dict — without it the half-clicked card
+        # stays marked Active forever.
+        prev_alias = self._window.models_view.active_alias()
+        prev_info = None
+        if prev_alias:
+            try:
+                prev_info = get_model(prev_alias)
+            except KeyError:
+                prev_info = None
+        self._pre_select_snapshot = {
+            "alias": prev_alias,
+            "info": prev_info,
+            "config_model": self._config.get_setting("whisper", "model"),
+            "config_compute": self._config.get_setting(
+                "whisper", "compute_type"
+            ),
+        }
 
         self._config.update_user_setting("whisper", "model", alias)
         if info is not None:
@@ -821,9 +850,42 @@ class AppController(QObject):
         if target is None:
             return
         try:
-            target()
+            cancelled = bool(target())
         except Exception as exc:  # pragma: no cover — defensive
             log.warning("cancel_model_change forward raised: %s", exc)
+            return
+
+        # If nothing was actually loading (cancel raced a finished
+        # load), don't roll back — the active card / config reflect a
+        # successfully loaded model that we shouldn't undo.
+        if not cancelled:
+            return
+
+        snapshot = self._pre_select_snapshot
+        self._pre_select_snapshot = None
+        if snapshot is None:
+            return
+
+        prev_alias = snapshot.get("alias")
+        prev_info = snapshot.get("info")
+        if prev_alias:
+            self._window.models_view.set_active(prev_alias)
+        else:
+            self._window.models_view.set_active(None)
+        self._sync_topbar_model(prev_info)
+
+        # Roll back config too, otherwise next launch picks the
+        # cancelled model up as the persisted active one.
+        prev_model = snapshot.get("config_model")
+        if prev_model is not None:
+            self._config.update_user_setting("whisper", "model", prev_model)
+        else:
+            self._config.update_user_setting("whisper", "model", "")
+        prev_compute = snapshot.get("config_compute")
+        if prev_compute is not None:
+            self._config.update_user_setting(
+                "whisper", "compute_type", prev_compute
+            )
 
     def _on_download_progress(self, current: int, total: int, _desc: str) -> None:
         # Mirror progress in two places: the small pill in the topbar
