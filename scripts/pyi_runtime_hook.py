@@ -6,8 +6,8 @@ parameter. It runs in the bootloader phase, before
 applied here is in place before NumPy / NeMo / lhotse / pyarrow
 get imported.
 
-Two compatibility shims are needed for our Windows + NumPy 2.x
-target:
+Three compatibility shims are needed for our Windows + NumPy 2.x +
+windowed-build target:
 
 1. ``signal.SIGKILL = signal.SIGTERM`` — NeMo's exp_manager touches
    ``signal.SIGKILL`` at class-definition time, but SIGKILL is
@@ -17,6 +17,13 @@ target:
 2. ``np.sctypes`` — removed in NumPy 2.0, but lhotse / older librosa
    code paths still touch it. Without the shim, transcribe fails
    with the same AttributeError every recording.
+3. ``sys.stdout`` / ``sys.stderr`` fallback — windowed PyInstaller
+   builds (``console=False``) get ``sys.stdout`` and ``sys.stderr``
+   set to ``None``. GigaAM's loader / tqdm-using libraries call
+   ``sys.stdout.write(...)`` and crash with
+   ``'NoneType' object has no attribute 'write'``. Replace ``None``
+   streams with a discarding writer so library code that prints
+   doesn't crash the load path.
 
 The shims are also applied at build time (top of ``lazy_to_text.spec``)
 so PyInstaller's hidden-imports analysis can ``find_spec('nemo.*')``
@@ -24,6 +31,7 @@ without crashing.
 """
 
 import signal
+import sys
 
 
 if not hasattr(signal, "SIGKILL"):
@@ -51,3 +59,30 @@ except ImportError:
     # nor NeMo. Nothing else here is going to work anyway, but
     # don't crash the bootloader on the way out.
     pass
+
+
+class _NullStream:
+    """Discards everything written to it — replacement for ``sys.stdout``
+    / ``sys.stderr`` when PyInstaller's bootloader nulls them out in
+    windowed builds. Library code (gigaam / tqdm / urllib download
+    progress) doesn't get to crash on ``None.write(...)``."""
+
+    encoding = "utf-8"
+
+    def write(self, _data) -> int:
+        return 0
+
+    def flush(self) -> None:
+        return None
+
+    def isatty(self) -> bool:
+        return False
+
+    def fileno(self) -> int:
+        raise OSError("no fileno on null stream")
+
+
+if sys.stdout is None:
+    sys.stdout = _NullStream()  # type: ignore[assignment]
+if sys.stderr is None:
+    sys.stderr = _NullStream()  # type: ignore[assignment]

@@ -116,7 +116,17 @@ analysis = Analysis(
     hooksconfig={},
     runtime_hooks=runtime_hooks,
     excludes=[],
-    noarchive=False,
+    # ``noarchive=True`` keeps the .py source files alongside the
+    # .pyc in ``_internal/`` instead of bundling them into the
+    # base_library.zip / .pyz archive. TorchScript's
+    # ``inspect.getsource`` needs to read the actual .py source for
+    # any ``@torch.jit.script`` decorated function (NeMo's RNNT
+    # decoder uses several — without source access the boot path
+    # dies with ``Can't get source for <function snake at ...>.
+    # TorchScript requires source access in order to carry out
+    # compilation``). The size cost is ~50-100 MB extra in
+    # ``_internal/``, mostly torch / nemo source.
+    noarchive=True,
 )
 
 pyz = PYZ(analysis.pure, analysis.zipped_data, cipher=block_cipher)
