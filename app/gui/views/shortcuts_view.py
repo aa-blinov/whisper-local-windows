@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -157,10 +158,29 @@ class ShortcutsView(QWidget):
         # User-pickable models directory — both Whisper (HF hub) and
         # GigaAM weights live under this root. Empty config value =
         # use the default ``<project>/models`` (or ``<exe>/models``
-        # when frozen). The path label always shows the resolved
-        # absolute path so the user knows exactly where weights end
-        # up, even when they haven't picked anything custom.
-        storage_card, storage_form = _make_section_card("Storage", self)
+        # when frozen).
+        #
+        # Built by hand instead of via ``_make_section_card`` because
+        # this card mixes a label-row with a button-row and a hint
+        # paragraph; QFormLayout's spanning-row layout shrinks rows
+        # whose label column is empty, squashing the buttons. A
+        # straight QVBoxLayout sidesteps that entirely.
+        storage_card = QFrame(self)
+        storage_card.setObjectName("StorageCard")
+        storage_card.setProperty("role", "card")
+        storage_v = QVBoxLayout(storage_card)
+        storage_v.setContentsMargins(20, 16, 20, 16)
+        storage_v.setSpacing(10)
+
+        storage_header = QLabel("Storage", storage_card)
+        storage_header.setProperty("role", "section-header")
+        storage_v.addWidget(storage_header)
+
+        # Path row — leading caption + selectable label, all on one line.
+        storage_path_row = QHBoxLayout()
+        storage_path_row.setSpacing(16)
+        storage_caption = QLabel("Models folder", storage_card)
+        storage_path_row.addWidget(storage_caption)
 
         self._storage_path_label = QLabel("(loading…)", storage_card)
         self._storage_path_label.setObjectName("StoragePathLabel")
@@ -169,8 +189,10 @@ class ShortcutsView(QWidget):
         self._storage_path_label.setTextInteractionFlags(
             Qt.TextSelectableByMouse
         )
-        storage_form.addRow("Models folder", self._storage_path_label)
+        storage_path_row.addWidget(self._storage_path_label, 1)
+        storage_v.addLayout(storage_path_row)
 
+        # Button row — flush left, stretch on the right.
         storage_btn_row = QHBoxLayout()
         storage_btn_row.setSpacing(10)
         self._change_storage_btn = QPushButton("Change…", storage_card)
@@ -191,7 +213,7 @@ class ShortcutsView(QWidget):
         )
         storage_btn_row.addWidget(self._reset_storage_btn)
         storage_btn_row.addStretch(1)
-        storage_form.addRow("", storage_btn_row)
+        storage_v.addLayout(storage_btn_row)
 
         storage_hint = QLabel(
             "Changes apply on next launch. Already-downloaded weights "
@@ -201,7 +223,7 @@ class ShortcutsView(QWidget):
         storage_hint.setObjectName("StorageHint")
         storage_hint.setProperty("role", "muted")
         storage_hint.setWordWrap(True)
-        storage_form.addRow("", storage_hint)
+        storage_v.addWidget(storage_hint)
         root.addWidget(storage_card)
 
         footer = QHBoxLayout()
