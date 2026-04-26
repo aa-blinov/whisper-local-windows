@@ -30,7 +30,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QPushButton, QSplashScreen
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QSplashScreen
 
 
 # Splash visual sizing — picked to feel like a small launcher card,
@@ -46,8 +46,6 @@ _BORDER = QColor("#2d3140")    # border
 _TEXT = QColor("#e6e8ec")      # text_primary
 _TEXT_MUTED = QColor("#7d828d")  # text_muted
 _ACCENT = QColor("#7c93ff")    # accent
-
-_MESSAGE_FLAGS = Qt.AlignBottom | Qt.AlignLeft
 
 
 def _format_size(num_bytes: int) -> str:
@@ -151,22 +149,24 @@ def wait_for_backend(
         except Exception:  # pragma: no cover — defensive
             pass
 
-    # Optional Cancel button — shown only when the backend exposes
-    # ``cancel_load()``. Positioned bottom-right of the splash card.
+    # Bottom action row: status label (left) + optional Cancel button (right).
+    # Both share the same row_y so they appear on the same baseline.
+    _BTN_STYLE = (
+        "QPushButton {"
+        "  background: #2d3140; color: #7d828d;"
+        "  border: 1px solid #3d4150; border-radius: 4px;"
+        "  padding: 4px 14px;"
+        "}"
+        "QPushButton:hover { color: #e6e8ec; border-color: #5d6275; }"
+        "QPushButton:pressed { background: #252836; }"
+        "QPushButton:disabled { color: #4a4f5d; border-color: #2d3140; }"
+    )
+
     cancel_btn: Optional[QPushButton] = None
     _cancel_load = getattr(backend, "cancel_load", None)
     if _cancel_load is not None:
         cancel_btn = QPushButton("Cancel", splash)
-        cancel_btn.setStyleSheet(
-            "QPushButton {"
-            "  background: #2d3140; color: #7d828d;"
-            "  border: 1px solid #3d4150; border-radius: 4px;"
-            "  padding: 4px 14px;"
-            "}"
-            "QPushButton:hover { color: #e6e8ec; border-color: #5d6275; }"
-            "QPushButton:pressed { background: #252836; }"
-            "QPushButton:disabled { color: #4a4f5d; border-color: #2d3140; }"
-        )
+        cancel_btn.setStyleSheet(_BTN_STYLE)
 
         def _on_cancel() -> None:
             if cancel_btn is not None:
@@ -177,10 +177,23 @@ def wait_for_backend(
                 pass
 
         cancel_btn.clicked.connect(_on_cancel)
-        cancel_btn.show()
-        bw, bh = cancel_btn.sizeHint().width(), cancel_btn.sizeHint().height()
+        bw = cancel_btn.sizeHint().width()
+        bh = cancel_btn.sizeHint().height()
         cancel_btn.setFixedSize(bw, bh)
-        cancel_btn.move(_SPLASH_W - bw - 16, _SPLASH_H - bh - 12)
+        row_y = _SPLASH_H - bh - 12
+        cancel_btn.move(_SPLASH_W - bw - 16, row_y)
+        cancel_btn.show()
+        label_w = _SPLASH_W - 16 - 8 - bw - 16  # 16 left pad, 8 gap, btn, 16 right pad
+    else:
+        bh = 24
+        row_y = _SPLASH_H - bh - 12
+        label_w = _SPLASH_W - 32
+
+    status_label = QLabel("", splash)
+    status_label.setStyleSheet("QLabel { color: #e6e8ec; background: transparent; }")
+    status_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+    status_label.setGeometry(16, row_y, label_w, bh)
+    status_label.show()
 
     backend.load()
 
@@ -193,6 +206,7 @@ def wait_for_backend(
                 set_cb(None)
             except Exception:  # pragma: no cover — defensive
                 pass
+        status_label.hide()
         if cancel_btn is not None:
             cancel_btn.hide()
 
@@ -223,7 +237,7 @@ def wait_for_backend(
             message = f"Loading: {display_name}"
             if progress_text:
                 message += f"  {progress_text}"
-            splash.showMessage(message, _MESSAGE_FLAGS, _TEXT)
+            status_label.setText(message)
 
         app.processEvents()
         # Short sleep keeps the GIL share modest — the worker thread

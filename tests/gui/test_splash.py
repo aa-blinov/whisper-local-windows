@@ -262,10 +262,11 @@ def test_wait_for_backend_no_cancel_button_when_backend_lacks_cancel_load(qtbot)
 
 
 def test_wait_for_backend_updates_splash_with_progress(qtbot):
-    """Backend progress callbacks should reach the splash message —
+    """Backend progress callbacks should reach the status label —
     user sees '… 50%' rather than a frozen 'Loading' string for
     minutes."""
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QLabel
 
     from app.gui.splash import make_splash, wait_for_backend
 
@@ -275,14 +276,18 @@ def test_wait_for_backend_updates_splash_with_progress(qtbot):
     qtbot.addWidget(splash)
     splash.show()
 
+    # Collect label texts while the splash is live. QTimer fires inside
+    # wait_for_backend because processEvents() is pumped every 20 ms.
     seen_messages: List[str] = []
-    original_show_message = splash.showMessage
 
-    def capture_show_message(msg, *args, **kwargs):
-        seen_messages.append(msg)
-        return original_show_message(msg, *args, **kwargs)
+    def _capture() -> None:
+        for lbl in splash.findChildren(QLabel):
+            t = lbl.text()
+            if t and t not in seen_messages:
+                seen_messages.append(t)
+        QTimer.singleShot(40, _capture)
 
-    splash.showMessage = capture_show_message  # type: ignore[assignment]
+    QTimer.singleShot(40, _capture)
 
     wait_for_backend(
         splash=splash,
@@ -292,8 +297,8 @@ def test_wait_for_backend_updates_splash_with_progress(qtbot):
         timeout_s=2.0,
     )
 
-    # Some message should have included a percentage after the
-    # progress callback fired.
+    # Some captured text should include a percentage after the progress
+    # callback fired.
     assert any("%" in m for m in seen_messages), (
         f"expected a percentage in splash messages, got {seen_messages!r}"
     )
