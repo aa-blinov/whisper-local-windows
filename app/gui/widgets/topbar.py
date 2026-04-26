@@ -24,14 +24,6 @@ from app.gui.widgets.vu_meter import VUMeter
 _SIDEBAR_WIDTH_PX = 200
 
 
-_STATUS_VALUES = ("running", "stopped", "error", "unknown", "hidden")
-_STATUS_DEFAULT_LABELS = {
-    "running": "Backend running",
-    "stopped": "Backend stopped",
-    "error": "Backend error",
-    "unknown": "Status unknown",
-    "hidden": "",
-}
 _NO_MODEL_TEXT = "No model"
 
 # The recording pill no longer handles model-load progress — that
@@ -104,7 +96,7 @@ class TopBar(QWidget):
         self._resources = ResourceWidget(content)
         layout.addWidget(self._resources)
 
-        # Push the rest of the topbar (recording / model / status)
+        # Push the rest of the topbar (recording + model pills)
         # to the right.
         layout.addStretch(1)
 
@@ -138,13 +130,6 @@ class TopBar(QWidget):
         self._loading_progress_text = ""
         self._loading_elapsed_s = 0
 
-        self._status_pill = QLabel(_STATUS_DEFAULT_LABELS["unknown"], content)
-        self._status_pill.setObjectName("TopBarStatusPill")
-        self._status_pill.setProperty("role", "status-pill")
-        self._status_pill.setProperty("status", "unknown")
-        self._status_pill.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._status_pill)
-
         outer.addWidget(content, 1)
 
     # ---- public API ---------------------------------------------------------
@@ -164,23 +149,6 @@ class TopBar(QWidget):
             return
         self._render_model_pill(state_override="active" if display_name else "empty")
 
-    def set_backend_status(
-        self,
-        status: str,
-        label: Optional[str] = None,
-    ) -> None:
-        if status not in _STATUS_VALUES:
-            raise ValueError(
-                f"status must be one of {_STATUS_VALUES}, got {status!r}"
-            )
-        if status == "hidden":
-            self._status_pill.setVisible(False)
-            return
-        self._status_pill.setVisible(True)
-        self._status_pill.setProperty("status", status)
-        self._status_pill.setText(label or _STATUS_DEFAULT_LABELS[status])
-        self._status_pill.style().unpolish(self._status_pill)
-        self._status_pill.style().polish(self._status_pill)
 
     def set_recording_state(self, state: str) -> None:
         if state not in _RECORDING_STATES:

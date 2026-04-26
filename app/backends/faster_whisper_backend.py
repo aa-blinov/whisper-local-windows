@@ -1,10 +1,9 @@
 """In-process faster-whisper backend.
 
-Replaces the previous Wyoming/Docker setup. The backend wraps
-``faster_whisper.WhisperModel`` directly: model load happens on a background
-thread (so the UI doesn't freeze for the 3-15 seconds it takes), and
-``transcribe`` calls the loaded model synchronously from whatever thread the
-recording pipeline runs on.
+Wraps ``faster_whisper.WhisperModel`` directly: model load happens on a
+background thread (so the UI doesn't freeze for the 3-15 seconds it takes),
+and ``transcribe`` calls the loaded model synchronously from whatever thread
+the recording pipeline runs on.
 
 State machine::
 

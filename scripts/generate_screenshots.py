@@ -72,7 +72,7 @@ class _FakeHistory:
             ),
             TranscriptionEntry(
                 timestamp=now - 7200,
-                text="Daily standup notes — backend on Docker idling at 1.4 GB VRAM, fine for now.",
+                text="Daily standup notes — keeping the in-process backend warm at 1.4 GB VRAM, fine for now.",
                 duration=6.2,
                 model="medium",
                 language="en",
@@ -121,7 +121,7 @@ def _seed_logs(window) -> None:
     logger.setLevel(logging.DEBUG)
     try:
         logger.info("Audio feedback enabled...")
-        logger.info("Recording stack built: model=large-v3 url=localhost:10300 backend_mode=local")
+        logger.info("Recording stack built: model=large-v3 kind=faster_whisper device=auto compute_type=float16")
         logger.info("Primary instance acquired mutex LazyToTextQt_SingleInstance")
         logger.info("Hotkeys registered: ctrl+f2 (start) / ctrl+f3 (stop)")
         logger.info("Backend running on tcp://localhost:10300")

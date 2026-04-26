@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Optional, Protocol
 
 import threading
 
@@ -15,7 +15,6 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 # QApplication is imported above for the clipboard helper; reuse it for
 # explicit ``quit()`` calls from tray actions.
 
-from app.gui.controllers.backend_status_poller import BackendStatusPoller
 from app.gui.main_window import MainWindow
 from app.inference_settings import InferenceSettings
 from app.model_mapping import MODELS, alias_for, canonical_for, get_model
@@ -125,7 +124,6 @@ class AppController(QObject):
         config: _ConfigLike,
         window: MainWindow,
         history: Optional[_HistoryLike] = None,
-        backend_status_fetcher: Optional[Callable[[], str]] = None,
         recording: Optional[_RecordingLike] = None,
         tray: Optional[_TrayLike] = None,
     ) -> None:
@@ -135,7 +133,6 @@ class AppController(QObject):
         self._history = history
         self._recording = recording
         self._tray = tray
-        self._poller: Optional[BackendStatusPoller] = None
         # Drives the elapsed-seconds counter shown in the loading pill
         # while the backend is in model_loading. Started/stopped from
         # ``_on_recording_state_changed``.
@@ -165,8 +162,6 @@ class AppController(QObject):
         self._wire_models()
         self._wire_shortcuts()
         self._wire_history()
-        if backend_status_fetcher is not None:
-            self._wire_backend_status(backend_status_fetcher)
         if recording is not None:
             self._wire_recording(recording)
         if tray is not None:
@@ -789,10 +784,6 @@ class AppController(QObject):
     def _on_history_copy(self, text: str) -> None:
         QApplication.clipboard().setText(text)
 
-    def _wire_backend_status(self, fetcher: Callable[[], str]) -> None:
-        self._poller = BackendStatusPoller(fetcher=fetcher, parent=self)
-        self._poller.status_changed.connect(self._window.topbar.set_backend_status)
-        self._poller.start()
 
     def _wire_recording(self, recording: _RecordingLike) -> None:
         recording.state_changed.connect(self._window.topbar.set_recording_state)

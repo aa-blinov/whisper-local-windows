@@ -381,35 +381,6 @@ QLabel[role="model-pill"][state="loading"] {
     border: 1px solid {{color.warning}};
 }
 
-QLabel[role="status-pill"] {
-    border-radius: {{radius.sm}};
-    padding: 4px {{space.md}};
-    font-size: {{font.size_small}};
-    font-weight: 600;
-    background-color: {{color.bg_elevated}};
-    color: {{color.text_secondary}};
-}
-
-QLabel[role="status-pill"][status="running"] {
-    background-color: {{color.success}};
-    color: {{color.bg_primary}};
-}
-
-QLabel[role="status-pill"][status="stopped"] {
-    background-color: {{color.warning}};
-    color: {{color.bg_primary}};
-}
-
-QLabel[role="status-pill"][status="error"] {
-    background-color: {{color.danger}};
-    color: {{color.text_primary}};
-}
-
-QLabel[role="status-pill"][status="unknown"] {
-    background-color: {{color.bg_elevated}};
-    color: {{color.text_muted}};
-}
-
 QLabel[role="recording-pill"] {
     border-radius: {{radius.sm}};
     padding: 4px {{space.md}};

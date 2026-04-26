@@ -115,7 +115,6 @@ def build_application(
     theme: str = "dark",
     config: Optional[Any] = None,
     history: Optional[Any] = None,
-    backend_status_fetcher: Optional[Any] = None,
     recording: Optional[Any] = None,
     tray: Optional[Any] = None,
     install_logs: bool = False,
@@ -148,7 +147,6 @@ def build_application(
             config=config,
             window=window,
             history=history,
-            backend_status_fetcher=backend_status_fetcher,
             recording=recording,
             tray=tray,
         )
@@ -352,7 +350,6 @@ def main() -> int:
             )
 
     history = state_manager.history_manager if state_manager is not None else None
-    backend_status_fetcher = backend.status if backend is not None else None
 
     # qt_app already exists from the single-instance gate above.
     tray: Optional[AppTrayIcon] = None
@@ -366,7 +363,6 @@ def main() -> int:
     app, window = build_application(
         config=config,
         history=history,
-        backend_status_fetcher=backend_status_fetcher,
         recording=recording_controller,
         tray=tray,
         install_logs=True,

@@ -8,12 +8,12 @@ from ruamel.yaml import YAML
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "whisper": {
-        "backend_mode": "local", # "local" or "external"
+        # Active model alias (or full HF canonical id). The
+        # registry maps user-friendly aliases like ``turbo`` to the
+        # actual HF repo path. See ``app/model_mapping.py``.
         "model": "Systran/faster-distil-whisper-base",
         "language": "auto",
         "beam_size": 5,
-        "local_url": "http://localhost:10300",
-        "external_url": "http://remote-host:10300",
     },
     "hotkey": {
         "start_recording_hotkey": "ctrl+f2",
@@ -237,12 +237,27 @@ class ConfigManager:
 
     # --- Migration from legacy schema (model_size / whisper_model / whisper_url) ---
     def _migrate_legacy_whisper_section(self, write_if_changed: bool = False):
+        """Strip / map fields that existed in the pre-in-process
+        Docker / Wyoming era of this app:
+
+          - ``model_size`` / ``whisper_model``  → ``model`` (current
+            schema), via the registry's canonical mapping.
+          - ``whisper_url`` / ``backend_mode`` / ``local_url`` /
+            ``external_url`` → dropped. We always run the inference
+            backend in-process now, so URLs and the local/external
+            switch have no consumers.
+        """
         wh = self.config.get("whisper", {})
         if not isinstance(wh, dict):  # sanity
             return
         legacy_model_size = wh.pop("model_size", None)
         legacy_model = wh.pop("whisper_model", None)
-        legacy_url = wh.pop("whisper_url", None)
+        # Older configs carried these — drop them silently. They're
+        # not read anywhere anymore.
+        wh.pop("whisper_url", None)
+        wh.pop("backend_mode", None)
+        wh.pop("local_url", None)
+        wh.pop("external_url", None)
         changed = False
         # Determine canonical model
         if legacy_model_size or legacy_model:
@@ -255,20 +270,8 @@ class ConfigManager:
         if "model" not in wh:
             wh["model"] = DEFAULT_CONFIG["whisper"]["model"]
             changed = True
-        # backend mode determination
-        if legacy_url:
-            # If user changed url from default local one -> treat as external
-            default_local = DEFAULT_CONFIG["whisper"]["local_url"]
-            if legacy_url != default_local:
-                wh["backend_mode"] = "external"
-                wh["external_url"] = legacy_url
-                changed = True
-            else:
-                wh["backend_mode"] = "local"
-                wh["local_url"] = legacy_url
-                changed = True
         # Ensure required keys exist
-        for k in ("backend_mode", "local_url", "external_url", "beam_size", "language"):
+        for k in ("beam_size", "language"):
             if k not in wh:
                 wh[k] = DEFAULT_CONFIG["whisper"][k]
                 changed = True

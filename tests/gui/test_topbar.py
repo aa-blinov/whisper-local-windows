@@ -9,14 +9,17 @@ def _label_by_name(widget, name: str) -> QLabel:
     return widget.findChild(QLabel, name)
 
 
-def test_topbar_has_model_and_status_labels(qtbot):
+def test_topbar_has_model_pill(qtbot):
+    """The topbar's model pill is what tells the user which weights
+    are loaded right now. Status pill is gone (Docker-era artifact)."""
     from app.gui.widgets.topbar import TopBar
 
     bar = TopBar()
     qtbot.addWidget(bar)
 
     assert _label_by_name(bar, "TopBarModelPill") is not None
-    assert _label_by_name(bar, "TopBarStatusPill") is not None
+    # Backend status pill removed alongside the BackendStatusPoller.
+    assert _label_by_name(bar, "TopBarStatusPill") is None
 
 
 def test_topbar_does_not_duplicate_window_title(qtbot):
@@ -72,51 +75,6 @@ def test_set_active_model_none_clears(qtbot):
 
     pill = _label_by_name(bar, "TopBarModelPill")
     assert "no model" in pill.text().lower()
-
-
-def test_default_backend_status_is_unknown(qtbot):
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-
-    pill = _label_by_name(bar, "TopBarStatusPill")
-    assert pill.property("status") == "unknown"
-
-
-def test_set_backend_status_updates_property_and_label(qtbot):
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-
-    bar.set_backend_status("running", "Docker up")
-
-    pill = _label_by_name(bar, "TopBarStatusPill")
-    assert pill.property("status") == "running"
-    assert "Docker up" in pill.text()
-
-
-def test_set_backend_status_uses_default_label_when_omitted(qtbot):
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-
-    bar.set_backend_status("stopped")
-
-    pill = _label_by_name(bar, "TopBarStatusPill")
-    assert "stopped" in pill.text().lower()
-
-
-def test_set_backend_status_rejects_unknown_value(qtbot):
-    from app.gui.widgets.topbar import TopBar
-
-    bar = TopBar()
-    qtbot.addWidget(bar)
-
-    with pytest.raises(ValueError):
-        bar.set_backend_status("nuclear")
 
 
 # ---- Recording state indicator ---------------------------------------------

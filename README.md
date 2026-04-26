@@ -219,8 +219,8 @@ signals into. The speech-to-text engine sits behind the
 `TranscriptionBackend` Protocol in `app/backends/` and is dispatched by
 `RoutedBackend` based on the selected model's `backend_kind` —
 `faster_whisper` and `gigaam` ship today; cloud APIs would be a drop-in
-addition. `BackendStatusPoller` polls `backend.status()` off the UI
-thread; `ResourceMonitor` polls CPU / RAM / GPU on a Qt timer.
+addition. `ResourceMonitor` polls CPU / RAM / GPU on a Qt timer to
+drive the topbar widget.
 
 ## Building a standalone executable
 

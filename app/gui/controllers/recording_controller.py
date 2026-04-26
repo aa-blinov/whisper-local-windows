@@ -2,7 +2,7 @@
 
 Wraps a pre-built ``StateManager`` (and optional ``HotkeyListener``) into a
 ``QObject`` that exposes Qt signals for state transitions and history updates.
-The controller owns no audio/Wyoming/clipboard logic itself — it only marshals
+The controller owns no audio/transcription/clipboard logic itself — it only marshals
 events from non-Qt threads (transcription pipeline, global hotkey thread)
 back onto the Qt main thread via signals.
 """
