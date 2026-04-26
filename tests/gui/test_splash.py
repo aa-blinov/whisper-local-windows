@@ -28,12 +28,17 @@ class _FakeBackend:
         self._delay = delay_s
         self._cb: Optional[Callable[[int, int, str], None]] = None
         self.load_called = False
+        self.cancel_called = False
 
     def status(self) -> str:
         return self._status
 
     def set_progress_callback(self, callback) -> None:
         self._cb = callback
+
+    def cancel_load(self) -> None:
+        self.cancel_called = True
+        self._status = "stopped"
 
     def load(self) -> None:
         self.load_called = True
@@ -58,7 +63,9 @@ class _FakeBackend:
                 except Exception:
                     pass
             time.sleep(self._delay)
-            self._status = self._eventual
+            # Don't overwrite "stopped" if cancel was requested.
+            if self._status == "loading":
+                self._status = self._eventual
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -186,28 +193,60 @@ def test_wait_for_backend_pumps_process_events(qtbot):
     )
 
 
-def test_wait_for_backend_updates_splash_with_progress(qtbot):
-    """Backend progress callbacks should reach the splash message —
-    user sees '… 50%' rather than a frozen 'Loading' string for
-    minutes."""
-    from PySide6.QtWidgets import QApplication
+def test_wait_for_backend_shows_cancel_button_when_backend_supports_it(qtbot):
+    """A Cancel button must appear on the splash when the backend exposes
+    ``cancel_load()``, and clicking it must call ``cancel_load`` and
+    return ``'stopped'`` from ``wait_for_backend``."""
+    from PySide6.QtWidgets import QApplication, QPushButton
 
     from app.gui.splash import make_splash, wait_for_backend
 
     app = QApplication.instance()
-    backend = _FakeBackend(eventual_status="ready", delay_s=0.2)
+    # Backend that takes a long time — so the button has a chance to fire
+    backend = _FakeBackend(eventual_status="ready", delay_s=10.0)
     splash = make_splash("Lazy to Text")
     qtbot.addWidget(splash)
     splash.show()
 
-    seen_messages: List[str] = []
-    original_show_message = splash.showMessage
+    # Schedule a click on the Cancel button 100 ms after the splash appears
+    def _click_cancel():
+        btns = splash.findChildren(QPushButton)
+        for btn in btns:
+            if btn.text() == "Cancel":
+                btn.click()
+                return
 
-    def capture_show_message(msg, *args, **kwargs):
-        seen_messages.append(msg)
-        return original_show_message(msg, *args, **kwargs)
+    from PySide6.QtCore import QTimer
+    QTimer.singleShot(100, _click_cancel)
 
-    splash.showMessage = capture_show_message  # type: ignore[assignment]
+    result = wait_for_backend(
+        splash=splash,
+        backend=backend,
+        display_name="Test Model",
+        app=app,
+        timeout_s=2.0,
+    )
+
+    assert result == "stopped"
+    assert backend.cancel_called is True
+
+
+def test_wait_for_backend_no_cancel_button_when_backend_lacks_cancel_load(qtbot):
+    """Backends without ``cancel_load`` must not get a Cancel button —
+    the button is opt-in to avoid calling a non-existent method."""
+    from PySide6.QtWidgets import QApplication, QPushButton
+
+    from app.gui.splash import make_splash, wait_for_backend
+
+    app = QApplication.instance()
+    backend = _FakeBackend(eventual_status="ready", delay_s=0.05)
+    # Shadow the inherited method with None on the instance so
+    # ``getattr(backend, "cancel_load", None)`` returns None.
+    backend.cancel_load = None  # type: ignore[assignment]
+
+    splash = make_splash("Lazy to Text")
+    qtbot.addWidget(splash)
+    splash.show()
 
     wait_for_backend(
         splash=splash,
@@ -217,8 +256,49 @@ def test_wait_for_backend_updates_splash_with_progress(qtbot):
         timeout_s=2.0,
     )
 
-    # Some message should have included a percentage after the
-    # progress callback fired.
+    btns = splash.findChildren(QPushButton)
+    cancel_btns = [b for b in btns if b.text() == "Cancel"]
+    assert cancel_btns == [], "no Cancel button expected when backend lacks cancel_load"
+
+
+def test_wait_for_backend_updates_splash_with_progress(qtbot):
+    """Backend progress callbacks should reach the status label —
+    user sees '… 50%' rather than a frozen 'Loading' string for
+    minutes."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QLabel
+
+    from app.gui.splash import make_splash, wait_for_backend
+
+    app = QApplication.instance()
+    backend = _FakeBackend(eventual_status="ready", delay_s=0.2)
+    splash = make_splash("Lazy to Text")
+    qtbot.addWidget(splash)
+    splash.show()
+
+    # Collect label texts while the splash is live. QTimer fires inside
+    # wait_for_backend because processEvents() is pumped every 20 ms.
+    seen_messages: List[str] = []
+
+    def _capture() -> None:
+        for lbl in splash.findChildren(QLabel):
+            t = lbl.text()
+            if t and t not in seen_messages:
+                seen_messages.append(t)
+        QTimer.singleShot(40, _capture)
+
+    QTimer.singleShot(40, _capture)
+
+    wait_for_backend(
+        splash=splash,
+        backend=backend,
+        display_name="Test Model",
+        app=app,
+        timeout_s=2.0,
+    )
+
+    # Some captured text should include a percentage after the progress
+    # callback fired.
     assert any("%" in m for m in seen_messages), (
         f"expected a percentage in splash messages, got {seen_messages!r}"
     )

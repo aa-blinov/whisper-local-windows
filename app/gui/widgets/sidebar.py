@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.gui.smooth_scroll import apply_smooth_scroll
 from app.gui.theme import icon_path
 from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 
@@ -59,10 +60,7 @@ class Sidebar(QWidget):
         self._list.setObjectName("SidebarList")
         self._list.setFrameShape(QListWidget.NoFrame)
         self._list.setSelectionMode(QListWidget.SingleSelection)
-        # Pixel-level wheel scrolling so the sidebar doesn't snap by
-        # one item per notch.
-        self._list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self._list.verticalScrollBar().setSingleStep(20)
+        apply_smooth_scroll(self._list)
         # Heroicons render best at ~20 px in a 14-px-text row.
         self._list.setIconSize(QSize(20, 20))
         # Stretch=1 so the nav list eats whatever vertical space the
