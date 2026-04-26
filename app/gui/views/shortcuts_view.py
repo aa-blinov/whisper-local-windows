@@ -353,8 +353,13 @@ class ShortcutsView(QWidget):
         hf_header.setProperty("role", "section-header")
         hf_v.addWidget(hf_header)
 
+        # Token field + Clear on a single row to avoid the wide
+        # empty rectangle a stretch-aligned button row used to
+        # leave next to the input. Scope is field-level (just the
+        # token), so inline placement is clear without the extra
+        # vertical real estate.
         hf_row = QHBoxLayout()
-        hf_row.setSpacing(16)
+        hf_row.setSpacing(10)
         hf_caption = QLabel("API token", hf_card)
         hf_row.addWidget(hf_caption)
         self._hf_token_edit = QLineEdit(hf_card)
@@ -364,19 +369,14 @@ class ShortcutsView(QWidget):
         self._hf_token_edit.setClearButtonEnabled(True)
         self._hf_token_edit.editingFinished.connect(self._on_hf_token_finished)
         hf_row.addWidget(self._hf_token_edit, 1)
-        hf_v.addLayout(hf_row)
-
-        hf_btn_row = QHBoxLayout()
-        hf_btn_row.setSpacing(10)
-        hf_btn_row.addStretch(1)
-        self._clear_hf_token_btn = QPushButton("Clear token", hf_card)
+        self._clear_hf_token_btn = QPushButton("Clear", hf_card)
         self._clear_hf_token_btn.setObjectName("ClearHfTokenButton")
         self._clear_hf_token_btn.setFocusPolicy(Qt.NoFocus)
         self._clear_hf_token_btn.clicked.connect(
             self.hf_token_reset_requested.emit
         )
-        hf_btn_row.addWidget(self._clear_hf_token_btn)
-        hf_v.addLayout(hf_btn_row)
+        hf_row.addWidget(self._clear_hf_token_btn)
+        hf_v.addLayout(hf_row)
 
         hf_hint = QLabel(
             "Optional. Used when downloading gated or private "
