@@ -27,7 +27,11 @@ from PySide6.QtWidgets import QAbstractScrollArea
 
 _DURATION_MS = 180.0   # total animation length (wall-clock ms)
 _PX_PER_NOTCH = 100.0  # pixels per standard wheel notch (angleDelta = 120)
-_TICK_MS = 7           # timer interval — just under 144 Hz
+# 16 ms matches Windows' default timer resolution (15.6 ms) so the timer
+# fires at a steady 60 Hz without jitter. Sub-16ms intervals cause
+# irregular firing (7ms → 15ms → 7ms) which produces visible tearing.
+# DWM vsync-composites Qt widget frames to the display rate automatically.
+_TICK_MS = 16
 
 
 def _ease_out_cubic(t: float) -> float:
