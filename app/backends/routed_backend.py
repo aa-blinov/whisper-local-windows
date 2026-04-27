@@ -1,24 +1,26 @@
-"""Multi-engine routing backend.
+"""Backend façade.
 
-Implements ``TranscriptionBackend`` but doesn't run inference itself —
-it owns one inner backend at a time (``FasterWhisperBackend`` or
-``GigaamBackend``) and delegates every call. When the user picks a
-model whose ``backend_kind`` differs from the current inner, this
-class shuts the old inner down and stands up a fresh one of the new
-kind so the rest of the app (StateManager, status poller, recording
-controller) doesn't need to know engines come and go underneath.
+The app is now ONNX-only — every model loads via ``OnnxAsrBackend``.
+The original purpose of this class was to route between heterogeneous
+engines (faster-whisper / GigaAM-Python / NeMo).  Now that all engines
+collapsed into one (onnx-asr), the class is a thin wrapper that
+preserves the public ``TranscriptionBackend`` shape while the rest of
+the app catches up.
 
-Building the concrete backends lives behind module-level functions
-(``_build_faster_whisper`` / ``_build_gigaam``) so tests can monkey-
-patch the construction without spinning up real model-loading
-threads.
+Why keep it instead of using ``OnnxAsrBackend`` directly?
+
+- ``change_model`` looks up the new model's ``onnx_family`` from the
+  registry and rebuilds the inner backend with the correct family —
+  the bare backend has no way to know that.
+- It centralises construction kwargs (device, language, quantization)
+  so call sites that don't care about the registry can stay simple.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -29,42 +31,26 @@ from app.model_mapping import alias_for, canonical_for, get_model
 log = logging.getLogger(__name__)
 
 
-def _build_faster_whisper(model: str, **kwargs) -> TranscriptionBackend:
-    # Late import: avoids pulling CTranslate2 + huggingface_hub in
-    # tests that monkey-patch the builder.
-    from app.backends.faster_whisper_backend import FasterWhisperBackend
+def _build_onnx_asr(
+    model: str,
+    onnx_family: str = "auto",
+    language: Optional[str] = None,
+    device: str = "auto",
+    quantization: Optional[str] = None,
+    **_ignored,
+) -> TranscriptionBackend:
+    # Late import: keeps onnx-asr off the module-load path of tests
+    # that patch this builder (no need to even have onnxruntime
+    # installed in the test env).
+    from app.backends.onnx_backend import OnnxAsrBackend
 
-    return FasterWhisperBackend(model=model, **kwargs)
-
-
-def _build_gigaam(model: str, **kwargs) -> TranscriptionBackend:
-    from app.backends.gigaam_backend import GigaamBackend
-
-    # GigaamBackend has a narrower constructor than FasterWhisperBackend.
-    # Drop kwargs that don't apply (compute_type, beam_size).
-    accepted = {
-        k: v for k, v in kwargs.items() if k in ("device", "language")
-    }
-    return GigaamBackend(model=model, **accepted)
-
-
-def _build_nemo(model: str, **kwargs) -> TranscriptionBackend:
-    from app.backends.nemo_backend import NemoBackend
-
-    # NemoBackend takes only ``device``; ``compute_type`` /
-    # ``beam_size`` / ``language`` are NeMo-internal or not
-    # exposed through the public transcribe API.
-    accepted = {k: v for k, v in kwargs.items() if k in ("device",)}
-    return NemoBackend(model=model, **accepted)
-
-
-def _build_onnx_parakeet(model: str, **kwargs) -> TranscriptionBackend:
-    from app.backends.onnx_backend import OnnxParakeetBackend
-
-    # OnnxParakeetBackend accepts only ``device``; compute_type /
-    # beam_size / language have no meaning for ONNX Runtime inference.
-    accepted = {k: v for k, v in kwargs.items() if k in ("device",)}
-    return OnnxParakeetBackend(model=model, **accepted)
+    return OnnxAsrBackend(
+        model=model,
+        family=onnx_family,
+        language=language,
+        device=device,
+        quantization=quantization,
+    )
 
 
 class RoutedBackend:
@@ -74,30 +60,33 @@ class RoutedBackend:
         device: str = "auto",
         compute_type: str = "float16",
         language: Optional[str] = None,
-        beam_size: int = 5,
+        beam_size: int = 5,  # accepted for API parity, ignored
     ) -> None:
+        del beam_size  # unused (no beam search knob in ONNX path)
+
         self._lock = threading.Lock()
-        # Keep the construction kwargs around so the next inner
-        # backend (after a kind switch) gets the same configuration.
+        # Resolve compute_type → quantization mapping for onnx-asr.
+        quantization = _quantization_for(compute_type)
         self._kwargs = dict(
             device=device,
-            compute_type=compute_type,
             language=language,
-            beam_size=beam_size,
+            quantization=quantization,
         )
         self._progress_callback: Optional[
             Callable[[int, int, str], None]
         ] = None
 
-        kind, canonical = self._resolve_for(model)
-        self._kind = kind
-        self._inner = self._build(canonical, kind)
+        canonical, onnx_family = self._resolve_for(model)
+        self._inner = _build_onnx_asr(
+            canonical, onnx_family=onnx_family, **self._kwargs
+        )
 
     # ---- public API ---------------------------------------------------------
 
     def current_kind(self) -> str:
-        with self._lock:
-            return self._kind
+        # Single-engine app — always ``onnx_asr``.  Kept for callers
+        # that still inspect the kind (settings UI, telemetry).
+        return "onnx_asr"
 
     def status(self) -> str:
         return self._inner.status()
@@ -113,20 +102,22 @@ class RoutedBackend:
         model: str,
         compute_type: Optional[str] = None,
     ) -> None:
-        new_kind, canonical = self._resolve_for(model)
+        canonical, onnx_family = self._resolve_for(model)
 
-        with self._lock:
-            current_kind = self._kind
-
-        if new_kind == current_kind:
-            # Same engine — let the inner backend handle the swap.
+        # Same family — let the inner backend swap models without a
+        # rebuild.  The onnx-asr session can be re-pointed to a new
+        # repo within the same family (Whisper-base → Whisper-turbo)
+        # without throwing away the family-specific configuration.
+        current_family = getattr(self._inner, "_family", None)
+        if current_family == onnx_family:
             self._inner.change_model(canonical, compute_type=compute_type)
             return
 
-        # Cross-engine swap — tear down old, build fresh.
+        # Different model or different family — tear down, rebuild.
         log.info(
-            "Switching backend kind: %s → %s for model %s",
-            current_kind, new_kind, canonical,
+            "Switching ONNX model: %s (family=%s) → %s (family=%s)",
+            self._inner.current_model(), current_family,
+            canonical, onnx_family,
         )
         try:
             self._inner.shutdown()
@@ -134,20 +125,21 @@ class RoutedBackend:
             log.warning("Old backend shutdown raised: %s", exc)
 
         if compute_type is not None:
-            # Persist the new compute_type so a subsequent same-kind
-            # rebuild picks it up.
-            self._kwargs["compute_type"] = compute_type
+            self._kwargs["quantization"] = _quantization_for(compute_type)
 
-        new_inner = self._build(canonical, new_kind)
+        new_inner = _build_onnx_asr(
+            canonical, onnx_family=onnx_family, **self._kwargs
+        )
         if self._progress_callback is not None:
             try:
                 new_inner.set_progress_callback(self._progress_callback)
             except Exception as exc:  # pragma: no cover — defensive
-                log.warning("set_progress_callback on new backend raised: %s", exc)
+                log.warning(
+                    "set_progress_callback on new backend raised: %s", exc,
+                )
 
         with self._lock:
             self._inner = new_inner
-            self._kind = new_kind
 
         new_inner.load()
 
@@ -166,14 +158,6 @@ class RoutedBackend:
         self._inner.shutdown()
 
     def cancel_load(self) -> None:
-        """Forward cancel-load to the inner backend.
-
-        Silent if the inner doesn't expose ``cancel_load`` (older fakes
-        in tests; future engines that haven't been updated yet) — the
-        topbar's cancel button must never raise from a click. The
-        inner backends themselves are idempotent when status isn't
-        ``loading``, so it's safe to call this blindly from the UI.
-        """
         target = getattr(self._inner, "cancel_load", None)
         if target is None:
             return
@@ -183,52 +167,51 @@ class RoutedBackend:
             log.warning("cancel_load on inner raised: %s", exc)
 
     def update_inference_settings(self, settings) -> None:
-        """Forward per-model overrides to the inner backend if it
-        accepts them. GigaAM's backend ignores the call (its engine
-        has no inference-time tunables) — kept silent so the
-        controller can call this blindly after every model swap."""
         target = getattr(self._inner, "update_inference_settings", None)
         if target is None:
             return
         try:
             target(settings)
         except Exception as exc:  # pragma: no cover — defensive
-            log.warning("update_inference_settings on inner raised: %s", exc)
+            log.warning(
+                "update_inference_settings on inner raised: %s", exc,
+            )
 
     def set_progress_callback(
         self,
         callback: Optional[Callable[[int, int, str], None]],
     ) -> None:
-        """Forward the callback to the current inner backend AND
-        cache it so a subsequent kind-switching rebuild can re-attach
-        it to the new inner."""
         self._progress_callback = callback
         try:
             self._inner.set_progress_callback(callback)
         except AttributeError:
-            # Inner backend doesn't expose progress hooks — fine.
             pass
 
     # ---- helpers ------------------------------------------------------------
 
     def _resolve_for(self, model: str) -> tuple[str, str]:
-        """Map an alias / canonical id to ``(kind, canonical)``.
+        """Map an alias / canonical id to ``(canonical, onnx_family)``.
 
-        Falls back to ``faster_whisper`` for unknown ids so a bare
-        Hugging Face repo path still works through the existing
-        path.
+        Falls back to ``("…", "auto")`` for unknown ids so a bare
+        Hugging Face repo path still loads.
         """
         try:
             info = get_model(alias_for(model))
         except KeyError:
-            return "faster_whisper", canonical_for(model)
-        return info.backend_kind, info.canonical
+            return canonical_for(model), "auto"
+        return info.canonical, info.onnx_family
 
-    def _build(self, canonical: str, kind: str) -> TranscriptionBackend:
-        if kind == "gigaam":
-            return _build_gigaam(canonical, **self._kwargs)
-        if kind == "nemo":
-            return _build_nemo(canonical, **self._kwargs)
-        if kind == "onnx_parakeet":
-            return _build_onnx_parakeet(canonical, **self._kwargs)
-        return _build_faster_whisper(canonical, **self._kwargs)
+
+def _quantization_for(compute_type: Optional[str]) -> Optional[str]:
+    """Translate the legacy ``compute_type`` knob to onnx-asr's
+    ``quantization`` parameter.
+
+    onnx-asr only accepts ``"int8"``, ``"fp16"``, or ``None`` — the
+    nuanced CTranslate2 modes (``int8_float16`` etc.) collapse to the
+    nearest valid value.
+    """
+    if compute_type in (None, "float16", "float32"):
+        return None
+    if compute_type in ("int8", "int8_float16"):
+        return "int8"
+    return None

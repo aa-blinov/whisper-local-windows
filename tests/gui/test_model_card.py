@@ -10,15 +10,19 @@ def _make_info():
     from app.model_mapping import ModelInfo
 
     return ModelInfo(
-        alias="large-v3",
-        canonical="Systran/faster-whisper-large-v3",
-        display_name="Large v3",
+        alias="whisper-large-v3",
+        canonical="onnx-community/whisper-large-v3",
+        display_name="Whisper Large v3",
         size_mb=3000,
-        vram_gb=10.0,
+        vram_gb=6.0,
         speed="slow",
         quality="excellent",
         languages="multilingual",
-        description="Latest large model.",
+        description="OpenAI Whisper Large v3 ONNX export.",
+        compute_type="float16",
+        backend_kind="onnx_asr",
+        family="Whisper",
+        onnx_family="whisper",
     )
 
 
@@ -28,7 +32,7 @@ def test_model_card_exposes_alias_and_info(qtbot):
     info = _make_info()
     card = ModelCard(info)
     qtbot.addWidget(card)
-    assert card.alias() == "large-v3"
+    assert card.alias() == "whisper-large-v3"
     assert card.info() is info
 
 
@@ -43,7 +47,7 @@ def test_model_card_renders_display_name(qtbot):
 
     labels = card.findChildren(QLabel)
     texts = [label.text() for label in labels]
-    assert any("Large v3" == text for text in texts)
+    assert any("Whisper Large v3" == text for text in texts)
 
 
 def test_model_card_renders_description(qtbot):
@@ -174,8 +178,8 @@ def test_model_card_subtitle_contains_alias_canonical_and_link(qtbot):
         if lbl.objectName() == "ModelSubtitle"
     )
     text = subtitle.text()
-    assert "large-v3" in text
-    assert "Systran/faster-whisper-large-v3" in text
+    assert "whisper-large-v3" in text
+    assert "onnx-community/whisper-large-v3" in text
     assert "huggingface.co" in text
     assert subtitle.openExternalLinks() is True
 
@@ -677,7 +681,7 @@ def test_model_card_emits_select_signal_with_alias(qtbot):
     with qtbot.waitSignal(card.select_requested, timeout=1000) as blocker:
         qtbot.mouseClick(select_btn, Qt.LeftButton)
 
-    assert blocker.args == ["large-v3"]
+    assert blocker.args == ["whisper-large-v3"]
 
 
 # ---- Delete button ---------------------------------------------------------
@@ -778,7 +782,7 @@ def test_model_card_delete_button_emits_signal_with_alias(qtbot, monkeypatch):
     with qtbot.waitSignal(card.delete_requested, timeout=1000) as blocker:
         qtbot.mouseClick(_delete_btn(card), Qt.LeftButton)
 
-    assert blocker.args == ["large-v3"]
+    assert blocker.args == ["whisper-large-v3"]
 
 
 def test_model_card_refresh_cache_state_toggles_delete_visibility(qtbot, monkeypatch):
@@ -810,105 +814,25 @@ def _make_gigaam_info():
     from app.model_mapping import ModelInfo
 
     return ModelInfo(
-        alias="gigaam-v3-e2e-ctc",
-        canonical="v3_e2e_ctc",
-        display_name="GigaAM v3 CTC (e2e, punctuated)",
+        alias="gigaam-v3-ctc",
+        canonical="istupakov/gigaam-v3-onnx",
+        display_name="GigaAM v3 CTC (Russian, punctuated)",
         size_mb=260,
         vram_gb=2.0,
         speed="fast",
         quality="excellent",
         languages="Russian (only)",
         description="Sber GigaAM v3 with CTC decoder.",
-        backend_kind="gigaam",
+        compute_type="float16",
+        backend_kind="onnx_asr",
         family="GigaAM",
+        onnx_family="gigaam",
     )
 
 
-def _hf_warning(card):
-    from PySide6.QtWidgets import QLabel
-
-    return card.findChild(QLabel, "HfTokenWarning")
-
-
-def test_gigaam_card_has_hf_token_warning_widget(qtbot):
-    """Every GigaAM card carries a warning label that surfaces when
-    no HF token is configured — long-form audio (>25 s) routes
-    through pyannote VAD which needs a token to download
-    ``pyannote/segmentation-3.0`` (gated)."""
-    from app.gui.widgets.model_card import ModelCard
-
-    card = ModelCard(_make_gigaam_info())
-    qtbot.addWidget(card)
-    assert _hf_warning(card) is not None
-
-
-def test_whisper_card_has_no_hf_token_warning(qtbot):
-    """Whisper long-form goes through Silero VAD — no HF token
-    needed — so the warning widget is omitted entirely on
-    ``faster_whisper`` cards."""
-    from app.gui.widgets.model_card import ModelCard
-
-    card = ModelCard(_make_info())
-    qtbot.addWidget(card)
-    assert _hf_warning(card) is None
-
-
-def test_gigaam_card_warning_visible_when_no_token(qtbot, monkeypatch):
-    monkeypatch.delenv("HF_TOKEN", raising=False)
-    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
-
-    from app.gui.widgets.model_card import ModelCard
-
-    card = ModelCard(_make_gigaam_info())
-    qtbot.addWidget(card)
-    card.show()
-    assert _hf_warning(card).isVisible()
-
-
-def test_gigaam_card_warning_hidden_when_token_set(qtbot, monkeypatch):
-    monkeypatch.setenv("HF_TOKEN", "hf_dummy_value")
-
-    from app.gui.widgets.model_card import ModelCard
-
-    card = ModelCard(_make_gigaam_info())
-    qtbot.addWidget(card)
-    card.show()
-    assert not _hf_warning(card).isVisible()
-
-
-def test_gigaam_card_refresh_hf_token_state_updates_warning(qtbot, monkeypatch):
-    """After the user pastes a token in Settings, the controller
-    calls ``refresh_hf_token_state`` to re-evaluate every GigaAM
-    card's warning visibility without rebuilding the card tree."""
-    monkeypatch.delenv("HF_TOKEN", raising=False)
-    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
-
-    from app.gui.widgets.model_card import ModelCard
-
-    card = ModelCard(_make_gigaam_info())
-    qtbot.addWidget(card)
-    card.show()
-    assert _hf_warning(card).isVisible()
-
-    monkeypatch.setenv("HF_TOKEN", "hf_dummy_value")
-    card.refresh_hf_token_state()
-    assert not _hf_warning(card).isVisible()
-
-
-def test_gigaam_card_warning_text_mentions_settings_and_25s(qtbot, monkeypatch):
-    """User-facing copy must explain WHY (long-form / 25 s cap) and
-    WHERE to fix (Settings tab) — otherwise the warning is just
-    noise."""
-    monkeypatch.delenv("HF_TOKEN", raising=False)
-    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
-
-    from app.gui.widgets.model_card import ModelCard
-
-    card = ModelCard(_make_gigaam_info())
-    qtbot.addWidget(card)
-    text = _hf_warning(card).text().lower()
-    assert "25" in text
-    assert "settings" in text or "token" in text
+# HF-token warning / pyannote dependency was removed when GigaAM
+# switched to its ONNX path — no token gating, no warning.  The
+# legacy ``test_gigaam_card_*_token_*`` suite is gone with the feature.
 
 
 # ---- Backend-specific inference panel dispatch -----------------------------
@@ -919,7 +843,7 @@ def _make_parakeet_info():
 
     return ModelInfo(
         alias="parakeet-tdt-v3",
-        canonical="nvidia/parakeet-tdt-0.6b-v3",
+        canonical="istupakov/parakeet-tdt-0.6b-v3-onnx",
         display_name="Parakeet TDT v3",
         size_mb=1200,
         vram_gb=2.0,
@@ -927,8 +851,10 @@ def _make_parakeet_info():
         quality="excellent",
         languages="25 langs incl. Russian, Ukrainian",
         description="NVIDIA Parakeet TDT 0.6B v3 — 25 European languages.",
-        backend_kind="nemo",
+        compute_type="float32",
+        backend_kind="onnx_asr",
         family="Parakeet",
+        onnx_family="parakeet",
     )
 
 
@@ -943,9 +869,9 @@ def test_whisper_card_uses_whisper_inference_panel(qtbot):
     assert isinstance(card._settings_panel, InferenceSettingsPanel)
 
 
-def test_nemo_card_uses_nemo_inference_panel(qtbot):
-    """NeMo (Parakeet/Canary) cards get the minimal panel
-    — NeMo's API only exposes the ``timestamps`` toggle."""
+def test_parakeet_card_uses_nemo_inference_panel(qtbot):
+    """Parakeet cards get the minimal panel — onnx-asr only exposes
+    the ``timestamps`` toggle for the TDT family."""
     from app.gui.widgets.model_card import ModelCard
     from app.gui.widgets.nemo_inference_settings_panel import (
         NemoInferenceSettingsPanel,
@@ -957,9 +883,9 @@ def test_nemo_card_uses_nemo_inference_panel(qtbot):
 
 
 def test_gigaam_card_has_no_inference_panel(qtbot):
-    """GigaAM is end-to-end with no transcribe-time tunables —
-    the panel is omitted entirely so a disabled control group
-    doesn't look like a rendering bug."""
+    """GigaAM is end-to-end with no transcribe-time tunables — the
+    panel is omitted entirely so a disabled control group doesn't
+    look like a rendering bug."""
     from app.gui.widgets.model_card import ModelCard
 
     card = ModelCard(_make_gigaam_info())
@@ -967,10 +893,10 @@ def test_gigaam_card_has_no_inference_panel(qtbot):
     assert card._settings_panel is None
 
 
-def test_nemo_card_panel_emits_through_card_signal(qtbot):
+def test_parakeet_card_panel_emits_through_card_signal(qtbot):
     """The card forwards each panel's ``settings_changed`` to its
     own ``inference_settings_changed`` so the controller listens at
-    a single point regardless of backend kind."""
+    a single point regardless of backend family."""
     from app.gui.widgets.model_card import ModelCard
     from app.inference_settings import NemoInferenceSettings
 

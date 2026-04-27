@@ -46,11 +46,11 @@ def test_controller_sets_active_model_from_config_alias(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window)
 
-    assert window.models_view.active_alias() == "large-v3"
+    assert window.models_view.active_alias() == "whisper-large-v3"
 
 
 def test_controller_normalizes_canonical_model_in_config(qtbot):
@@ -60,12 +60,12 @@ def test_controller_normalizes_canonical_model_in_config(qtbot):
     window = MainWindow()
     qtbot.addWidget(window)
     config = FakeConfig(
-        {"whisper": {"model": "Systran/faster-whisper-large-v3"}}
+        {"whisper": {"model": "onnx-community/whisper-large-v3"}}
     )
 
     AppController(config=config, window=window)
 
-    assert window.models_view.active_alias() == "large-v3"
+    assert window.models_view.active_alias() == "whisper-large-v3"
 
 
 def test_controller_ignores_unknown_model_without_raising(qtbot):
@@ -112,7 +112,7 @@ def test_controller_skips_active_when_persisted_model_is_not_cached(
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window)
 
@@ -137,7 +137,7 @@ def test_controller_marks_view_loading_immediately_on_select(qtbot):
     config = FakeConfig({})
 
     AppController(config=config, window=window)
-    window.models_view.model_selected.emit("turbo")
+    window.models_view.model_selected.emit("whisper-large-v3-turbo")
 
     cards = {
         c.alias(): c
@@ -147,7 +147,7 @@ def test_controller_marks_view_loading_immediately_on_select(qtbot):
             ).ModelCard
         )
     }
-    assert cards["turbo"].is_loading() is True
+    assert cards["whisper-large-v3-turbo"].is_loading() is True
 
 
 def test_controller_persists_selection_back_to_config(qtbot):
@@ -156,13 +156,13 @@ def test_controller_persists_selection_back_to_config(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window)
-    window.models_view.model_selected.emit("turbo")
+    window.models_view.model_selected.emit("whisper-large-v3-turbo")
 
-    assert ("whisper", "model", "turbo") in config.writes
-    assert window.models_view.active_alias() == "turbo"
+    assert ("whisper", "model", "whisper-large-v3-turbo") in config.writes
+    assert window.models_view.active_alias() == "whisper-large-v3-turbo"
 
 
 def test_controller_no_ops_when_selecting_already_active(qtbot):
@@ -171,12 +171,12 @@ def test_controller_no_ops_when_selecting_already_active(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window)
     config.writes.clear()
 
-    window.models_view.model_selected.emit("large-v3")
+    window.models_view.model_selected.emit("whisper-large-v3")
 
     assert config.writes == []
 
@@ -344,7 +344,7 @@ def test_controller_syncs_topbar_model_on_init(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window)
 
@@ -357,10 +357,10 @@ def test_controller_updates_topbar_on_model_select(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window)
-    window.models_view.model_selected.emit("distil-large-v3")
+    window.models_view.model_selected.emit("whisper-distil-large-v3")
 
     assert "Distil" in window.topbar._model_pill.text()
 
@@ -386,7 +386,7 @@ class FakeHistoryEntry:
         self.timestamp = 0.0
         self.text = text
         self.duration = 1.0
-        self.model = "large-v3"
+        self.model = "whisper-large-v3"
         self.language = "ru"
         self.datetime_str = "00:00:00"
         self.short_text = text[:50]
@@ -482,9 +482,9 @@ def test_controller_deletes_cached_model_after_confirm(qtbot, monkeypatch):
     monkeypatch.setattr(window.models_view, "refresh_cache_state", fake_refresh)
 
     AppController(config=config, window=window)
-    window.models_view.model_delete_requested.emit("turbo-int8")
+    window.models_view.model_delete_requested.emit("whisper-base")
 
-    assert deleted == ["turbo-int8"]
+    assert deleted == ["whisper-base"]
     assert refreshed["called"] is True
 
 
@@ -510,16 +510,17 @@ def test_controller_does_not_delete_when_user_cancels(qtbot, monkeypatch):
     )
 
     AppController(config=config, window=window)
-    window.models_view.model_delete_requested.emit("turbo-int8")
+    window.models_view.model_delete_requested.emit("whisper-base")
 
     assert deleted == []
 
 
 def test_controller_delete_dialog_warns_about_shared_canonical(qtbot, monkeypatch):
-    """``turbo`` and ``turbo-int8`` point at the same HF repo; deleting
-    one wipes weights for both. The confirm-dialog text must mention
-    the sibling so the user isn't surprised when the other card flips
-    back to 'Download'."""
+    """``gigaam-v3-ctc`` and ``gigaam-v3-rnnt`` point at the same HF
+    repo (``istupakov/gigaam-v3-onnx``); deleting one wipes weights for
+    both decoders.  The confirm-dialog text must mention the sibling
+    so the user isn't surprised when the other card flips back to
+    'Download'."""
     from PySide6.QtWidgets import QMessageBox
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
@@ -542,10 +543,10 @@ def test_controller_delete_dialog_warns_about_shared_canonical(qtbot, monkeypatc
     )
 
     AppController(config=config, window=window)
-    window.models_view.model_delete_requested.emit("turbo")
+    window.models_view.model_delete_requested.emit("gigaam-v3-ctc")
 
     # Sibling alias mentioned somewhere in the dialog body.
-    assert "turbo-int8" in captured["text"]
+    assert "gigaam-v3-rnnt" in captured["text"]
 
 
 def test_controller_prefills_storage_path_from_config(qtbot, monkeypatch):
@@ -1058,38 +1059,10 @@ def test_controller_clearing_hf_token_removes_env(qtbot, monkeypatch):
     assert "HUGGING_FACE_HUB_TOKEN" not in os.environ
 
 
-def test_controller_hf_token_change_refreshes_model_cards(qtbot, monkeypatch):
-    """After a token change every GigaAM card needs its warning
-    state recomputed — otherwise the user pastes a token and the
-    big yellow warning sits there until they restart."""
-    from app.gui.controllers.app_controller import AppController
-    from app.gui.main_window import MainWindow
-    from app.gui.widgets.model_card import ModelCard
-
-    monkeypatch.setenv("HF_TOKEN", "")
-    monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", "")
-
-    window = MainWindow()
-    qtbot.addWidget(window)
-    window.show()
-    config = FakeConfig({"huggingface": {"token": ""}})
-
-    AppController(config=config, window=window)
-
-    # Locate one GigaAM card and verify its warning is visible.
-    gigaam_cards = [
-        c for c in window.models_view.findChildren(ModelCard)
-        if c.info().backend_kind == "gigaam"
-    ]
-    assert gigaam_cards, "expected at least one GigaAM card"
-    warn = gigaam_cards[0].findChild(type(gigaam_cards[0]._hf_warning), "HfTokenWarning")
-    assert warn.isVisible()
-
-    window.shortcuts_view.hf_token_changed.emit("hf_token_now_set")
-
-    # Warning should be hidden after the env var is set + cards
-    # refreshed.
-    assert not warn.isVisible()
+# HF-token-warning UX was removed when GigaAM moved to its ONNX path
+# (no more pyannote / gated weights).  The legacy
+# ``test_controller_hf_token_change_refreshes_model_cards`` is gone
+# with the feature.
 
 
 def test_controller_prefills_cancel_hotkey_from_config(qtbot):
@@ -1505,20 +1478,20 @@ def test_cancel_after_select_reverts_active_card_to_previous(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
     rec = FakeRecordingController()
 
     AppController(config=config, window=window, recording=rec)
-    assert window.models_view.active_alias() == "large-v3"
+    assert window.models_view.active_alias() == "whisper-large-v3"
 
     # User clicks a different card.
-    window.models_view.model_selected.emit("turbo")
-    assert window.models_view.active_alias() == "turbo"
+    window.models_view.model_selected.emit("whisper-large-v3-turbo")
+    assert window.models_view.active_alias() == "whisper-large-v3-turbo"
 
     # User clicks Cancel.
     window.topbar.cancel_load_requested.emit()
 
-    assert window.models_view.active_alias() == "large-v3"
+    assert window.models_view.active_alias() == "whisper-large-v3"
 
 
 def test_cancel_after_select_clears_active_when_no_prior_card(qtbot):
@@ -1536,8 +1509,8 @@ def test_cancel_after_select_clears_active_when_no_prior_card(qtbot):
     AppController(config=config, window=window, recording=rec)
     assert window.models_view.active_alias() is None
 
-    window.models_view.model_selected.emit("turbo")
-    assert window.models_view.active_alias() == "turbo"
+    window.models_view.model_selected.emit("whisper-large-v3-turbo")
+    assert window.models_view.active_alias() == "whisper-large-v3-turbo"
 
     window.topbar.cancel_load_requested.emit()
 
@@ -1555,14 +1528,14 @@ def test_cancel_after_select_restores_topbar_pill(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
     rec = FakeRecordingController()
 
     AppController(config=config, window=window, recording=rec)
     # Snapshot: large-v3 display name is in the pill.
     initial_display = window.topbar._model_display_name
 
-    window.models_view.model_selected.emit("turbo")
+    window.models_view.model_selected.emit("whisper-large-v3-turbo")
     # Pill was just flipped to a different model.
     assert window.topbar._model_display_name != initial_display
 
@@ -1581,17 +1554,17 @@ def test_cancel_after_select_restores_config(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
     rec = FakeRecordingController()
 
     AppController(config=config, window=window, recording=rec)
 
-    window.models_view.model_selected.emit("turbo")
-    assert config.get_setting("whisper", "model") == "turbo"
+    window.models_view.model_selected.emit("whisper-large-v3-turbo")
+    assert config.get_setting("whisper", "model") == "whisper-large-v3-turbo"
 
     window.topbar.cancel_load_requested.emit()
 
-    assert config.get_setting("whisper", "model") == "large-v3"
+    assert config.get_setting("whisper", "model") == "whisper-large-v3"
 
 
 def test_download_progress_falls_back_to_size_mb_when_total_zero(qtbot):
@@ -1645,7 +1618,7 @@ def test_download_progress_preserves_real_total(qtbot):
     rec = FakeRecordingController()
 
     controller = AppController(config=config, window=window, recording=rec)
-    window.models_view.model_selected.emit("large-v3")
+    window.models_view.model_selected.emit("whisper-large-v3")
     window.topbar.set_recording_state("model_loading")
     # 50 MB out of 200 MB — should render as 25%.
     controller._on_download_progress(50_000_000, 200_000_000, "model.bin")
@@ -1695,13 +1668,13 @@ def test_cancel_with_no_load_in_flight_does_not_revert(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
     rec = _NoCancelRec()
 
     AppController(config=config, window=window, recording=rec)
-    # Pretend the user picked "turbo" earlier and it actually loaded —
+    # Pretend the user picked "whisper-large-v3-turbo" earlier and it actually loaded —
     # then they hit Cancel idly with nothing in flight.
-    window.models_view.model_selected.emit("turbo")
+    window.models_view.model_selected.emit("whisper-large-v3-turbo")
     # Suppose loading completed; backend reports ready, etc. We
     # simulate that by clearing the snapshot the way a real
     # ``ready`` state would (the rollback target). This is the
@@ -1713,7 +1686,7 @@ def test_cancel_with_no_load_in_flight_does_not_revert(qtbot):
     assert rec.cancel_model_change_calls == 1
     # But because cancel returned False, the active card stayed at
     # the just-selected one — no spurious rollback.
-    assert window.models_view.active_alias() == "turbo"
+    assert window.models_view.active_alias() == "whisper-large-v3-turbo"
 
 
 def test_controller_refreshes_history_on_history_updated(qtbot):
@@ -1770,19 +1743,19 @@ def test_controller_routes_model_select_through_recording_when_present(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
     rec = FakeRecordingController()
 
     AppController(config=config, window=window, recording=rec)
-    window.models_view.model_selected.emit("distil-large-v3")
+    window.models_view.model_selected.emit("whisper-distil-large-v3")
 
     # config still updated for persistence
-    assert ("whisper", "model", "distil-large-v3") in config.writes
+    assert ("whisper", "model", "whisper-distil-large-v3") in config.writes
     # compute_type written too — the registry tells us each card's preference
     assert ("whisper", "compute_type", "float16") in config.writes
     # AND recording stack was asked to actually switch (with compute_type)
     assert rec.model_change_requests == [
-        ("Systran/faster-distil-whisper-large-v3", "float16"),
+        ("onnx-community/distil-large-v3-ONNX", "float16"),
     ]
 
 
@@ -1792,13 +1765,13 @@ def test_controller_skips_recording_call_when_recording_absent(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window)  # no recording arg
-    window.models_view.model_selected.emit("distil-large-v3")
+    window.models_view.model_selected.emit("whisper-distil-large-v3")
 
     # Should still write config and not crash.
-    assert ("whisper", "model", "distil-large-v3") in config.writes
+    assert ("whisper", "model", "whisper-distil-large-v3") in config.writes
 
 
 def test_controller_locks_models_view_when_state_not_idle(qtbot):
@@ -2083,9 +2056,9 @@ def test_controller_loads_persisted_inference_overrides_on_init(qtbot):
     window = MainWindow()
     qtbot.addWidget(window)
     config = FakeConfig({
-        "whisper": {"model": "large-v3"},
+        "whisper": {"model": "whisper-large-v3"},
         "model_overrides": {
-            "large-v3": {
+            "whisper-large-v3": {
                 "language": "ru",
                 "vad_filter": False,
                 "beam_size": 7,
@@ -2097,7 +2070,7 @@ def test_controller_loads_persisted_inference_overrides_on_init(qtbot):
 
     AppController(config=config, window=window)
 
-    settings = window.models_view._cards["large-v3"].inference_settings()
+    settings = window.models_view._cards["whisper-large-v3"].inference_settings()
     assert settings.language == "ru"
     assert settings.vad_filter is False
     assert settings.beam_size == 7
@@ -2116,7 +2089,7 @@ def test_controller_persists_inference_change_on_active_card(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window)
 
@@ -2124,9 +2097,9 @@ def test_controller_persists_inference_change_on_active_card(qtbot):
         language="en", vad_filter=True, beam_size=3, temperature=0.2,
         initial_prompt=None,
     )
-    window.models_view.inference_settings_changed.emit("large-v3", new)
+    window.models_view.inference_settings_changed.emit("whisper-large-v3", new)
 
-    saved = config.get_setting("model_overrides", "large-v3")
+    saved = config.get_setting("model_overrides", "whisper-large-v3")
     assert saved["language"] == "en"
     assert saved["beam_size"] == 3
     assert saved["temperature"] == 0.2
@@ -2162,12 +2135,12 @@ def test_controller_pushes_inference_settings_to_live_backend_on_change(qtbot):
 
     window = MainWindow()
     qtbot.addWidget(window)
-    config = FakeConfig({"whisper": {"model": "large-v3"}})
+    config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window, recording=rec)
 
     new = InferenceSettings(language="ru", vad_filter=False, beam_size=4)
-    window.models_view.inference_settings_changed.emit("large-v3", new)
+    window.models_view.inference_settings_changed.emit("whisper-large-v3", new)
 
     # Most recent push must match what we emitted.
     assert backend.received[-1] == new

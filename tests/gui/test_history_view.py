@@ -31,7 +31,7 @@ def _make_entries(n: int = 3):
             timestamp=float(i),
             text=f"entry text {i}",
             duration=float(i + 1),
-            model="large-v3",
+            model="whisper-large-v3",
             language="ru",
         )
         for i in range(n)
@@ -225,7 +225,7 @@ def test_history_model_exposes_full_text_via_tooltip(qtbot):
     long_text = "a long transcription that overflows the column width " * 4
     entry = FakeEntry(
         timestamp=0.0, text=long_text, duration=1.0,
-        model="large-v3", language="ru",
+        model="whisper-large-v3", language="ru",
     )
     model = HistoryTableModel([entry])
     text_index = model.index(0, 1)  # Text column
@@ -242,7 +242,7 @@ def test_history_detail_dialog_shows_full_entry(qtbot):
         timestamp=0.0,
         text="full transcription body that's too long for the table cell",
         duration=12.5,
-        model="large-v3",
+        model="whisper-large-v3",
         language="ru",
     )
     dialog = HistoryDetailDialog(entry)
@@ -251,7 +251,7 @@ def test_history_detail_dialog_shows_full_entry(qtbot):
     rendered = " ".join(
         lbl.text() for lbl in dialog.findChildren(QLabel)
     )
-    assert "large-v3" in rendered
+    assert "whisper-large-v3" in rendered
     assert "ru" in rendered
     assert "12.5" in rendered
 
@@ -264,7 +264,7 @@ def test_history_detail_dialog_copy_button_copies_text(qtbot):
 
     entry = FakeEntry(
         timestamp=0.0, text="transcribed words", duration=1.0,
-        model="large-v3", language="ru",
+        model="whisper-large-v3", language="ru",
     )
     dialog = HistoryDetailDialog(entry)
     qtbot.addWidget(dialog)
@@ -340,7 +340,7 @@ def test_history_view_swaps_to_table_when_entries_arrive(qtbot):
 def test_history_model_column_shows_short_alias(qtbot):
     """The Model column should display the registry alias
     (``large-v3``, ``turbo-int8``) rather than the full canonical id
-    (``Systran/faster-whisper-large-v3``) — it's what the user
+    (``onnx-community/whisper-large-v3``) — it's what the user
     actually picked, and short enough not to truncate."""
     from app.gui.views.history_view import HistoryTableModel
 
@@ -348,12 +348,12 @@ def test_history_model_column_shows_short_alias(qtbot):
         timestamp=0.0,
         text="x",
         duration=1.0,
-        model="Systran/faster-whisper-large-v3",
+        model="onnx-community/whisper-large-v3",
         language="ru",
     )
     model = HistoryTableModel([entry])
     cell = model.data(model.index(0, 2), Qt.DisplayRole)
-    assert cell == "large-v3"
+    assert cell == "whisper-large-v3"
 
 
 def test_history_model_column_tooltip_shows_full_canonical(qtbot):
@@ -365,12 +365,12 @@ def test_history_model_column_tooltip_shows_full_canonical(qtbot):
         timestamp=0.0,
         text="x",
         duration=1.0,
-        model="Systran/faster-whisper-large-v3",
+        model="onnx-community/whisper-large-v3",
         language="ru",
     )
     model = HistoryTableModel([entry])
     tooltip = model.data(model.index(0, 2), Qt.ToolTipRole)
-    assert tooltip == "Systran/faster-whisper-large-v3"
+    assert tooltip == "onnx-community/whisper-large-v3"
 
 
 def test_history_model_column_passes_unknown_canonical_through(qtbot):

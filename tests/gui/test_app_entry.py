@@ -43,13 +43,13 @@ def test_build_application_does_not_wire_controller_when_config_absent(qapp):
     assert window.findChildren(AppController) == []
 
 
-def test_build_application_wires_controller_when_config_provided(qapp):
+def test_build_application_wires_controller_when_config_provided(qapp, monkeypatch):
     from app.gui.app import build_application
     from app.gui.controllers.app_controller import AppController
 
     class StubConfig:
         def __init__(self):
-            self._data = {"whisper": {"model": "large-v3"}}
+            self._data = {"whisper": {"model": "whisper-large-v3"}}
 
         def get_setting(self, section, key):
             return self._data.get(section, {}).get(key)
@@ -57,10 +57,19 @@ def test_build_application_wires_controller_when_config_provided(qapp):
         def update_user_setting(self, section, key, value):
             self._data.setdefault(section, {})[key] = value
 
+    # Pretend the configured model is cached so the controller restores
+    # it as the active card on startup.  The cache check itself is
+    # tested separately in tests/test_utils.py.
+    import app.gui.controllers.app_controller as controller_module
+
+    monkeypatch.setattr(
+        controller_module, "is_cached_for_info", lambda info: True
+    )
+
     _app, window = build_application(config=StubConfig())
     controllers = window.findChildren(AppController)
     assert len(controllers) == 1
-    assert window.models_view.active_alias() == "large-v3"
+    assert window.models_view.active_alias() == "whisper-large-v3"
 
 
 def test_build_application_does_not_install_log_bridge_by_default(qapp):

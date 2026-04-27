@@ -33,7 +33,7 @@ def _make_manager(tmp_path: Path, max_entries: int = 100):
 
 
 def _add(mgr, text: str = "Hello", duration: float = 1.0,
-         model: str = "turbo", language: str = "ru") -> None:
+         model: str = "whisper-large-v3-turbo", language: str = "ru") -> None:
     mgr.add_entry(text, duration, model, language)
 
 
@@ -100,14 +100,14 @@ def test_newest_entry_is_first(tmp_path):
 
 def test_persistence_across_instances(tmp_path):
     mgr1 = _make_manager(tmp_path)
-    _add(mgr1, "Persistent text", duration=3.7, model="large-v3", language="ru")
+    _add(mgr1, "Persistent text", duration=3.7, model="whisper-large-v3", language="ru")
 
     mgr2 = _make_manager(tmp_path)
     entries = mgr2.get_entries()
     assert len(entries) == 1
     assert entries[0].text == "Persistent text"
     assert entries[0].duration == pytest.approx(3.7)
-    assert entries[0].model == "large-v3"
+    assert entries[0].model == "whisper-large-v3"
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +252,7 @@ def test_load_history_migrates_from_legacy_json(tmp_path):
 
     legacy = tmp_path / "history.json"
     rows = [
-        {"timestamp": 1000.0, "text": "first",  "duration": 1.0, "model": "turbo", "language": "en"},
+        {"timestamp": 1000.0, "text": "first",  "duration": 1.0, "model": "whisper-large-v3-turbo", "language": "en"},
         {"timestamp": 2000.0, "text": "second", "duration": 2.0, "model": "large", "language": "ru"},
     ]
     legacy.write_text(json.dumps(rows), encoding="utf-8")
@@ -275,7 +275,7 @@ def test_load_history_migration_skips_invalid_rows(tmp_path):
 
     legacy = tmp_path / "history.json"
     rows = [
-        {"timestamp": 1000.0, "text": "good", "duration": 1.0, "model": "turbo", "language": "en"},
+        {"timestamp": 1000.0, "text": "good", "duration": 1.0, "model": "whisper-large-v3-turbo", "language": "en"},
         {"broken": "row"},   # missing required fields
         "not a dict",
     ]
@@ -295,7 +295,7 @@ def test_load_history_migration_does_not_run_when_jsonl_exists(tmp_path):
     # Pre-existing JSONL
     jsonl = tmp_path / "history.jsonl"
     row = {"timestamp": 9000.0, "text": "jsonl-entry", "duration": 0.5,
-           "model": "turbo", "language": "en"}
+           "model": "whisper-large-v3-turbo", "language": "en"}
     jsonl.write_text(json.dumps(row) + "\n", encoding="utf-8")
 
     # Legacy file alongside it — should be ignored

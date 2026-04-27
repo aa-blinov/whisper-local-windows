@@ -337,14 +337,19 @@ def is_onnx_model_cached(canonical: str) -> bool:
 
 
 def is_cached_for_info(info) -> bool:
-    """Dispatch the cache check by ``info.backend_kind`` so the UI can
-    ask one question regardless of which engine backs a model."""
-    kind = getattr(info, "backend_kind", "faster_whisper")
-    if kind == "gigaam":
-        return is_gigaam_cached(getattr(info, "canonical", ""))
-    if kind == "onnx_parakeet":
-        return is_onnx_model_cached(getattr(info, "canonical", ""))
-    return is_model_cached(getattr(info, "canonical", ""))
+    """Check whether the weights for ``info`` are downloaded.
+
+    Every model is in the HF hub cache.  For ONNX-asr models we use
+    the stricter ``is_onnx_model_cached`` (requires an actual ``.onnx``
+    file present, not just the ``config.json`` huggingface_hub writes
+    first); for anything else we fall back to the lenient
+    ``is_model_cached`` reader.
+    """
+    canonical = getattr(info, "canonical", "")
+    onnx_family = getattr(info, "onnx_family", None)
+    if onnx_family is not None:
+        return is_onnx_model_cached(canonical)
+    return is_model_cached(canonical)
 
 
 def _hf_hub_root() -> Path:
@@ -412,12 +417,13 @@ def delete_gigaam_cached(model_name: str) -> bool:
 
 
 def delete_cached_for_info(info) -> bool:
-    """Dispatch the deletion by ``info.backend_kind`` — mirror of
-    ``is_cached_for_info`` so the UI can ask one question regardless
-    of which engine backs a model."""
-    kind = getattr(info, "backend_kind", "faster_whisper")
-    if kind == "gigaam":
-        return delete_gigaam_cached(getattr(info, "canonical", ""))
+    """Delete the cached weights for a registry model.
+
+    Every model in the ONNX-only registry lives in the HF hub cache,
+    so this is a thin pass-through to ``delete_cached_model``.  Kept
+    as a function so callers stay agnostic in case a future backend
+    needs a different cache layout.
+    """
     return delete_cached_model(getattr(info, "canonical", ""))
 
 

@@ -442,10 +442,12 @@ def main() -> int:
             info_for_load = None
             cached = is_model_cached(canonical)
         # ONNX Runtime loads in a few seconds with no GIL-blocking
-        # cold import — there is no need to freeze startup behind a
-        # splash. Let the model load in the background after the main
-        # window is ready so the user always sees the UI immediately.
-        if cached and getattr(info_for_load, "backend_kind", "") != "onnx_parakeet":
+        # cold import.  There is no need to freeze startup behind a
+        # splash for ONNX models — the main window appears instantly
+        # and the model loads in the background.  This branch is now
+        # dead code but kept as a guard in case a non-ONNX backend
+        # ever returns from ``get_model`` (legacy registry rows etc.).
+        if cached and getattr(info_for_load, "backend_kind", "") != "onnx_asr":
             # Pre-load the backend BEFORE creating the main window so
             # the GIL-locked NeMo / torch import doesn't freeze a
             # half-built UI. The splash widget is movable and

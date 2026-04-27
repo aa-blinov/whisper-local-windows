@@ -10,9 +10,10 @@ import yaml
 DEFAULT_CONFIG: Dict[str, Any] = {
     "whisper": {
         # Active model alias (or full HF canonical id). The
-        # registry maps user-friendly aliases like ``turbo`` to the
-        # actual HF repo path. See ``app/model_mapping.py``.
-        "model": "Systran/faster-distil-whisper-base",
+        # registry maps user-friendly aliases like
+        # ``whisper-large-v3-turbo`` to the actual HF repo path.
+        # See ``app/model_mapping.py``.
+        "model": "whisper-large-v3-turbo",
         "language": "auto",
         "beam_size": 5,
     },

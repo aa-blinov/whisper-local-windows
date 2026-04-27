@@ -163,32 +163,27 @@ def test_delete_gigaam_cached_does_not_touch_other_ckpts(tmp_path, monkeypatch):
 
 
 class _FakeInfo:
-    def __init__(self, canonical: str, backend_kind: str = "faster_whisper") -> None:
+    def __init__(
+        self,
+        canonical: str,
+        backend_kind: str = "onnx_asr",
+        onnx_family: str = "whisper",
+    ) -> None:
         self.canonical = canonical
         self.backend_kind = backend_kind
+        self.onnx_family = onnx_family
 
 
-def test_delete_cached_for_info_routes_to_hf_for_faster_whisper(tmp_path, monkeypatch):
+def test_delete_cached_for_info_deletes_hf_snapshot(tmp_path, monkeypatch):
     monkeypatch.setenv("HF_HOME", str(tmp_path))
-    canonical = "Systran/faster-whisper-large-v3"
+    canonical = "onnx-community/whisper-large-v3-turbo"
     repo_dir = _make_hf_snapshot(tmp_path / "hub", canonical)
 
     from app.utils import delete_cached_for_info
 
-    info = _FakeInfo(canonical=canonical, backend_kind="faster_whisper")
+    info = _FakeInfo(canonical=canonical)
     assert delete_cached_for_info(info) is True
     assert not repo_dir.exists()
-
-
-def test_delete_cached_for_info_routes_to_gigaam(tmp_path, monkeypatch):
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    ckpt = _make_gigaam_ckpt(tmp_path, "v3_e2e_ctc")
-
-    from app.utils import delete_cached_for_info
-
-    info = _FakeInfo(canonical="v3_e2e_ctc", backend_kind="gigaam")
-    assert delete_cached_for_info(info) is True
-    assert not ckpt.exists()
 
 
 def test_delete_cached_for_info_returns_false_when_nothing_to_delete(tmp_path, monkeypatch):
@@ -196,7 +191,7 @@ def test_delete_cached_for_info_returns_false_when_nothing_to_delete(tmp_path, m
 
     from app.utils import delete_cached_for_info
 
-    info = _FakeInfo(canonical="ghost/x", backend_kind="faster_whisper")
+    info = _FakeInfo(canonical="ghost/x")
     assert delete_cached_for_info(info) is False
 
 
@@ -681,9 +676,9 @@ def test_is_onnx_model_cached_false_when_no_snapshot(tmp_path, monkeypatch):
     assert is_onnx_model_cached("istupakov/parakeet-tdt-0.6b-v3-onnx") is False
 
 
-def test_is_cached_for_info_uses_onnx_check_for_onnx_parakeet(tmp_path, monkeypatch):
-    """``is_cached_for_info`` must route onnx_parakeet models through
-    ``is_onnx_model_cached`` (requires .onnx file) — not the generic
+def test_is_cached_for_info_uses_onnx_check_for_onnx_models(tmp_path, monkeypatch):
+    """``is_cached_for_info`` must route onnx_asr models through
+    ``is_onnx_model_cached`` (requires .onnx file) — not the lenient
     ``is_model_cached`` which accepts any file and gives false positives
     for partial downloads."""
     monkeypatch.setenv("HF_HOME", str(tmp_path))
@@ -693,7 +688,7 @@ def test_is_cached_for_info_uses_onnx_check_for_onnx_parakeet(tmp_path, monkeypa
     from app.utils import is_cached_for_info
 
     info = ModelInfo(
-        alias="parakeet-tdt-v3-onnx",
+        alias="parakeet-tdt-v3",
         canonical=canonical,
         display_name="Parakeet ONNX",
         size_mb=1200,
@@ -703,8 +698,9 @@ def test_is_cached_for_info_uses_onnx_check_for_onnx_parakeet(tmp_path, monkeypa
         languages="multilingual",
         description="x",
         compute_type="float32",
-        backend_kind="onnx_parakeet",
+        backend_kind="onnx_asr",
         family="Parakeet",
+        onnx_family="parakeet",
     )
 
     # Partial download — only config.json.

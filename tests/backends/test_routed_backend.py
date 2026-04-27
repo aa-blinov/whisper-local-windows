@@ -1,7 +1,11 @@
-"""Tests for the RoutedBackend that switches between concrete engines.
+"""Tests for the RoutedBackend façade.
 
-Uses a fake ``ModelInfo`` registry and fake backends so the routing
-logic is verified without touching faster-whisper or gigaam at all.
+Now that the app is ONNX-only, RoutedBackend just builds an
+``OnnxAsrBackend`` and forwards every method to it — but it still
+encapsulates registry lookups so callers don't have to.
+
+These tests use a fake ``_build_onnx_asr`` so the suite never imports
+``onnx_asr`` for real.
 """
 
 from __future__ import annotations
@@ -16,10 +20,10 @@ import pytest
 class _FakeBackend:
     """Records every method call so tests can assert delegation."""
 
-    def __init__(self, model: str, kind: str, **kwargs):
+    def __init__(self, model: str, **kwargs):
         self.model = model
-        self.kind = kind
         self.kwargs = kwargs
+        self._family = kwargs.get("onnx_family", "auto")
         self.shutdown_called = False
         self.load_called = False
         self.cancel_load_called = False
@@ -50,7 +54,7 @@ class _FakeBackend:
 
     def transcribe(self, audio: np.ndarray, sample_rate: int = 16000):
         self.transcribe_calls.append((audio, sample_rate))
-        return f"transcribed-by-{self.kind}"
+        return f"transcribed-by-onnx-{self._family}"
 
     def shutdown(self) -> None:
         self.shutdown_called = True
@@ -65,83 +69,73 @@ class _FakeBackend:
 
 
 @pytest.fixture
-def patch_builders(monkeypatch):
-    """Replace ``RoutedBackend``'s backend builders with fakes."""
+def patch_builder(monkeypatch):
+    """Replace the inner-backend builder with a recording fake."""
     from app.backends import routed_backend as mod
 
     created: list[_FakeBackend] = []
 
-    def build_fw(model, **kwargs):
-        backend = _FakeBackend(model, "faster_whisper", **kwargs)
+    def build(model, **kwargs):
+        backend = _FakeBackend(model, **kwargs)
         created.append(backend)
         return backend
 
-    def build_gigaam(model, **kwargs):
-        backend = _FakeBackend(model, "gigaam", **kwargs)
-        created.append(backend)
-        return backend
-
-    def build_nemo(model, **kwargs):
-        backend = _FakeBackend(model, "nemo", **kwargs)
-        created.append(backend)
-        return backend
-
-    def build_onnx_parakeet(model, **kwargs):
-        backend = _FakeBackend(model, "onnx_parakeet", **kwargs)
-        created.append(backend)
-        return backend
-
-    monkeypatch.setattr(mod, "_build_faster_whisper", build_fw)
-    monkeypatch.setattr(mod, "_build_gigaam", build_gigaam)
-    monkeypatch.setattr(mod, "_build_nemo", build_nemo)
-    monkeypatch.setattr(mod, "_build_onnx_parakeet", build_onnx_parakeet)
+    monkeypatch.setattr(mod, "_build_onnx_asr", build)
     return created
 
 
 @pytest.fixture
 def patch_registry(monkeypatch):
-    """Replace ``get_model`` with a tiny fake registry."""
+    """Replace ``get_model`` with a tiny fake registry covering every
+    onnx_family."""
     from app.backends import routed_backend as mod
     from app.model_mapping import ModelInfo
 
     registry = {
-        "fw-model": ModelInfo(
-            alias="fw-model",
-            canonical="fake/fw-canonical",
-            display_name="FW",
-            size_mb=100,
-            vram_gb=2.0,
+        "whisper-model": ModelInfo(
+            alias="whisper-model",
+            canonical="onnx-community/whisper-base",
+            display_name="Whisper",
+            size_mb=145,
+            vram_gb=1.0,
             speed="fast",
-            quality="basic",
+            quality="good",
             languages="multilingual",
             description="x",
-            backend_kind="faster_whisper",
+            compute_type="float16",
+            backend_kind="onnx_asr",
+            family="Whisper",
+            onnx_family="whisper",
         ),
         "gigaam-model": ModelInfo(
             alias="gigaam-model",
-            canonical="v2_ctc",
-            display_name="Gigaam",
-            size_mb=100,
-            vram_gb=2.0,
-            speed="fast",
-            quality="basic",
+            canonical="istupakov/gigaam-v3-onnx",
+            display_name="GigaAM",
+            size_mb=290,
+            vram_gb=2.5,
+            speed="medium",
+            quality="excellent",
             languages="Russian (only)",
             description="x",
-            backend_kind="gigaam",
+            compute_type="float16",
+            backend_kind="onnx_asr",
+            family="GigaAM",
+            onnx_family="gigaam",
         ),
-        "onnx-model": ModelInfo(
-            alias="onnx-model",
-            canonical="fake/onnx-weights",
-            display_name="OnnxParakeet",
-            size_mb=100,
+        "parakeet-model": ModelInfo(
+            alias="parakeet-model",
+            canonical="istupakov/parakeet-tdt-0.6b-v3-onnx",
+            display_name="Parakeet",
+            size_mb=1200,
             vram_gb=2.0,
             speed="fast",
             quality="excellent",
-            languages="25 langs incl. Russian, Ukrainian",
+            languages="multilingual",
             description="x",
             compute_type="float32",
-            backend_kind="onnx_parakeet",
+            backend_kind="onnx_asr",
             family="Parakeet",
+            onnx_family="parakeet",
         ),
     }
 
@@ -157,30 +151,41 @@ def patch_registry(monkeypatch):
 # ---- Initial backend selection --------------------------------------------
 
 
-def test_initial_kind_picked_from_model(patch_builders, patch_registry):
+def test_initial_kind_is_onnx_asr(patch_builder, patch_registry):
+    """Single-engine app — current_kind() always reports ``onnx_asr``."""
     from app.backends.routed_backend import RoutedBackend
 
-    backend = RoutedBackend(model="gigaam-model")
-    assert backend.current_kind() == "gigaam"
-    assert len(patch_builders) == 1
-    assert patch_builders[0].kind == "gigaam"
+    backend = RoutedBackend(model="whisper-model")
+    assert backend.current_kind() == "onnx_asr"
+    assert len(patch_builder) == 1
 
 
-def test_unknown_model_falls_back_to_faster_whisper(patch_builders, patch_registry):
+def test_initial_uses_canonical_from_registry(patch_builder, patch_registry):
     from app.backends.routed_backend import RoutedBackend
 
-    backend = RoutedBackend(model="some-bare-hf-id/repo")
-    assert backend.current_kind() == "faster_whisper"
+    backend = RoutedBackend(model="parakeet-model")
+    assert backend.current_model() == "istupakov/parakeet-tdt-0.6b-v3-onnx"
+    assert patch_builder[0].kwargs.get("onnx_family") == "parakeet"
+
+
+def test_unknown_model_falls_back_with_auto_family(patch_builder, patch_registry):
+    """Unknown model id should still build a backend (with onnx_family='auto')
+    so a power user pasting a bare HF id keeps working."""
+    from app.backends.routed_backend import RoutedBackend
+
+    RoutedBackend(model="some-bare-hf-id/repo")
+    assert patch_builder[0].kwargs.get("onnx_family") == "auto"
+    assert patch_builder[0].model == "some-bare-hf-id/repo"
 
 
 # ---- Delegation ------------------------------------------------------------
 
 
-def test_status_load_transcribe_shutdown_delegate(patch_builders, patch_registry):
+def test_status_load_transcribe_shutdown_delegate(patch_builder, patch_registry):
     from app.backends.routed_backend import RoutedBackend
 
-    backend = RoutedBackend(model="fw-model")
-    inner = patch_builders[0]
+    backend = RoutedBackend(model="whisper-model")
+    inner = patch_builder[0]
 
     backend.load()
     assert inner.load_called
@@ -193,120 +198,94 @@ def test_status_load_transcribe_shutdown_delegate(patch_builders, patch_registry
     assert inner.shutdown_called
 
 
-# ---- Same-kind change ------------------------------------------------------
+# ---- Same-family change ----------------------------------------------------
 
 
-def test_change_model_within_same_kind_delegates(patch_builders, patch_registry):
-    """When the new model uses the same backend kind, just forward
+def test_change_model_same_family_delegates_without_rebuild(
+    patch_builder, patch_registry,
+):
+    """When the new model has the same onnx_family, just forward
     ``change_model`` to the existing inner — no rebuild."""
     from app.backends.routed_backend import RoutedBackend
-
-    # Add another faster_whisper model to the registry.
     from app.model_mapping import ModelInfo
-    patch_registry["fw-other"] = ModelInfo(
-        alias="fw-other", canonical="fake/other", display_name="Other",
-        size_mb=100, vram_gb=2.0, speed="fast", quality="basic",
+
+    # Add a second whisper model so we can swap within the family.
+    patch_registry["whisper-other"] = ModelInfo(
+        alias="whisper-other",
+        canonical="onnx-community/whisper-large-v3-turbo",
+        display_name="Whisper Turbo",
+        size_mb=1620, vram_gb=4.0,
+        speed="fast", quality="excellent",
         languages="multilingual", description="x",
-        backend_kind="faster_whisper",
+        compute_type="float16",
+        backend_kind="onnx_asr",
+        family="Whisper Turbo",
+        onnx_family="whisper",
     )
 
-    backend = RoutedBackend(model="fw-model")
-    inner = patch_builders[0]
+    backend = RoutedBackend(model="whisper-model")
+    inner = patch_builder[0]
 
-    backend.change_model("fw-other", compute_type="int8_float16")
+    backend.change_model("whisper-other", compute_type="int8")
 
-    # Still one backend created, one change_model call recorded.
-    assert len(patch_builders) == 1
-    assert inner.changed_to == [("fake/other", "int8_float16")]
-    assert backend.current_kind() == "faster_whisper"
+    assert len(patch_builder) == 1, "no new backend should be created"
+    assert inner.changed_to == [("onnx-community/whisper-large-v3-turbo", "int8")]
 
 
-# ---- Cross-kind change -----------------------------------------------------
+# ---- Cross-family change ---------------------------------------------------
 
 
-def test_change_model_across_kinds_rebuilds_backend(patch_builders, patch_registry):
-    """Switching from faster-whisper to gigaam must shut down the old
-    backend and stand up a fresh one of the new kind."""
+def test_change_model_across_families_rebuilds_backend(
+    patch_builder, patch_registry,
+):
+    """Switching from Whisper to GigaAM (different onnx_family) must
+    shut down the old inner and build a new one with the right family."""
     from app.backends.routed_backend import RoutedBackend
 
-    backend = RoutedBackend(model="fw-model")
-    fw_inner = patch_builders[0]
+    backend = RoutedBackend(model="whisper-model")
+    whisper_inner = patch_builder[0]
 
     backend.change_model("gigaam-model")
 
-    assert fw_inner.shutdown_called
-    assert len(patch_builders) == 2
-    assert patch_builders[1].kind == "gigaam"
-    assert backend.current_kind() == "gigaam"
-    assert backend.current_model() == "v2_ctc"
+    assert whisper_inner.shutdown_called
+    assert len(patch_builder) == 2
+    assert patch_builder[1].kwargs.get("onnx_family") == "gigaam"
+    assert backend.current_model() == "istupakov/gigaam-v3-onnx"
 
 
-def test_progress_callback_forwarded_to_new_backend(patch_builders, patch_registry):
+def test_progress_callback_forwarded_to_new_backend(patch_builder, patch_registry):
     """A progress callback registered on the routed backend should be
-    re-applied to a freshly-built inner so tqdm bars from the new
-    engine still feed the UI."""
+    re-applied to a freshly-built inner so HF download bars from the
+    new model still feed the UI."""
     from app.backends.routed_backend import RoutedBackend
 
-    backend = RoutedBackend(model="fw-model")
+    backend = RoutedBackend(model="whisper-model")
     callback = MagicMock()
     backend.set_progress_callback(callback)
 
     backend.change_model("gigaam-model")
 
-    new_inner = patch_builders[1]
+    new_inner = patch_builder[1]
     assert new_inner._progress_cb is callback
 
 
 # ---- Cancel-load forwarding -----------------------------------------------
 
 
-def test_cancel_load_forwards_to_inner(patch_builders, patch_registry):
-    """The user clicked Cancel on the topbar during a load. The
-    routed backend just hands the request through to whichever
-    engine is currently loading."""
+def test_cancel_load_forwards_to_inner(patch_builder, patch_registry):
     from app.backends.routed_backend import RoutedBackend
 
-    backend = RoutedBackend(model="fw-model")
-    inner = patch_builders[0]
-    inner._status = "loading"  # simulate in-flight load
+    backend = RoutedBackend(model="whisper-model")
+    inner = patch_builder[0]
+    inner._status = "loading"
 
     backend.cancel_load()
     assert inner.cancel_load_called is True
 
 
-def test_onnx_parakeet_kind_routes_to_onnx_builder(patch_builders, patch_registry):
-    """Selecting a model with ``backend_kind='onnx_parakeet'`` must
-    build an ``OnnxParakeetBackend`` via ``_build_onnx_parakeet``, not
-    fall through to the faster-whisper default."""
-    from app.backends.routed_backend import RoutedBackend
-
-    backend = RoutedBackend(model="onnx-model")
-    assert backend.current_kind() == "onnx_parakeet"
-    assert len(patch_builders) == 1
-    assert patch_builders[0].kind == "onnx_parakeet"
-    assert patch_builders[0].model == "fake/onnx-weights"
-
-
-def test_cross_kind_switch_fw_to_onnx_parakeet(patch_builders, patch_registry):
-    """Changing from faster_whisper to onnx_parakeet must shut down the
-    old backend and build a new one of the correct kind."""
-    from app.backends.routed_backend import RoutedBackend
-
-    backend = RoutedBackend(model="fw-model")
-    fw_inner = patch_builders[0]
-
-    backend.change_model("onnx-model")
-
-    assert fw_inner.shutdown_called
-    assert len(patch_builders) == 2
-    assert patch_builders[1].kind == "onnx_parakeet"
-    assert backend.current_kind() == "onnx_parakeet"
-
-
-def test_cancel_load_silent_when_inner_lacks_method(patch_builders, patch_registry):
-    """Older fakes / future engines might not implement ``cancel_load``
-    yet — the routed backend must not raise in that case so the
-    cancel button stays harmless."""
+def test_cancel_load_silent_when_inner_lacks_method(patch_builder, patch_registry):
+    """Older fakes / partial test stubs might not implement ``cancel_load``
+    — must not raise."""
     from app.backends.routed_backend import RoutedBackend
 
     class _NoCancelBackend:
@@ -331,6 +310,38 @@ def test_cancel_load_silent_when_inner_lacks_method(patch_builders, patch_regist
         def current_language(self):
             return None
 
-    backend = RoutedBackend(model="fw-model")
+    backend = RoutedBackend(model="whisper-model")
     backend._inner = _NoCancelBackend()  # type: ignore[assignment]
     backend.cancel_load()  # must not raise
+
+
+# ---- compute_type → quantization mapping -----------------------------------
+
+
+def test_compute_type_int8_maps_to_quantization_int8(patch_builder, patch_registry):
+    """Legacy ``compute_type='int8'`` must map to onnx-asr's
+    ``quantization='int8'``."""
+    from app.backends.routed_backend import RoutedBackend
+
+    RoutedBackend(model="whisper-model", compute_type="int8")
+    assert patch_builder[0].kwargs.get("quantization") == "int8"
+
+
+def test_compute_type_float16_maps_to_no_quantization(
+    patch_builder, patch_registry,
+):
+    from app.backends.routed_backend import RoutedBackend
+
+    RoutedBackend(model="whisper-model", compute_type="float16")
+    assert patch_builder[0].kwargs.get("quantization") is None
+
+
+def test_compute_type_int8_float16_maps_to_int8_quantization(
+    patch_builder, patch_registry,
+):
+    """Legacy CTranslate2 mode ``int8_float16`` collapses to plain
+    ``int8`` for onnx-asr (closest valid match)."""
+    from app.backends.routed_backend import RoutedBackend
+
+    RoutedBackend(model="whisper-model", compute_type="int8_float16")
+    assert patch_builder[0].kwargs.get("quantization") == "int8"

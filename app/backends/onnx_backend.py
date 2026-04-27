@@ -1,17 +1,16 @@
-"""In-process ONNX backend for Parakeet TDT 0.6B v3.
+"""Unified ONNX inference backend for every supported ASR model family.
 
-Uses ``onnx-asr`` (``pip install "onnx-asr[cpu,hub]"``) with the
-ONNX-exported Parakeet weights on HuggingFace:
-  ``istupakov/parakeet-tdt-0.6b-v3-onnx``
+Uses ``onnx-asr`` (``pip install "onnx-asr[gpu,hub]"``) with ONNX-exported
+weights from HuggingFace.  One backend class drives Whisper, GigaAM v3
+and Parakeet TDT v3 by switching a small ``family`` parameter; ONNX
+Runtime handles everything below — no NeMo, PyTorch, Lightning, or
+CTranslate2 in the dependency tree.
 
-vs NeMo backend
----------------
-+ Cold import:  ~1–2 s  (vs 30–90 s for NeMo + PyTorch + Lightning)
-+ Model load:   ~3–5 s  (vs 10–15 s)
-+ First infer:  no CUDA JIT warmup stall
-+ Dependencies: NumPy + ONNX Runtime only (no PyTorch, Lightning, Hydra)
-- Max chunk:    25 s     — longer audio is split automatically
-- Language:     same 25-language Parakeet support, auto-detect
+Supported families
+------------------
+- ``whisper``  — ``onnx-community/whisper-*``, configurable language
+- ``gigaam``   — ``istupakov/gigaam-v3-onnx``, Russian only
+- ``parakeet`` — ``istupakov/parakeet-tdt-0.6b-v3-onnx``, multilingual
 
 Lifecycle
 ---------
@@ -20,6 +19,14 @@ Lifecycle
 
     ready ──change_model()──▶ loading ──▶ ready / error
     *     ──shutdown()──▶ stopped  (terminal)
+
+Provider selection
+------------------
+``device='auto'`` (default) lets ONNX Runtime pick.  ``device='cuda'``
+explicitly requests CUDA with a CPU fallback in the providers list,
+plus a runtime retry-on-CPU if the first load fails with a CUDA-related
+error (handles the case where ``onnxruntime-gpu`` is installed but no
+NVIDIA driver is present).  ``device='cpu'`` pins to CPU.
 """
 
 from __future__ import annotations
@@ -30,41 +37,73 @@ from typing import Callable, Optional
 
 import numpy as np
 
+from app.backends._progress import install_tqdm_progress, set_progress_callback
+from app.inference_settings import NemoInferenceSettings
+
 log = logging.getLogger(__name__)
 
-# 25 s @ 16 kHz. The onnx-asr models are trained on sequences up to
-# ~30 s; 25 s gives a comfortable margin and still keeps chunk results
-# coherent for conversational-pace dictation.
+# 25 s @ 16 kHz.  Whisper / GigaAM / Parakeet ONNX models are trained on
+# sequences up to ~30 s; 25 s gives a comfortable margin and keeps chunk
+# results coherent for conversational-pace dictation.
 _CHUNK_SAMPLES: int = 25 * 16_000
 
+# Which family-specific tweaks apply.  See ``current_language`` and
+# ``transcribe`` for how each is honoured.
+_FAMILIES = ("whisper", "gigaam", "parakeet", "auto")
 
-class OnnxParakeetBackend:
-    """ONNX Runtime inference for Parakeet TDT 0.6B v3.
 
-    ``model`` is the HuggingFace repo id that goes into the storage/
-    download path and is shown in the UI.  The ``onnx_asr.load_model``
-    call receives it verbatim — ``onnx-asr`` forwards HF repo ids to
-    ``huggingface_hub.snapshot_download`` automatically.
+class OnnxAsrBackend:
+    """ONNX Runtime inference for any onnx-asr supported model.
+
+    Parameters
+    ----------
+    model
+        HuggingFace repo id (or short name accepted by onnx-asr) of the
+        ONNX-exported weights.
+    family
+        Which ASR family this is.  Controls language reporting and
+        whether Whisper-only ``recognize(language=...)`` is used.
+    language
+        For Whisper: source language code (``"en"``, ``"ru"``, …) or
+        ``"auto"`` / ``None`` for auto-detect.  Ignored for other families.
+    device
+        ``"auto"`` lets onnx-asr pick a provider; ``"cuda"`` requests
+        CUDA with CPU fallback; ``"cpu"`` pins to CPU.
+    quantization
+        Passed verbatim to ``onnx_asr.load_model(quantization=…)``.
+        ``"int8"`` / ``"fp16"`` / ``None`` (default).
     """
 
     def __init__(
         self,
-        model: str = "istupakov/parakeet-tdt-0.6b-v3-onnx",
-        device: str = "auto",  # accepted for API parity; passed to load_model
+        model: str,
+        family: str = "auto",
+        language: Optional[str] = None,
+        device: str = "auto",
+        quantization: Optional[str] = None,
     ) -> None:
+        if family not in _FAMILIES:
+            raise ValueError(
+                f"family must be one of {_FAMILIES}, got {family!r}"
+            )
+
         self._lock = threading.Lock()
         self._model_name = model
+        self._family = family
+        self._language = language
         self._device = device
+        self._quantization = quantization
 
         self._model = None
         self._status = "stopped"
         self._load_thread: Optional[threading.Thread] = None
         self._shutdown = False
-        # Set to True when the user clicks Cancel during a load. The
+        # Set to True when the user clicks Cancel during a load.  The
         # worker keeps running (Python cannot safely interrupt a thread
         # blocked on a network read or ONNX init), but its result is
-        # discarded at the publish step. Reset on each fresh ``load()``.
+        # discarded at the publish step.  Reset on each fresh ``load()``.
         self._cancel_requested = False
+        self._inference_settings = NemoInferenceSettings()
 
     # ---- public API ---------------------------------------------------------
 
@@ -73,8 +112,22 @@ class OnnxParakeetBackend:
             return self._model_name
 
     def current_language(self) -> Optional[str]:
-        # Parakeet TDT v3 auto-detects among 25 languages — no knob to expose.
-        return None
+        """What language code to stamp history rows with.
+
+        - ``gigaam``  → always ``"ru"`` (Russian-only model)
+        - ``parakeet`` → ``None`` (auto-detect across 25 langs)
+        - ``whisper`` → user setting, or ``None`` if ``"auto"``/empty
+        - ``auto``    → user setting if set, else None
+        """
+        if self._family == "gigaam":
+            return "ru"
+        if self._family == "parakeet":
+            return None
+        # whisper / auto
+        lang = self._language
+        if not lang or lang == "auto":
+            return None
+        return lang
 
     def status(self) -> str:
         with self._lock:
@@ -98,29 +151,20 @@ class OnnxParakeetBackend:
             target=self._do_load,
             args=(target_model,),
             daemon=True,
-            name="onnx-parakeet-load",
+            name="onnx-asr-load",
         )
         with self._lock:
             self._load_thread = thread
         thread.start()
 
     def cancel_load(self) -> None:
-        """Abandon an in-flight load.
-
-        Flips status to ``stopped`` immediately so the state-watcher
-        in ``StateManager`` exits and the loading pill drops away.
-        The load worker still completes its download (Python cannot
-        safely interrupt a thread blocked on I/O), but its result is
-        discarded thanks to ``_cancel_requested``.
-
-        Idempotent — calling cancel when nothing is loading is a no-op.
-        """
+        """Abandon an in-flight load, flipping status back to ``stopped``."""
         with self._lock:
             if self._shutdown:
                 return
             if self._status != "loading":
                 return
-            log.info("OnnxParakeet load cancelled by user")
+            log.info("OnnxAsr load cancelled by user")
             self._cancel_requested = True
             self._model = None
             self._status = "stopped"
@@ -128,10 +172,10 @@ class OnnxParakeetBackend:
     def change_model(
         self,
         model: str,
-        compute_type: Optional[str] = None,  # accepted for API parity, unused
+        compute_type: Optional[str] = None,  # API parity, ignored
     ) -> None:
         """Switch to a different ONNX model. Triggers a background reload."""
-        del compute_type  # ONNX precision is baked into the weights
+        del compute_type
         with self._lock:
             if self._shutdown:
                 return
@@ -142,15 +186,20 @@ class OnnxParakeetBackend:
             self._status = "stopped"
         self.load()
 
+    def update_inference_settings(self, settings: NemoInferenceSettings) -> None:
+        """Apply a new settings bundle.  Effect is per-call: the next
+        ``transcribe`` reads ``self._inference_settings``.  No reload."""
+        with self._lock:
+            self._inference_settings = settings
+
     def transcribe(
         self, audio: np.ndarray, sample_rate: int = 16_000
     ) -> Optional[str]:
         """Transcribe mono/stereo ``float32`` audio.
 
-        Audio longer than ``_CHUNK_SAMPLES`` (25 s) is split into
-        equal chunks and the results are joined with a space. Chunks
-        whose ``recognize()`` call returns empty / None are silently
-        skipped so a quiet section in the middle doesn't leave a gap.
+        Audio longer than ``_CHUNK_SAMPLES`` is split into 25 s chunks
+        and the results are joined with a space.  Empty chunks (model
+        returned None / empty) are skipped.
         """
         with self._lock:
             if self._shutdown:
@@ -162,34 +211,48 @@ class OnnxParakeetBackend:
                 )
                 return None
             model = self._model
+            settings = self._inference_settings
 
         try:
             buf = np.asarray(audio, dtype=np.float32)
             if buf.ndim > 1:
-                # Downmix multi-channel to mono
                 buf = buf.mean(axis=-1)
-
             if sample_rate != 16_000:
                 buf = _resample(buf, sample_rate, 16_000)
 
+            recognise_model = model
+            if getattr(settings, "timestamps", False):
+                # ``with_timestamps`` returns a wrapper that yields
+                # word-level offsets.  No-op if the model doesn't have
+                # the method (defensive for fakes / older onnx-asr).
+                wrap = getattr(model, "with_timestamps", None)
+                if callable(wrap):
+                    recognise_model = wrap()
+
+            kwargs: dict = {}
+            if self._family == "whisper":
+                lang = self.current_language()
+                if lang is not None:
+                    kwargs["language"] = lang
+
             if len(buf) <= _CHUNK_SAMPLES:
-                return _transcribe_chunk(model, buf)
+                return _transcribe_chunk(recognise_model, buf, kwargs)
 
             parts: list[str] = []
             for start in range(0, len(buf), _CHUNK_SAMPLES):
                 chunk = buf[start : start + _CHUNK_SAMPLES]
-                text = _transcribe_chunk(model, chunk)
+                text = _transcribe_chunk(recognise_model, chunk, kwargs)
                 if text:
                     parts.append(text)
             return " ".join(parts) or None
         except Exception as exc:
             log.error(
-                "OnnxParakeet transcription failed: %s", exc, exc_info=True
+                "OnnxAsr transcription failed: %s", exc, exc_info=True
             )
             return None
 
     def shutdown(self) -> None:
-        """Release resources and move to ``stopped`` (terminal). Idempotent."""
+        """Release resources; move to ``stopped`` (terminal). Idempotent."""
         with self._lock:
             if self._shutdown:
                 return
@@ -201,23 +264,35 @@ class OnnxParakeetBackend:
     def set_progress_callback(
         callback: Optional[Callable[[int, int, str], None]],
     ) -> None:
-        """Forward to FasterWhisperBackend's tqdm hook.
-
-        HuggingFace downloads go through ``huggingface_hub`` which
-        the existing ``_install_tqdm_progress`` shim already intercepts.
-        Registering via FasterWhisperBackend keeps the mechanism in
-        one place without duplicating it.
-        """
-        from app.backends.faster_whisper_backend import FasterWhisperBackend as _FW
-
-        _FW.set_progress_callback(callback)
+        """Register the UI's HF download progress callback."""
+        set_progress_callback(callback)
 
     # ---- internal -----------------------------------------------------------
 
-    def _do_load(self, model_name: str) -> None:
-        from app.backends.faster_whisper_backend import _install_tqdm_progress
+    def _build_load_kwargs(self, providers: Optional[list[str]]) -> dict:
+        kwargs: dict = {}
+        if self._quantization is not None:
+            kwargs["quantization"] = self._quantization
+        if providers is not None:
+            kwargs["providers"] = providers
+        return kwargs
 
-        _install_tqdm_progress()
+    def _resolve_providers(self) -> Optional[list[str]]:
+        """Map ``self._device`` to an ONNX Runtime providers list.
+
+        ``auto`` returns None so onnx-asr / ORT pick from what's installed.
+        """
+        if self._device == "cuda":
+            # CPU is a fallback if CUDA fails at session-create time
+            # (e.g. driver missing) — ORT will use the first viable
+            # provider in the list.
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        if self._device == "cpu":
+            return ["CPUExecutionProvider"]
+        return None
+
+    def _do_load(self, model_name: str) -> None:
+        install_tqdm_progress()
 
         log.info("Importing onnx_asr…")
         try:
@@ -225,7 +300,7 @@ class OnnxParakeetBackend:
         except ImportError as exc:
             log.error(
                 "onnx-asr is not installed: %s\n"
-                "Install it with:  pip install \"onnx-asr[cpu,hub]\"",
+                "Install it with:  pip install \"onnx-asr[gpu,hub]\"",
                 exc,
             )
             with self._lock:
@@ -233,23 +308,62 @@ class OnnxParakeetBackend:
                     self._status = "error"
             return
 
-        log.info("onnx_asr imported, loading model %s…", model_name)
+        providers = self._resolve_providers()
+        log.info(
+            "Loading ONNX model %s (family=%s, providers=%s, quantization=%s)…",
+            model_name, self._family, providers, self._quantization,
+        )
         try:
-            model = onnx_asr.load_model(model_name)
-        except Exception as exc:
-            log.error(
-                "Failed to load ONNX model %s: %s", model_name, exc,
-                exc_info=True,
+            model = onnx_asr.load_model(
+                model_name, **self._build_load_kwargs(providers)
             )
-            with self._lock:
-                if (
-                    not self._shutdown
-                    and not self._cancel_requested
-                    and self._model_name == model_name
-                ):
-                    self._model = None
-                    self._status = "error"
-            return
+        except Exception as exc:
+            # Fallback path: user asked for CUDA but the CUDA provider
+            # isn't actually available.  Retry with CPU only so the user
+            # ends up with a working backend instead of an error pill.
+            if (
+                self._device == "cuda"
+                and _is_cuda_provider_error(exc)
+                and not self._shutdown
+                and not self._cancel_requested
+            ):
+                log.warning(
+                    "CUDA provider unavailable (%s) — retrying on CPU",
+                    exc,
+                )
+                try:
+                    model = onnx_asr.load_model(
+                        model_name,
+                        **self._build_load_kwargs(["CPUExecutionProvider"]),
+                    )
+                except Exception as cpu_exc:
+                    log.error(
+                        "CPU fallback also failed for %s: %s",
+                        model_name, cpu_exc, exc_info=True,
+                    )
+                    with self._lock:
+                        if (
+                            not self._shutdown
+                            and not self._cancel_requested
+                            and self._model_name == model_name
+                        ):
+                            self._model = None
+                            self._status = "error"
+                    return
+            else:
+                log.error(
+                    "Failed to load ONNX model %s: %s", model_name, exc,
+                    exc_info=True,
+                )
+                with self._lock:
+                    if (
+                        not self._shutdown
+                        and not self._cancel_requested
+                        and self._model_name == model_name
+                    ):
+                        self._model = None
+                        self._status = "error"
+                return
 
         with self._lock:
             if self._shutdown:
@@ -268,20 +382,20 @@ class OnnxParakeetBackend:
                 return
             self._model = model
             self._status = "ready"
-            log.info("OnnxParakeet model %s ready", model_name)
+            log.info("OnnxAsr model %s ready", model_name)
 
 
 # ---- module-level helpers (testable without a backend instance) ------------
 
 
-def _transcribe_chunk(model, audio: np.ndarray) -> Optional[str]:
-    """Run ``model.recognize()`` on one audio chunk and extract the text.
+def _transcribe_chunk(model, audio: np.ndarray, kwargs: dict) -> Optional[str]:
+    """Run ``model.recognize(audio, **kwargs)`` and extract text.
 
-    Handles two result shapes seen in ``onnx-asr``:
-    - ``"bare string"``
-    - ``obj`` with a ``.text`` attribute (e.g. an ``OnnxAsrResult``)
+    Handles both shapes onnx-asr returns:
+    - bare ``"string"``
+    - object with ``.text`` attribute (an ``OnnxAsrResult``)
     """
-    result = model.recognize(audio)
+    result = model.recognize(audio, **kwargs)
     if result is None:
         return None
     if isinstance(result, str):
@@ -300,11 +414,9 @@ def _resample(
 ) -> np.ndarray:
     """Resample ``audio`` from ``src_rate`` to ``dst_rate``.
 
-    Prefers ``scipy.signal.resample_poly`` (high-quality anti-aliased
-    resampler); falls back to ``numpy.interp`` if scipy is not available.
-    The fallback is adequate for converting common rates (e.g. 44100 →
-    16000) without audible artefacts in the frequency range that matters
-    for speech.
+    Prefers ``scipy.signal.resample_poly``; falls back to
+    ``numpy.interp`` if scipy isn't available.  The fallback is fine
+    for speech-band audio at common ratios (44100 → 16000 etc.).
     """
     if src_rate == dst_rate:
         return audio
@@ -324,3 +436,23 @@ def _resample(
             np.arange(len(audio)),
             audio,
         ).astype(np.float32)
+
+
+def _is_cuda_provider_error(exc: BaseException) -> bool:
+    """Heuristic: does the exception text suggest a CUDA-provider issue?
+
+    onnx_asr.load_model raises plain ``RuntimeError`` with messages like
+    ``[E:onnxruntime] CUDAExecutionProvider not available …`` when the
+    requested provider isn't loadable.  We use a string match because
+    ORT doesn't expose a typed exception for this case.
+    """
+    msg = str(exc).lower()
+    keywords = ("cuda", "cudaexecutionprovider", "provider", "tensorrt")
+    return any(k in msg for k in keywords)
+
+
+# ---- backwards-compat alias ------------------------------------------------
+# A short period after the rename, ``OnnxParakeetBackend`` still gets
+# imported from older revisions of model-mapping / tests.  Keeping the
+# alias avoids a breaking rename.
+OnnxParakeetBackend = OnnxAsrBackend

@@ -271,18 +271,19 @@ class ModelCard(QFrame):
         root.addLayout(badges)
 
         # Inline inference settings — choice of panel keyed on
-        # backend kind:
-        #   - ``faster_whisper``: full 5-knob Whisper panel
-        #     (language, VAD, beam, temperature, prompt)
-        #   - ``nemo``: minimal Parakeet/Canary panel
-        #     (timestamps toggle — that's all NeMo's API exposes)
-        #   - ``gigaam``: no panel; the engine is end-to-end and
-        #     accepts no transcribe-time tunables. Inserting a
-        #     disabled panel looked like a rendering bug.
+        # onnx_family:
+        #   - ``whisper``: full Whisper panel (language, beam,
+        #     temperature, …). Some knobs (beam) don't translate to
+        #     the onnx-asr Whisper path but the panel stays useful
+        #     for language selection.
+        #   - ``parakeet``: minimal panel (timestamps toggle — the
+        #     only inference-time tunable onnx-asr exposes for Parakeet).
+        #   - ``gigaam``: no panel; e2e model with no per-call knobs.
         self._settings_panel: Optional[QWidget] = None
-        if info.backend_kind == "faster_whisper":
+        onnx_family = getattr(info, "onnx_family", "auto")
+        if onnx_family == "whisper":
             self._settings_panel = InferenceSettingsPanel(self)
-        elif info.backend_kind == "nemo":
+        elif onnx_family == "parakeet":
             self._settings_panel = NemoInferenceSettingsPanel(self)
         if self._settings_panel is not None:
             self._settings_panel.setVisible(False)
@@ -293,24 +294,10 @@ class ModelCard(QFrame):
             )
             root.addWidget(self._settings_panel)
 
-        # HF-token warning — only on GigaAM cards, since GigaAM's
-        # long-form path (>25 s captures) routes through pyannote
-        # VAD which needs a token to download the gated
-        # ``pyannote/segmentation-3.0`` weights. Whisper's
-        # long-form is Silero VAD, no token required, so the
-        # widget is omitted entirely on faster_whisper cards.
+        # HF-token warning is no longer needed: the legacy GigaAM-Python
+        # path used pyannote VAD (gated weights) for long audio.  ONNX
+        # GigaAM has its own internal segmentation, no token required.
         self._hf_warning: Optional[QLabel] = None
-        if info.backend_kind == "gigaam":
-            self._hf_warning = QLabel(
-                "⚠ Long-form audio (>25 s) needs a Hugging Face "
-                "token — set one in Settings → Hugging Face.",
-                self,
-            )
-            self._hf_warning.setObjectName("HfTokenWarning")
-            self._hf_warning.setProperty("role", "warning")
-            self._hf_warning.setWordWrap(True)
-            root.addWidget(self._hf_warning)
-            self.refresh_hf_token_state()
 
         footer = QHBoxLayout()
         footer.addStretch(1)

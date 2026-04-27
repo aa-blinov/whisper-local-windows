@@ -682,14 +682,14 @@ class AppController(QObject):
     def _settings_class_for(self, alias: str):
         """Pick the inference-settings dataclass that matches the
         model's backend kind. Whisper → ``InferenceSettings`` (5
-        knobs); NeMo → ``NemoInferenceSettings`` (just
-        ``timestamps``); unknown alias defaults to Whisper since
-        that's the most common case for raw HF ids."""
+        knobs); Parakeet/NeMo-style → ``NemoInferenceSettings`` (just
+        ``timestamps``); unknown alias defaults to Whisper since that's
+        the most common case for raw HF ids."""
         try:
             info = get_model(alias)
         except KeyError:
             return InferenceSettings
-        if info.backend_kind == "nemo":
+        if getattr(info, "onnx_family", "") == "parakeet":
             return NemoInferenceSettings
         return InferenceSettings
 
