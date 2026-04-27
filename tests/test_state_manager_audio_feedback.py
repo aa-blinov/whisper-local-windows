@@ -6,13 +6,29 @@ stand-ins to verify just the hotkey acoustic-feedback contract:
   start sound, so the user always hears that their keypress was received.
 """
 
+import importlib.util
 import sys
 from unittest.mock import MagicMock
 
-# Several native / heavy extensions are not installed in the test environment.
-# Pre-inject stubs before the StateManager import chain runs so the module
-# loads without ImportError.  The actual objects they produce are replaced
-# with MagicMocks inside _build_state_manager anyway.
+# Several native / heavy extensions may not be installed in all test
+# environments.  Pre-inject stubs ONLY when the module is genuinely absent
+# so we don't shadow a real installed package on dev machines.
+#
+# ``importlib.util.find_spec`` is used instead of the bare
+# ``if _mod not in sys.modules`` guard to avoid replacing a real
+# (but not-yet-imported) package with a Mock.  For dotted names like
+# ``ruamel.yaml`` the call can raise ``ModuleNotFoundError`` when the
+# parent has already been stubbed (it lacks a real ``__path__``), so we
+# wrap it in a try/except and treat that as "not available".
+def _is_available(name: str) -> bool:
+    if name in sys.modules:
+        return True
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ModuleNotFoundError, AttributeError, ValueError):
+        return False
+
+
 for _mod in (
     "sounddevice",
     "ruamel",
@@ -21,7 +37,7 @@ for _mod in (
     "pynput",
     "pynput.keyboard",
 ):
-    if _mod not in sys.modules:
+    if not _is_available(_mod):
         sys.modules[_mod] = MagicMock()
 
 

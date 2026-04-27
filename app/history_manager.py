@@ -179,11 +179,20 @@ class HistoryManager:
         Disk order is oldest-first; in-memory result is newest-first and
         capped to ``max_entries``.  If the file has more lines than needed,
         compact() is called immediately to trim it.
+
+        One-time migration: if the ``.jsonl`` file is absent but a same-stem
+        ``.json`` file exists (written by the old flat-JSON persistence layer),
+        the legacy data is imported and the file is rewritten as JSONL so that
+        users upgrading from an older release don't silently lose their history.
         """
         self.entries = []
         self._file_entry_count = 0
 
         if not self.history_file.exists():
+            # Check for the legacy flat-JSON history written by older versions.
+            legacy = self.history_file.with_suffix(".json")
+            if legacy.exists():
+                self._migrate_from_json(legacy)
             return
 
         try:
@@ -246,6 +255,63 @@ class HistoryManager:
             self._file_entry_count = len(self.entries)
         except Exception as exc:
             self.logger.error("Failed to compact history: %s", exc)
+
+    def _migrate_from_json(self, legacy_file: Path) -> None:
+        """Import history from the legacy flat-JSON format and rewrite as JSONL.
+
+        The old persistence layer wrote a JSON array of ``TranscriptionEntry``
+        dicts.  After a successful migration the legacy file is renamed to
+        ``<name>.json.bak`` so the migration does not re-run on the next
+        launch, and so the user retains a reversible backup.
+        """
+        try:
+            data = json.loads(legacy_file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            self.logger.error(
+                "Failed to read legacy history file %s: %s", legacy_file, exc
+            )
+            return
+
+        if not isinstance(data, list):
+            self.logger.warning(
+                "Legacy history file %s has unexpected top-level type %s "
+                "— skipping migration",
+                legacy_file, type(data).__name__,
+            )
+            return
+
+        parsed: List[TranscriptionEntry] = []
+        for raw in data:
+            if not isinstance(raw, dict):
+                self.logger.warning("Skipping non-dict legacy entry: %r", raw)
+                continue
+            try:
+                parsed.append(TranscriptionEntry(**raw))
+            except Exception as exc:
+                self.logger.warning(
+                    "Skipping invalid legacy history entry: %s", exc
+                )
+
+        # Sort by timestamp so oldest-first order (which compact expects)
+        # is correct regardless of how the old file stored them.
+        parsed.sort(key=lambda e: e.timestamp)
+        self.entries = list(reversed(parsed))[: self.max_entries]
+        self._compact()  # writes .jsonl atomically via .tmp + os.replace
+
+        # Rename the legacy file so the migration doesn't re-run next launch.
+        backup = legacy_file.with_name(legacy_file.name + ".bak")
+        try:
+            legacy_file.rename(backup)
+        except Exception as exc:
+            self.logger.warning(
+                "Could not rename legacy history file %s to %s: %s",
+                legacy_file, backup, exc,
+            )
+
+        self.logger.info(
+            "Migrated %d history entries from %s to JSONL",
+            len(self.entries), legacy_file,
+        )
 
     # ------------------------------------------------------------------
     # Compatibility shim

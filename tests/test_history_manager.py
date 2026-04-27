@@ -237,3 +237,75 @@ def test_compact_uses_tmp_then_replaces(tmp_path, monkeypatch):
     src, dst = replaced[-1]
     assert src.endswith(".tmp")
     assert dst == str(tmp_path / "history.jsonl")
+
+
+# ---------------------------------------------------------------------------
+# Legacy JSON migration
+# ---------------------------------------------------------------------------
+
+def test_load_history_migrates_from_legacy_json(tmp_path):
+    """When the .jsonl file is absent but a same-stem .json file exists,
+    load_history must import those entries and write them as JSONL so
+    users upgrading from the old flat-JSON format don't silently lose
+    their history."""
+    from app.history_manager import HistoryManager
+
+    legacy = tmp_path / "history.json"
+    rows = [
+        {"timestamp": 1000.0, "text": "first",  "duration": 1.0, "model": "turbo", "language": "en"},
+        {"timestamp": 2000.0, "text": "second", "duration": 2.0, "model": "large", "language": "ru"},
+    ]
+    legacy.write_text(json.dumps(rows), encoding="utf-8")
+
+    mgr = HistoryManager(max_entries=100, history_file=str(tmp_path / "history.jsonl"))
+
+    assert len(mgr.entries) == 2
+    assert {e.text for e in mgr.entries} == {"first", "second"}
+    # JSONL file must have been created by the migration
+    assert (tmp_path / "history.jsonl").exists()
+    # Legacy file must be gone (renamed to .json.bak) so migration
+    # doesn't re-run on next launch
+    assert not legacy.exists(), "legacy .json must be renamed after migration"
+    assert (tmp_path / "history.json.bak").exists()
+
+
+def test_load_history_migration_skips_invalid_rows(tmp_path):
+    """Corrupt rows in the legacy file must be skipped, not crash the migration."""
+    from app.history_manager import HistoryManager
+
+    legacy = tmp_path / "history.json"
+    rows = [
+        {"timestamp": 1000.0, "text": "good", "duration": 1.0, "model": "turbo", "language": "en"},
+        {"broken": "row"},   # missing required fields
+        "not a dict",
+    ]
+    legacy.write_text(json.dumps(rows), encoding="utf-8")
+
+    mgr = HistoryManager(max_entries=100, history_file=str(tmp_path / "history.jsonl"))
+
+    assert len(mgr.entries) == 1
+    assert mgr.entries[0].text == "good"
+
+
+def test_load_history_migration_does_not_run_when_jsonl_exists(tmp_path):
+    """If the .jsonl file is already present, migration must not overwrite it
+    even when a .json file also exists (e.g. user downgraded then upgraded)."""
+    from app.history_manager import HistoryManager
+
+    # Pre-existing JSONL
+    jsonl = tmp_path / "history.jsonl"
+    row = {"timestamp": 9000.0, "text": "jsonl-entry", "duration": 0.5,
+           "model": "turbo", "language": "en"}
+    jsonl.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    # Legacy file alongside it — should be ignored
+    legacy = tmp_path / "history.json"
+    legacy.write_text(json.dumps([{
+        "timestamp": 1000.0, "text": "legacy", "duration": 1.0,
+        "model": "old", "language": "ru"
+    }]), encoding="utf-8")
+
+    mgr = HistoryManager(max_entries=100, history_file=str(jsonl))
+
+    assert len(mgr.entries) == 1
+    assert mgr.entries[0].text == "jsonl-entry"

@@ -44,30 +44,35 @@ class _CacheWorkerSignals(QObject):
     ``QObject``), so the canonical PySide6 pattern is a tiny
     ``QObject`` companion created on the main thread — Qt then
     routes the emitted signal back via a queued connection.
+
+    The ``request_id`` int travels with the boolean result so
+    ``_apply_cache_result`` can discard stale responses from workers
+    that were superseded by a later ``refresh_cache_state()`` call.
     """
 
-    result = Signal(bool)  # True → model is cached on disk
+    result = Signal(bool, int)  # (cached, request_id)
 
 
 class _CacheCheckWorker(QRunnable):
     """Run ``is_cached_for_info`` in a thread-pool thread.
 
-    Emits ``signals.result`` with the boolean outcome so the card can
-    update its button label and delete-button visibility without ever
-    blocking the Qt main thread on filesystem calls.
+    Emits ``signals.result`` with the boolean outcome and the
+    originating ``request_id`` so the card can ignore results that
+    arrived out-of-order (an older worker finishing after a newer one).
     """
 
-    def __init__(self, info: ModelInfo) -> None:
+    def __init__(self, info: ModelInfo, request_id: int) -> None:
         super().__init__()
         self.setAutoDelete(True)
         self._info = info
+        self._request_id = request_id
         self.signals = _CacheWorkerSignals()
 
     def run(self) -> None:  # called by QThreadPool on a worker thread
         from app.utils import is_cached_for_info  # lazy — gets patched version in tests
 
         cached = is_cached_for_info(self._info)
-        self.signals.result.emit(cached)
+        self.signals.result.emit(cached, self._request_id)
 
 
 def _format_size(size_mb: int) -> str:
@@ -143,6 +148,12 @@ class ModelCard(QFrame):
         # Last result from the async cache check.  None = check not yet
         # complete; False = not cached; True = cached on disk.
         self._cached: Optional[bool] = None
+        # Monotonically increasing counter: bumped on every
+        # refresh_cache_state() call.  Workers embed this id at
+        # dispatch time; _apply_cache_result silently drops any
+        # result whose id doesn't match the current value (stale
+        # worker from a superseded request).
+        self._cache_request_id: int = 0
 
         self.setObjectName("ModelCard")
         self.setProperty("role", "card")
@@ -413,18 +424,26 @@ class ModelCard(QFrame):
         """Schedule an async disk check for this model.
 
         Launches a ``_CacheCheckWorker`` on Qt's global thread pool so
-        the filesystem walk never blocks the main thread.  When the
-        result arrives, ``_apply_cache_result`` updates the button label
-        and delete-button visibility in one atomic update — one disk
-        check per call instead of two.
+        the filesystem walk never blocks the main thread.  Each call
+        increments ``_cache_request_id``; workers carry that id and
+        ``_apply_cache_result`` discards any result whose id is stale
+        (i.e. a slower earlier worker finishing after a faster newer
+        one).
         """
-        worker = _CacheCheckWorker(self._info)
+        self._cache_request_id += 1
+        worker = _CacheCheckWorker(self._info, self._cache_request_id)
         worker.signals.result.connect(self._apply_cache_result)
         QThreadPool.globalInstance().start(worker)
 
-    def _apply_cache_result(self, cached: bool) -> None:
+    def _apply_cache_result(self, cached: bool, request_id: int) -> None:
         """Slot — called on the main thread by the queued connection
-        when the thread-pool worker has finished its disk check."""
+        when the thread-pool worker has finished its disk check.
+
+        Results from superseded requests (stale workers) are silently
+        dropped so they cannot overwrite a more recent cache state.
+        """
+        if request_id != self._cache_request_id:
+            return  # stale — a newer request has already landed
         self._cached = cached
         self._select_btn.setText("Select" if cached else "Download")
         self._refresh_delete_visibility()

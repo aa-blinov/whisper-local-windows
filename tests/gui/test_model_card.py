@@ -218,12 +218,13 @@ def test_refresh_cache_state_not_called_on_main_thread(qtbot, monkeypatch):
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
-    # Drain the __init__ worker then clear
-    qtbot.wait(300)
+    # Wait for the __init__ worker to deliver its result, then reset.
+    qtbot.waitUntil(lambda: card._cached is not None, timeout=2000)
     worker_thread_ids.clear()
+    card._cached = None  # reset so waitUntil can detect the next result
 
     card.refresh_cache_state()
-    qtbot.wait(300)
+    qtbot.waitUntil(lambda: card._cached is not None, timeout=2000)
 
     assert len(worker_thread_ids) == 1
     assert worker_thread_ids[0] != main_id, "is_cached_for_info ran on the Qt main thread"
@@ -242,13 +243,44 @@ def test_refresh_cache_state_calls_is_cached_exactly_once(qtbot, monkeypatch):
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
-    qtbot.wait(300)
+    qtbot.waitUntil(lambda: card._cached is not None, timeout=2000)
     call_count.clear()
+    card._cached = None
 
     card.refresh_cache_state()
-    qtbot.wait(300)
+    qtbot.waitUntil(lambda: card._cached is not None, timeout=2000)
 
     assert len(call_count) == 1, f"Expected 1 disk check, got {len(call_count)}"
+
+
+def test_stale_cache_result_is_ignored(qtbot, monkeypatch):
+    """A result arriving from an older worker must not overwrite a result
+    that has already been applied from the latest worker.
+
+    Simulates the race: two rapid refresh_cache_state() calls issued while
+    the first worker is still in flight.  The stale result (from request N-1)
+    must be discarded when the current request counter is already at N.
+    """
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr("app.utils.is_cached_for_info", lambda info: False)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    qtbot.waitUntil(lambda: card._cached is not None, timeout=2000)
+
+    # Advance the counter to simulate a newer request having landed.
+    card._cache_request_id = 5
+    card._cached = False  # newest result: not cached
+
+    # Inject a stale result from an older request (id=3).
+    card._apply_cache_result(True, 3)
+
+    select_btn = next(
+        b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
+    )
+    assert card._cached is False, "stale result must not update _cached"
+    assert select_btn.text() == "Download", "stale result must not flip the button"
 
 
 def test_refresh_cache_state_updates_button_to_select_when_cached(qtbot, monkeypatch):
@@ -294,12 +326,13 @@ def test_set_active_does_not_hit_disk(qtbot, monkeypatch):
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
-    qtbot.wait(300)  # let __init__ worker settle
+    # Wait for the __init__ worker to deliver its result before asserting.
+    qtbot.waitUntil(lambda: card._cached is not None, timeout=2000)
     call_count.clear()
 
     card.set_active(True)
     card.set_active(False)
-    qtbot.wait(100)
+    qtbot.wait(100)  # short fixed wait: confirming no I/O fires
 
     assert len(call_count) == 0, "set_active() triggered unexpected disk I/O"
 
@@ -318,12 +351,13 @@ def test_set_loading_does_not_hit_disk(qtbot, monkeypatch):
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
     card.set_active(True)
-    qtbot.wait(300)  # let __init__ worker settle
+    # Wait for the __init__ worker to deliver its result before asserting.
+    qtbot.waitUntil(lambda: card._cached is not None, timeout=2000)
     call_count.clear()
 
     card.set_loading(True)
     card.set_loading(False)
-    qtbot.wait(100)
+    qtbot.wait(100)  # short fixed wait: confirming no I/O fires
 
     assert len(call_count) == 0, "set_loading() triggered unexpected disk I/O"
 
@@ -620,7 +654,7 @@ def test_model_card_delete_button_hidden_when_not_cached(qtbot, monkeypatch):
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
-    qtbot.wait(300)  # let async worker settle
+    qtbot.waitUntil(lambda: card._cached is not None, timeout=2000)
     assert not _delete_btn(card).isVisible()
 
 
