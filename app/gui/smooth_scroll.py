@@ -16,8 +16,9 @@ Key properties:
 - Accumulation: rapid notches append independent items to the queue;
   each tick sums contributions from all active items, so fast
   flicking naturally builds momentum.
-- Consistent 16 ms ticks: matches the Windows default timer
-  resolution, preventing the jitter that causes visual tearing.
+- **Display-refresh-aware** ticks: the per-instance timer is created
+  with a tick interval matching the user's monitor (60 / 144 / 240 Hz),
+  so animations don't stutter on high-refresh displays.
 
 Usage::
 
@@ -33,18 +34,17 @@ from math import cos, pi
 from PySide6.QtCore import QEvent, QObject, QTimer
 from PySide6.QtWidgets import QAbstractScrollArea
 
-_FPS = 60
+from app.gui.refresh_rate import display_refresh_rate, tick_interval_ms
+
 _DURATION_MS = 400            # total animation length per notch
-_STEPS_TOTAL = int(_FPS * _DURATION_MS / 1000)   # 24
 _PX_PER_NOTCH = 100.0         # base pixels per standard notch (angleDelta=120)
 _STEP_RATIO = 1.5             # multiplier — 100 * 1.5 = 150 px/notch
-_TICK_MS = int(1000 / _FPS)   # 16 ms — one Windows timer tick
 
 
-def _sub_delta(delta: float, steps_left: int) -> float:
+def _sub_delta(delta: float, steps_left: int, steps_total: int) -> float:
     """Cosine bell contribution for this step."""
-    m = _STEPS_TOTAL / 2
-    x = abs(_STEPS_TOTAL - steps_left - m)
+    m = steps_total / 2
+    x = abs(steps_total - steps_left - m)
     return (cos(x * pi / m) + 1) / (2 * m) * delta
 
 
@@ -57,8 +57,14 @@ class _SmoothScrollFilter(QObject):
         # to every tick, then items are dropped when steps_left reaches 0.
         self._queue: deque[list[float]] = deque()
 
+        # Match the display refresh.  ``_DURATION_MS`` is constant so
+        # 60 Hz monitors keep the original 24-step animation; 144 Hz
+        # monitors get 57 steps of 7 ms each — same feel, smoother
+        # rendering.
+        fps = display_refresh_rate()
+        self._steps_total = max(8, int(round(fps * _DURATION_MS / 1000)))
         self._timer = QTimer(self)
-        self._timer.setInterval(_TICK_MS)
+        self._timer.setInterval(tick_interval_ms())
         self._timer.timeout.connect(self._tick)
 
     # ------------------------------------------------------------------ timer
@@ -70,7 +76,7 @@ class _SmoothScrollFilter(QObject):
 
         total = 0.0
         for item in self._queue:
-            step = _sub_delta(item[0], int(item[1]))
+            step = _sub_delta(item[0], int(item[1]), self._steps_total)
             total += step
             item[1] -= 1
 
@@ -92,7 +98,7 @@ class _SmoothScrollFilter(QObject):
             return False
 
         delta_px = -angle * _PX_PER_NOTCH * _STEP_RATIO / 120.0
-        self._queue.append([delta_px, float(_STEPS_TOTAL)])
+        self._queue.append([delta_px, float(self._steps_total)])
 
         if not self._timer.isActive():
             self._timer.start()

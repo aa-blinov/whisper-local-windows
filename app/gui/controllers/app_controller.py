@@ -139,10 +139,18 @@ class AppController(QObject):
         self._mic_test_failed.connect(self._on_mic_test_failed)
         self._storage_size_ready.connect(self._on_storage_size_ready)
         # Polls the live audio level for the topbar VU meter while the
-        # recording pipeline is in the ``recording`` state. ~30 Hz feels
-        # alive without burning CPU.
+        # recording pipeline is in the ``recording`` state.  Tick
+        # cadence matches the display refresh — but capped at 60 Hz
+        # because the audio buffer behind the meter is only sampled
+        # every ~10 ms, so >60 Hz updates render duplicate frames.
+        # On 60 Hz monitors that's the legacy ~30 Hz feel; on 144 Hz
+        # monitors the bar moves smoothly instead of jumping every 5
+        # display frames.
+        from app.gui.refresh_rate import tick_interval_ms
+
+        vu_interval = tick_interval_ms(max_rate=60)
         self._vu_timer = QTimer(self)
-        self._vu_timer.setInterval(33)
+        self._vu_timer.setInterval(vu_interval)
         self._vu_timer.timeout.connect(self._on_vu_tick)
         # Independent polling timer for the mic-test VU meter on the
         # Settings card. Separate from the recording one so a mic
@@ -151,7 +159,7 @@ class AppController(QObject):
         # without us trying to feed two meters from one tick with
         # divergent on/off conditions.
         self._mic_test_vu_timer = QTimer(self)
-        self._mic_test_vu_timer.setInterval(33)
+        self._mic_test_vu_timer.setInterval(vu_interval)
         self._mic_test_vu_timer.timeout.connect(self._on_mic_test_vu_tick)
         # Snapshot of the pre-click state, captured in
         # ``_on_model_selected`` and consumed by
