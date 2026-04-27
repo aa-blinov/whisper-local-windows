@@ -35,7 +35,7 @@ class StateManager:
         import os
         history_config = self.config_manager.get_history_config()
         if history_config.get('enabled', True):
-            history_file = os.path.join(get_project_logs_path(), "transcription_history.json")
+            history_file = os.path.join(get_project_logs_path(), "transcription_history.jsonl")
             max_entries = history_config.get('max_entries', 1000)
             self.history_manager = HistoryManager(max_entries=max_entries, history_file=history_file)
         else:
