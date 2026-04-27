@@ -80,15 +80,38 @@ class TranscribeView(QWidget):
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(16)
 
-        self._drop_zone = QLabel(
-            "Drop an audio or video file here — or click Browse",
-            self,
-        )
+        # The drop zone is a QFrame (so the dashed border applies to
+        # the whole region) with two labels stacked inside: the prompt
+        # and a smaller line listing the supported formats.  Without
+        # the format hint the user has to guess which extensions work.
+        from PySide6.QtWidgets import QFrame
+
+        self._drop_zone = QFrame(self)
         self._drop_zone.setObjectName("TranscribeDropZone")
-        self._drop_zone.setAlignment(Qt.AlignCenter)
         self._drop_zone.setMinimumHeight(120)
         self._drop_zone.setProperty("dropState", "idle")
-        # AcceptDrops on the parent widget; the QLabel is just a
+        drop_layout = QVBoxLayout(self._drop_zone)
+        drop_layout.setContentsMargins(24, 18, 24, 18)
+        drop_layout.setSpacing(8)
+        drop_layout.addStretch(1)
+        prompt = QLabel(
+            "Drop an audio or video file here — or click Browse",
+            self._drop_zone,
+        )
+        prompt.setObjectName("TranscribeDropPrompt")
+        prompt.setAlignment(Qt.AlignCenter)
+        drop_layout.addWidget(prompt)
+        formats_hint = QLabel(
+            "Supports: WAV, MP3, FLAC, OGG, OPUS, M4A, AAC, WMA, AIFF · "
+            "MP4, MOV, MKV, WebM, AVI, FLV, 3GP",
+            self._drop_zone,
+        )
+        formats_hint.setObjectName("TranscribeDropFormats")
+        formats_hint.setAlignment(Qt.AlignCenter)
+        formats_hint.setWordWrap(True)
+        drop_layout.addWidget(formats_hint)
+        drop_layout.addStretch(1)
+        # AcceptDrops on the parent widget; the QFrame is just a
         # visual cue (it doesn't have its own dragEnterEvent).
         self.setAcceptDrops(True)
 

@@ -669,19 +669,33 @@ QHeaderView::section:last {
 
 /* ---- Transcribe view ----------------------------------------------------- */
 
-QLabel#TranscribeDropZone {
+QFrame#TranscribeDropZone {
     border: 2px dashed {{color.border}};
     border-radius: {{radius.lg}};
-    color: {{color.text_secondary}};
     background-color: {{color.bg_secondary}};
-    font-size: 14px;
-    padding: 24px;
 }
 
-QLabel#TranscribeDropZone[dropState="active"] {
+QFrame#TranscribeDropZone[dropState="active"] {
     border-color: {{color.accent}};
     background-color: {{color.bg_elevated}};
+}
+
+QLabel#TranscribeDropPrompt {
+    color: {{color.text_secondary}};
+    font-size: 14px;
+    background: transparent;
+    border: none;
+}
+
+QFrame#TranscribeDropZone[dropState="active"] QLabel#TranscribeDropPrompt {
     color: {{color.text_primary}};
+}
+
+QLabel#TranscribeDropFormats {
+    color: {{color.text_muted}};
+    font-size: 11px;
+    background: transparent;
+    border: none;
 }
 
 QLabel#TranscribeStatus {
