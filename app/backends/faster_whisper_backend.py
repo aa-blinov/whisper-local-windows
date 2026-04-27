@@ -75,19 +75,20 @@ def _install_tqdm_progress() -> None:
             return ret
 
         def display(self, *args, **kwargs):
-            # ``pythonw.exe`` (no console) leaves sys.stdout as None.
-            # tqdm.display() calls fp.write() where fp wraps sys.stdout —
-            # the wrapped None raises AttributeError. Swallow it: we don't
-            # need console output, progress goes via _fire() → callback.
+            # Guard against any error in tqdm's console-rendering path.
+            # Common culprits when running without a real terminal:
+            #   AttributeError — sys.stdout is None (pythonw.exe)
+            #   OverflowError  — int(float('inf')) in rate/ETA formatting
+            # We don't need console output; progress goes via _fire().
             try:
                 return super().display(*args, **kwargs)
-            except (AttributeError, TypeError):
+            except Exception:
                 pass
 
         def refresh(self, *args, **kwargs):
             try:
                 ret = super().refresh(*args, **kwargs)
-            except (AttributeError, TypeError):
+            except Exception:
                 ret = None
             self._fire()
             return ret
@@ -96,7 +97,7 @@ def _install_tqdm_progress() -> None:
             self._fire()
             try:
                 return super().close()
-            except (AttributeError, TypeError):
+            except Exception:
                 pass
 
         def _fire(self):

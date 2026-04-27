@@ -429,7 +429,6 @@ def test_tqdm_patch_survives_null_stdout(monkeypatch):
         lambda c, t, d: captured.append((c, t, d))
     )
     try:
-        original_stdout = sys.stdout
         monkeypatch.setattr(sys, "stdout", None)
 
         # Must not raise — this is the exact crash path from the ONNX backend.
@@ -444,6 +443,41 @@ def test_tqdm_patch_survives_null_stdout(monkeypatch):
     assert any(c == 5_000_000 for (c, _, _) in captured), (
         "expected progress callback to fire even with sys.stdout=None"
     )
+
+
+def test_tqdm_patch_survives_overflow_error_in_display(monkeypatch):
+    """huggingface_hub sometimes creates tqdm bars with ``total=float('inf')``
+    or other values that cause ``int(float('inf'))`` → OverflowError
+    inside tqdm's ETA/rate formatting during ``display()``/``refresh()``.
+
+    Regression test for: onnx_asr.load_model() → hf_hub_download() →
+    tqdm renders ETA → OverflowError spam on stderr + eventual crash."""
+    import sys
+    import tqdm.auto
+
+    from app.backends.faster_whisper_backend import (
+        FasterWhisperBackend,
+        _install_tqdm_progress,
+    )
+
+    _install_tqdm_progress()
+
+    captured: list = []
+    FasterWhisperBackend.set_progress_callback(
+        lambda c, t, d: captured.append((c, t, d))
+    )
+    monkeypatch.setattr(sys, "stdout", None)
+    try:
+        # ``total=0`` forces a division-by-zero / inf path in tqdm's
+        # rate display which can overflow on some tqdm versions.
+        bar = tqdm.auto.tqdm(total=0, desc="fetching", disable=False)
+        for _ in range(5):
+            bar.update(1_000_000)
+        bar.refresh()
+        bar.close()
+    finally:
+        FasterWhisperBackend.set_progress_callback(None)
+    # No exception must have propagated — reaching here is the assertion.
 
 
 # ---- Shutdown --------------------------------------------------------------
