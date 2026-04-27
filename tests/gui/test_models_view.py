@@ -96,12 +96,12 @@ def test_models_view_emits_model_selected_when_card_emits(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "whisper-base")
+    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "vosk-ru-small")
 
     with qtbot.waitSignal(view.model_selected, timeout=1000) as blocker:
         card.select_requested.emit(card.alias())
 
-    assert blocker.args == ["whisper-base"]
+    assert blocker.args == ["vosk-ru-small"]
 
 
 def test_models_view_emits_model_delete_requested_when_card_emits(qtbot):
@@ -113,12 +113,12 @@ def test_models_view_emits_model_delete_requested_when_card_emits(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "whisper-base")
+    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "vosk-ru-small")
 
     with qtbot.waitSignal(view.model_delete_requested, timeout=1000) as blocker:
         card.delete_requested.emit(card.alias())
 
-    assert blocker.args == ["whisper-base"]
+    assert blocker.args == ["vosk-ru-small"]
 
 
 def test_models_view_starts_with_no_active(qtbot):
@@ -307,11 +307,15 @@ def test_models_view_search_matches_canonical_and_language(qtbot):
     qtbot.wait(50)
 
     aliases = set(view.visible_aliases())
-    # GigaAM is Russian-only, Parakeet says "incl. Russian" — both surface.
+    # GigaAM is Russian-only, Vosk is Russian-only, Parakeet/Canary say
+    # "incl. Russian" — all surface.
     assert "gigaam-v3-rnnt" in aliases
     assert "gigaam-v3-ctc" in aliases
-    # English-leaning Distil card filtered out (no "russian" mention).
-    assert "whisper-base" not in aliases
+    assert "vosk-ru-small" in aliases
+    # Plain multilingual Whisper cards don't tag "Russian" specifically
+    # — should be filtered out by the language-specific search.
+    assert "whisper-large-v3-turbo" not in aliases
+    assert "whisper-large-v3" not in aliases
 
 
 def test_models_view_family_chip_filters_by_family(qtbot):

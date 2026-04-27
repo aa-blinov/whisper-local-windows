@@ -114,7 +114,7 @@ def test_registry_contains_core_models():
 
     expected = {
         "whisper-large-v3-turbo",
-        "whisper-base",
+        "vosk-ru-small",
         "gigaam-v3-rnnt",
         "parakeet-tdt-v3",
     }

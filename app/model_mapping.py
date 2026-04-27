@@ -130,24 +130,6 @@ MODELS: Tuple[ModelInfo, ...] = (
         family="Whisper",
         onnx_family="whisper",
     ),
-    # ---- Whisper Base (tiny, fast on CPU) ----------------------------------
-    ModelInfo(
-        alias="whisper-base",
-        canonical="onnx-community/whisper-base",
-        display_name="Whisper Base",
-        size_mb=145,
-        vram_gb=1.0,
-        speed="fast",
-        quality="good",
-        languages="multilingual",
-        description=(
-            "OpenAI Whisper Base — small and fast, runs comfortably on CPU. "
-            "Quality dips on accented speech but fine for clean dictation."
-        ),
-        compute_type="float16",
-        family="Whisper",
-        onnx_family="whisper",
-    ),
     # ---- GigaAM v3 (Sber, Russian-only, ONNX) ------------------------------
     # GigaAM v3 e2e variants include built-in punctuation and
     # normalisation in the output, which matters for the clipboard-paste

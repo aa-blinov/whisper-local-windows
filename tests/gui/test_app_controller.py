@@ -360,9 +360,9 @@ def test_controller_updates_topbar_on_model_select(qtbot):
     config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window)
-    window.models_view.model_selected.emit("whisper-base")
+    window.models_view.model_selected.emit("vosk-ru-small")
 
-    assert "Base" in window.topbar._model_pill.text()
+    assert "Vosk" in window.topbar._model_pill.text()
 
 
 def test_controller_clears_topbar_model_when_unknown(qtbot):
@@ -482,9 +482,9 @@ def test_controller_deletes_cached_model_after_confirm(qtbot, monkeypatch):
     monkeypatch.setattr(window.models_view, "refresh_cache_state", fake_refresh)
 
     AppController(config=config, window=window)
-    window.models_view.model_delete_requested.emit("whisper-base")
+    window.models_view.model_delete_requested.emit("vosk-ru-small")
 
-    assert deleted == ["whisper-base"]
+    assert deleted == ["vosk-ru-small"]
     assert refreshed["called"] is True
 
 
@@ -510,7 +510,7 @@ def test_controller_does_not_delete_when_user_cancels(qtbot, monkeypatch):
     )
 
     AppController(config=config, window=window)
-    window.models_view.model_delete_requested.emit("whisper-base")
+    window.models_view.model_delete_requested.emit("vosk-ru-small")
 
     assert deleted == []
 
@@ -1747,15 +1747,15 @@ def test_controller_routes_model_select_through_recording_when_present(qtbot):
     rec = FakeRecordingController()
 
     AppController(config=config, window=window, recording=rec)
-    window.models_view.model_selected.emit("whisper-base")
+    window.models_view.model_selected.emit("vosk-ru-small")
 
     # config still updated for persistence
-    assert ("whisper", "model", "whisper-base") in config.writes
+    assert ("whisper", "model", "vosk-ru-small") in config.writes
     # compute_type written too — the registry tells us each card's preference
     assert ("whisper", "compute_type", "float16") in config.writes
     # AND recording stack was asked to actually switch (with compute_type)
     assert rec.model_change_requests == [
-        ("onnx-community/whisper-base", "float16"),
+        ("alphacep/vosk-model-small-ru", "float16"),
     ]
 
 
@@ -1768,10 +1768,10 @@ def test_controller_skips_recording_call_when_recording_absent(qtbot):
     config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window)  # no recording arg
-    window.models_view.model_selected.emit("whisper-base")
+    window.models_view.model_selected.emit("vosk-ru-small")
 
     # Should still write config and not crash.
-    assert ("whisper", "model", "whisper-base") in config.writes
+    assert ("whisper", "model", "vosk-ru-small") in config.writes
 
 
 def test_controller_locks_models_view_when_state_not_idle(qtbot):
