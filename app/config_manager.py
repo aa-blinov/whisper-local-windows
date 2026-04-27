@@ -230,7 +230,7 @@ class ConfigManager:
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(tmp, "w", encoding="utf-8") as f:
-                yaml.dump(
+                yaml.safe_dump(
                     self.config, f,
                     allow_unicode=True,
                     default_flow_style=False,
