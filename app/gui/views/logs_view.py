@@ -6,6 +6,7 @@ import html
 from collections import deque
 from typing import Optional
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QTextCursor, QTextOption
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -89,12 +90,16 @@ def _format_record_html(asctime: str, level: str, name: str, message: str) -> st
     return "&nbsp;".join(parts)
 
 
+SEARCH_DEBOUNCE_MS = 200  # ms to wait after the last keystroke before re-rendering
+
+
 class LogsView(QWidget):
     DEFAULT_MAX_LINES = 5000
 
     def __init__(
         self,
         max_lines: int = DEFAULT_MAX_LINES,
+        search_debounce_ms: int = SEARCH_DEBOUNCE_MS,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -109,6 +114,14 @@ class LogsView(QWidget):
         self._records: deque[tuple[str, str, str, str]] = deque(
             maxlen=self._max_lines
         )
+
+        # Debounce timer — fires _rerender() once after the user stops
+        # typing.  Without this, every keystroke triggers a full clear +
+        # re-append of up to 5 000 HTML lines.
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(search_debounce_ms)
+        self._search_timer.timeout.connect(self._rerender)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 22, 28, 22)
@@ -183,7 +196,9 @@ class LogsView(QWidget):
 
     def _on_search_changed(self, text: str) -> None:
         self._search_query = text.lower().strip()
-        self._rerender()
+        # Restart the debounce timer — if the user is still typing the
+        # previous countdown is cancelled and a fresh one begins.
+        self._search_timer.start()
 
     def _record_visible(self, record: tuple[str, str, str, str]) -> bool:
         _asctime, level, name, message = record

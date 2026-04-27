@@ -170,7 +170,8 @@ def test_logs_search_filters_buffered_records(qtbot):
     from PySide6.QtWidgets import QLineEdit, QPlainTextEdit
     from app.gui.views.logs_view import LogsView
 
-    view = LogsView()
+    # search_debounce_ms=0 so the timer fires on the next event-loop tick
+    view = LogsView(search_debounce_ms=0)
     qtbot.addWidget(view)
     view.append_record("12:00:00", "INFO", "app.state_manager", "model loaded")
     view.append_record("12:00:01", "WARNING", "app.audio_recorder", "low gain")
@@ -182,6 +183,7 @@ def test_logs_search_filters_buffered_records(qtbot):
 
     search = view.findChild(QLineEdit, "LogsSearchEdit")
     search.setText("low")
+    qtbot.wait(50)  # allow debounce timer to fire
 
     after = view.findChild(QPlainTextEdit, "LogsTextArea").toPlainText()
     assert "low gain" in after
@@ -189,6 +191,7 @@ def test_logs_search_filters_buffered_records(qtbot):
     assert "transcribed" not in after
 
     search.setText("")
+    qtbot.wait(50)
     restored = view.findChild(QPlainTextEdit, "LogsTextArea").toPlainText()
     assert "model loaded" in restored
     assert "transcribed" in restored
@@ -198,16 +201,87 @@ def test_logs_search_matches_logger_name(qtbot):
     from PySide6.QtWidgets import QLineEdit, QPlainTextEdit
     from app.gui.views.logs_view import LogsView
 
-    view = LogsView()
+    view = LogsView(search_debounce_ms=0)
     qtbot.addWidget(view)
     view.append_record("12:00:00", "INFO", "app.state_manager", "alpha")
     view.append_record("12:00:01", "INFO", "app.audio_recorder", "beta")
 
     search = view.findChild(QLineEdit, "LogsSearchEdit")
     search.setText("audio")
+    qtbot.wait(50)
     text = view.findChild(QPlainTextEdit, "LogsTextArea").toPlainText()
     assert "beta" in text
     assert "alpha" not in text
+
+
+# ---- Debounce ---------------------------------------------------------------
+
+
+def test_logs_search_debounce_does_not_rerender_immediately(qtbot):
+    """After typing, the textbox must NOT be filtered until the debounce
+    timer fires.  Every keystroke rebuilding 5 000 HTML lines is the
+    bug we're fixing."""
+    from app.gui.views.logs_view import LogsView
+
+    DEBOUNCE_MS = 120
+    view = LogsView(search_debounce_ms=DEBOUNCE_MS)
+    qtbot.addWidget(view)
+
+    view.append_record("12:00:00", "INFO", "app.state_manager", "hello world")
+    view.append_record("12:00:01", "INFO", "app.state_manager", "other line")
+
+    # Simulate keystroke — timer is now armed but hasn't fired yet.
+    view._on_search_changed("hello")
+
+    # Immediately after: both records must still be visible (no rerender yet).
+    assert "other line" in view._text.toPlainText(), (
+        "_rerender must not fire synchronously on each keystroke"
+    )
+
+    # After the debounce window: only the matching record should survive.
+    qtbot.wait(DEBOUNCE_MS + 60)
+    assert "other line" not in view._text.toPlainText()
+    assert "hello world" in view._text.toPlainText()
+
+
+def test_logs_search_debounce_rapid_keystrokes_single_rerender(qtbot):
+    """Five rapid keystrokes must produce exactly one rerender, not five.
+
+    We verify this by checking that the textbox stays unfiltered right up
+    until the debounce window, then filters correctly in one shot.
+    """
+    from app.gui.views.logs_view import LogsView
+
+    DEBOUNCE_MS = 120
+    view = LogsView(search_debounce_ms=DEBOUNCE_MS)
+    qtbot.addWidget(view)
+
+    for i in range(20):
+        view.append_record("12:00:00", "INFO", "app.x", f"msg {i}")
+
+    # Simulate rapid typing — each call restarts the timer.
+    for prefix in ("e", "er", "err", "erro", "error"):
+        view._on_search_changed(prefix)
+
+    # Still unfiltered (timer keeps being restarted, hasn't fired).
+    assert view._text.toPlainText() != "", (
+        "Rapid keystrokes must not rerender until the debounce fires"
+    )
+
+    # Wait for the debounce to settle.
+    qtbot.wait(DEBOUNCE_MS + 60)
+    # "error" query matches nothing in "msg N" → textbox should be empty.
+    assert view._text.toPlainText().strip() == ""
+
+
+def test_logs_search_debounce_timer_is_single_shot(qtbot):
+    """The debounce QTimer must be single-shot so it doesn't keep
+    re-rendering the log on a fixed interval after the user stops typing."""
+    from app.gui.views.logs_view import LogsView
+
+    view = LogsView()
+    qtbot.addWidget(view)
+    assert view._search_timer.isSingleShot()
 
 
 def test_logs_clear_drops_buffered_records(qtbot):
