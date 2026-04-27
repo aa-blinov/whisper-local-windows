@@ -148,20 +148,20 @@ class RecordingController(QObject):
         backend = getattr(self._state_manager, "backend", None)
         if backend is None:
             self.file_transcription_failed.emit(
-                path, "Бэкенд недоступен.",
+                path, "Backend unavailable.",
             )
             return
         if not getattr(backend, "health_check", lambda: False)():
             self.file_transcription_failed.emit(
                 path,
-                "Модель ещё не готова — дождитесь окончания загрузки.",
+                "Model isn't ready yet — wait for it to finish loading.",
             )
             return
         target = getattr(backend, "transcribe_file", None)
         if target is None:
             self.file_transcription_failed.emit(
                 path,
-                "Бэкенд не поддерживает транскрипцию файлов.",
+                "This backend doesn't support file transcription.",
             )
             return
 
@@ -175,8 +175,8 @@ class RecordingController(QObject):
             if not text:
                 self.file_transcription_failed.emit(
                     path,
-                    "Распознавание вернуло пустой результат — "
-                    "возможно, файл повреждён или модель не услышала речь.",
+                    "Transcription returned an empty result — "
+                    "the file may be corrupt or the model didn't hear any speech.",
                 )
                 return
             self.file_transcribed.emit(path, text)

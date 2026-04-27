@@ -224,7 +224,7 @@ def test_main_window_ctrl_n_shortcuts_switch_tabs(qtbot):
     window.show()
 
     nav_keys = list(window.sidebar.items())
-    target_keys = ["models", "transcribe", "shortcuts", "history", "logs"]
+    target_keys = ["models", "transcribe", "history", "logs", "shortcuts"]
 
     for index, expected_key in enumerate(target_keys[: len(nav_keys)]):
         # Find the QShortcut that matches Ctrl+{index+1} and trigger it.

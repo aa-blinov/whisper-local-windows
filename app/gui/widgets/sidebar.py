@@ -24,9 +24,9 @@ NavItem = Tuple[str, str]
 _DEFAULT_ITEMS: tuple[NavItem, ...] = (
     ("models", "Models"),
     ("transcribe", "Transcribe"),
-    ("shortcuts", "Settings"),
     ("history", "History"),
     ("logs", "Logs"),
+    ("shortcuts", "Settings"),
 )
 # Filename (without ``.svg``) inside ``app/gui/styles/icons/`` for
 # each nav key. Heroicons (outline, 24×24) — line-style works at

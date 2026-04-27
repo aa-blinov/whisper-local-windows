@@ -81,7 +81,7 @@ class TranscribeView(QWidget):
         root.setSpacing(16)
 
         self._drop_zone = QLabel(
-            "Перетащите аудиофайл сюда — или нажмите Browse",
+            "Drop an audio or video file here — or click Browse",
             self,
         )
         self._drop_zone.setObjectName("TranscribeDropZone")
@@ -122,7 +122,7 @@ class TranscribeView(QWidget):
         self._transcript.setObjectName("TranscribeOutput")
         self._transcript.setReadOnly(True)
         self._transcript.setPlaceholderText(
-            "Здесь появится распознанный текст…"
+            "The transcript will appear here…"
         )
 
         root.addWidget(self._drop_zone)
@@ -150,7 +150,7 @@ class TranscribeView(QWidget):
         self._browse_btn.setEnabled(False)
         self._status_label.setVisible(True)
         self._status_label.setText(
-            f"Распознаю {Path(file_path).name}…"
+            f"Transcribing {Path(file_path).name}…"
         )
         self._status_label.setProperty("status", "busy")
         self._set_state(self._STATE_BUSY)
@@ -163,9 +163,9 @@ class TranscribeView(QWidget):
         self._save_btn.setEnabled(has_text)
         self._browse_btn.setEnabled(True)
         self._status_label.setText(
-            "Готово."
+            "Done."
             if has_text
-            else "Распознано пустое — модель не услышала речь."
+            else "Empty transcript — the model didn't hear any speech."
         )
         self._status_label.setProperty(
             "status", "done" if has_text else "warning"
@@ -179,7 +179,7 @@ class TranscribeView(QWidget):
         self._save_btn.setEnabled(False)
         self._browse_btn.setEnabled(True)
         self._status_label.setVisible(True)
-        self._status_label.setText(f"Ошибка: {message}")
+        self._status_label.setText(f"Error: {message}")
         self._status_label.setProperty("status", "error")
         self._set_state(self._STATE_ERROR)
 
@@ -240,9 +240,9 @@ class TranscribeView(QWidget):
         glob = " ".join(f"*{ext}" for ext in _AUDIO_EXTS)
         path, _selected = QFileDialog.getOpenFileName(
             self,
-            "Выберите аудиофайл",
+            "Choose an audio or video file",
             "",
-            f"Аудио ({glob});;Все файлы (*.*)",
+            f"Audio / video ({glob});;All files (*.*)",
         )
         if path:
             self.file_dropped.emit(path)
@@ -255,7 +255,7 @@ class TranscribeView(QWidget):
             return
         QApplication.clipboard().setText(text)
         self.copy_requested.emit()
-        self._status_label.setText("Скопировано в буфер обмена.")
+        self._status_label.setText("Copied to clipboard.")
         self._status_label.setProperty("status", "done")
 
     def _on_save_clicked(self) -> None:
@@ -275,9 +275,9 @@ class TranscribeView(QWidget):
         )
         path, _selected = QFileDialog.getSaveFileName(
             self,
-            "Сохранить транскрипт",
+            "Save transcript",
             suggested,
-            "Text (*.txt);;Все файлы (*.*)",
+            "Text (*.txt);;All files (*.*)",
         )
         if not path:
             return
@@ -285,11 +285,11 @@ class TranscribeView(QWidget):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(text)
         except OSError as exc:
-            self._status_label.setText(f"Не удалось сохранить: {exc}")
+            self._status_label.setText(f"Save failed: {exc}")
             self._status_label.setProperty("status", "error")
             return
         self.save_requested.emit(path)
-        self._status_label.setText(f"Сохранено: {path}")
+        self._status_label.setText(f"Saved: {path}")
         self._status_label.setProperty("status", "done")
 
     def _set_state(self, state: str) -> None:

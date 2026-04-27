@@ -941,13 +941,13 @@ class AppController(QObject):
         view.set_busy(path)
         if self._recording is None:
             view.set_error(
-                "Запись не инициализирована — попробуйте перезапустить приложение."
+                "Recording stack isn't initialised — try restarting the app."
             )
             return
         target = getattr(self._recording, "transcribe_file_async", None)
         if target is None:
             view.set_error(
-                "Текущая сборка не умеет транскрибировать файлы."
+                "This build doesn't support file transcription."
             )
             return
         # Connect once, lazily — multiple connects from repeated picks
