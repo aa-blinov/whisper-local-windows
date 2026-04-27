@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="description" content="Lazy to Text — local Whisper / GigaAM / Parakeet speech-to-text for Windows with global hotkeys, per-model inference settings, and a Qt UI." />
+<meta name="description" content="Lazy to Text — local ONNX speech-to-text for Windows with global hotkeys, file drag-drop transcription, per-model inference settings, and a Qt UI." />
 <meta name="theme-color" content="#0f1115" />
-<title>Lazy to Text — local speech-to-text for Windows</title>
+<title>Lazy to Text — local ONNX speech-to-text for Windows</title>
 <link rel="icon" type="image/png" href="favicon.png" />
 <link rel="icon" type="image/x-icon" href="favicon.ico" />
 <link rel="stylesheet" href="style.css" />
@@ -18,8 +18,8 @@
       <a href="#why">Why</a>
       <a href="#features">Features</a>
       <a href="#screenshots">Screenshots</a>
+      <a href="#models">Models</a>
       <a href="#install">Install</a>
-      <a href="#roadmap">Roadmap</a>
       <a class="nav__cta" href="https://github.com/aa-blinov/lazy-to-text" target="_blank" rel="noopener">GitHub</a>
     </nav>
   </div>
@@ -28,13 +28,14 @@
 <main id="top">
   <section class="hero">
     <div class="container hero__inner">
-      <span class="hero__pill">Windows · MIT · Local-first · Whisper · GigaAM · Parakeet</span>
+      <span class="hero__pill">Windows · MIT · Local-first · ONNX Runtime · GPU + CPU fallback</span>
       <h1 class="hero__title">Press a hotkey, speak, paste.</h1>
       <p class="hero__sub">
-        Lazy to Text records audio on a global keyboard shortcut, transcribes it locally
-        through faster-whisper, Sber's GigaAM, or NVIDIA's Parakeet TDT v3 running in-process,
-        and pastes the result into whatever window has focus. No cloud round-trip,
-        no subscription, no telemetry.
+        Lazy to Text records audio on a global keyboard shortcut, transcribes it
+        locally through ONNX Runtime, and pastes the result into whatever
+        window has focus. A second tab transcribes audio / video files —
+        WAV, MP3, FLAC, OGG, M4A, MP4, MOV, MKV, WebM and friends. No cloud
+        round-trip, no subscription, no telemetry.
       </p>
       <div class="hero__ctas">
         <a class="button button--primary" href="https://github.com/aa-blinov/lazy-to-text" target="_blank" rel="noopener">View on GitHub</a>
@@ -54,9 +55,9 @@
           <h3 class="card__title">Audio stays on your machine</h3>
           <p class="card__body">
             Recording, encoding, and inference all happen in-process.
-            Model weights download once from Hugging Face / Sber's CDN
-            and live in your local cache. The internet is never
-            involved during transcription.
+            Model weights download once from Hugging Face and live in
+            your local cache. The internet is never involved during
+            transcription.
           </p>
         </article>
         <article class="card">
@@ -68,12 +69,11 @@
           </p>
         </article>
         <article class="card">
-          <h3 class="card__title">No usage limits</h3>
+          <h3 class="card__title">Lean install</h3>
           <p class="card__body">
-            One-time setup, then transcribe as much as you want. No API
-            keys, quotas, or per-minute billing. Long-form captures over
-            25 s route through pyannote VAD on GigaAM and Silero VAD on
-            Whisper, no length cap on Whisper.
+            Single ONNX inference path — no PyTorch, no NeMo, no
+            CTranslate2. The exe folder lands at ~700 MB instead of
+            the 6–8 GB the multi-engine builds used to need.
           </p>
         </article>
       </div>
@@ -85,14 +85,53 @@
       <h2 class="section__title">Features</h2>
       <div class="grid grid--3">
         <article class="card">
-          <h3 class="card__title">Three engines, one Protocol</h3>
+          <h3 class="card__title">One inference path, nine models</h3>
           <p class="card__body">
-            faster-whisper for multilingual capture, GigaAM (Sber) for
-            best-in-class Russian, NVIDIA NeMo for Parakeet TDT v3
-            (25 European languages incl. Russian). A
-            <code>RoutedBackend</code> facade picks the engine per
-            model and rebuilds the inner backend transparently when
-            you swap families.
+            Whisper, GigaAM v3, Parakeet TDT v3, Canary, T-One, Vosk RU
+            — all loaded by the same <code>OnnxAsrBackend</code> on
+            <code>onnxruntime-gpu</code>. Adding a tenth model is a
+            registry entry, not a new dependency tree.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Global hotkey dictation</h3>
+          <p class="card__body">
+            <kbd>Ctrl</kbd>+<kbd>F2</kbd> records,
+            <kbd>Ctrl</kbd>+<kbd>F3</kbd> stops + transcribes + pastes,
+            <kbd>Ctrl</kbd>+<kbd>F6</kbd> discards.
+            <kbd>Ctrl</kbd>+<kbd>1</kbd>..<kbd>5</kbd> jump between tabs.
+            Every hotkey is remappable in Settings; edits persist on
+            focus loss with no Save button.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">File transcription</h3>
+          <p class="card__body">
+            Separate Transcribe tab accepts drag-drop or Browse.
+            <code>soundfile</code> handles WAV / FLAC / OGG / OPUS /
+            AIFF natively; bundled static <code>ffmpeg</code> covers
+            MP3 / M4A / AAC / WMA / MP4 / MOV / MKV / WebM / AVI /
+            FLV / 3GP. No system-wide ffmpeg install required.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">Russian-strong lineup</h3>
+          <p class="card__body">
+            GigaAM v3 (CTC + RNN-T, both with built-in punctuation),
+            T-One (Conformer trained on 80k hours of speech, beats
+            Whisper on telephony / noisy audio), Vosk RU (30 / 50 MB
+            Zipformers for low-spec laptops), plus Parakeet and
+            Canary for multilingual coverage that includes Russian.
+          </p>
+        </article>
+        <article class="card">
+          <h3 class="card__title">GPU with auto CPU fallback</h3>
+          <p class="card__body">
+            Backend tries CUDA / TensorRT first; if no compatible NVIDIA
+            driver is present, it silently retries on CPU and keeps
+            running. Vosk and T-One are usable on CPU; the larger
+            Whisper / Parakeet / Canary models benefit from a GPU but
+            don't require one.
           </p>
         </article>
         <article class="card">
@@ -101,36 +140,8 @@
             Each Whisper card surfaces an inline panel — language, VAD
             filter, beam size, temperature, initial prompt — persisted
             per alias and pushed live into the running backend. No
-            restart needed. GigaAM and Parakeet cards have a smaller
-            panel matching their narrower API surface.
-          </p>
-        </article>
-        <article class="card">
-          <h3 class="card__title">11 model presets, 6 families</h3>
-          <p class="card__body">
-            Whisper Distil / Turbo (fp16+int8) / Large v3
-            (fp16+int8), Russian fine-tunes, GigaAM v3 e2e CTC + RNN-T
-            (with built-in punctuation), and NVIDIA Parakeet TDT v3
-            (multilingual). Family chips on each card colour-code the
-            lineage.
-          </p>
-        </article>
-        <article class="card">
-          <h3 class="card__title">Global hotkey</h3>
-          <p class="card__body">
-            <kbd>Ctrl</kbd>+<kbd>F2</kbd> starts recording,
-            <kbd>Ctrl</kbd>+<kbd>F3</kbd> stops and transcribes. Both
-            remappable in the Settings tab. <kbd>Ctrl</kbd>+<kbd>1</kbd>..<kbd>4</kbd>
-            jump between tabs.
-          </p>
-        </article>
-        <article class="card">
-          <h3 class="card__title">Auto-paste</h3>
-          <p class="card__body">
-            The transcribed text drops into the foreground window via
-            simulated keystrokes. A bottom-right toast confirms with a
-            preview so you can tell at a glance the run succeeded.
-            Toggle off for clipboard-only behaviour.
+            restart needed. Parakeet / GigaAM / T-One / Vosk panels
+            match their narrower API surface.
           </p>
         </article>
         <article class="card">
@@ -138,63 +149,63 @@
           <p class="card__body">
             Topbar widget tracks CPU / RAM / GPU utilisation / VRAM in
             real time via <code>psutil</code> + <code>nvidia-ml-py</code>.
-            Bars colour-code green / amber / red as load climbs.
+            Bars colour-code green / amber / red as load climbs. The
+            GPU bar hides gracefully on machines without an NVIDIA
+            driver.
           </p>
         </article>
         <article class="card">
           <h3 class="card__title">Live VU meter</h3>
           <p class="card__body">
             A <code>STATUS · Idle / Recording / Processing</code> chip
-            in the sidebar's bottom-left corner mirrors the topbar's
-            resource cards; the live VU bar under it animates while
-            recording, so silent or muted mics show up immediately.
+            in the sidebar's bottom-left corner mirrors the topbar
+            cards; the VU bar under it animates while recording, so
+            silent or muted mics show up immediately.
           </p>
         </article>
         <article class="card">
           <h3 class="card__title">Cancel-load button</h3>
           <p class="card__body">
-            Mis-clicked a heavy model card? A red Cancel pill appears
-            next to the loading indicator. One click abandons the
-            in-flight load, rolls back the active card / config /
-            topbar pill, and clears the loading state — no waiting
-            for a stuck import to finish.
+            Mis-clicked a 1.6 GB model? A red Cancel pill appears next
+            to the loading indicator. One click rolls back the active
+            card / config / topbar pill — no waiting for the download
+            to finish.
           </p>
         </article>
         <article class="card">
-          <h3 class="card__title">Splash screen on cold start</h3>
+          <h3 class="card__title">Storage card</h3>
           <p class="card__body">
-            When the persisted model is cached, the app pre-loads it
-            in the main thread on a movable splash widget BEFORE the
-            main window appears — so the main window never freezes
-            for the 11–30 s it takes NeMo or torch to import under
-            the GIL.
+            Settings → Storage shows the resolved models folder
+            (overridable), total disk space used by the cache (computed
+            asynchronously), and an Open-folder shortcut to inspect /
+            clean the cache in Explorer.
           </p>
         </article>
         <article class="card">
           <h3 class="card__title">Searchable history</h3>
           <p class="card__body">
             Every transcription is persisted to
-            <code>logs/transcription_history.json</code>, displayed in a
-            filterable table with a hover tooltip showing the full text.
-            Double-click any row for a detail dialog with one-button
-            copy. Export to plain text from the toolbar.
+            <code>logs/transcription_history.json</code>, displayed in
+            a filterable table with hover tooltip and detail dialog
+            on double-click. Export to plain text from the toolbar.
           </p>
         </article>
         <article class="card">
           <h3 class="card__title">Coloured logs view</h3>
           <p class="card__body">
             Records colour-coded by level + logger source, with a
-            "Show network logs" toggle that hides httpx / huggingface_hub
-            noise and a search field that filters the buffer on the fly.
+            "Show network logs" toggle that hides httpx /
+            huggingface_hub noise and a search field that filters the
+            buffer on the fly.
           </p>
         </article>
         <article class="card">
-          <h3 class="card__title">Searchable model browser</h3>
+          <h3 class="card__title">Refresh-rate-aware UI</h3>
           <p class="card__body">
-            A search box plus family-filter chips narrow the grid; an
-            empty-state placeholder shows up if nothing matches.
-            Click a card's <code>↗</code> to jump to the model's
-            Hugging Face / GitHub page.
+            Smooth-scroll animations and the live VU meter detect the
+            primary monitor's refresh rate (60 / 144 / 240 Hz) and
+            tick at native cadence. No more 60 Hz stutter on a 144 Hz
+            display.
           </p>
         </article>
         <article class="card">
@@ -227,8 +238,8 @@
           <figcaption>Models — family-filtered grid with per-model inference settings inline.</figcaption>
         </figure>
         <figure class="shot">
-          <img src="screenshots/shortcuts.png" alt="Settings tab — three cards (Audio input, Hotkeys, Clipboard) with a Test microphone button and result readout." loading="lazy" />
-          <figcaption>Settings — auto-saving fields grouped into themed cards, with a microphone test.</figcaption>
+          <img src="screenshots/transcribe.png" alt="Transcribe tab — drop zone with format hint, Browse button, transcript output, Copy / Save .txt buttons." loading="lazy" />
+          <figcaption>Transcribe — drag-drop or Browse, transcript appears in the read-only panel.</figcaption>
         </figure>
         <figure class="shot">
           <img src="screenshots/history.png" alt="History tab — searchable table with sample transcriptions, alias-displayed model column, full-text tooltip, and Copy / Export / Clear buttons." loading="lazy" />
@@ -238,17 +249,57 @@
           <img src="screenshots/logs.png" alt="Logs tab showing colour-coded log lines with a search field and a Show network logs toggle." loading="lazy" />
           <figcaption>Logs — colour-coded by level, network noise hidden by default, searchable.</figcaption>
         </figure>
+        <figure class="shot">
+          <img src="screenshots/shortcuts.png" alt="Settings tab — Audio input, Hotkeys, Clipboard, and Storage cards with Test microphone and Open-folder buttons." loading="lazy" />
+          <figcaption>Settings — auto-saving fields grouped into themed cards plus a Storage card with disk-usage readout.</figcaption>
+        </figure>
       </div>
     </div>
   </section>
 
-  <section id="install" class="section">
+  <section id="models" class="section">
+    <div class="container">
+      <h2 class="section__title">Models</h2>
+      <p class="section__lede">
+        Every model is an ONNX export downloaded from Hugging Face on
+        first use. Click <strong>Download</strong> on a card to fetch
+        weights into the configured storage folder.
+      </p>
+      <div class="model-table-wrap">
+        <table class="model-table">
+          <thead>
+            <tr>
+              <th>Alias</th>
+              <th>HF repo</th>
+              <th>Size</th>
+              <th>Languages</th>
+              <th>Best for</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>whisper-large-v3-turbo</code></td><td><code>onnx-community/whisper-large-v3-turbo</code></td><td>1.6 GB</td><td>multilingual</td><td>universal pick</td></tr>
+            <tr><td><code>whisper-large-v3</code></td><td><code>onnx-community/whisper-large-v3</code></td><td>3.1 GB</td><td>multilingual</td><td>best raw quality</td></tr>
+            <tr><td><code>gigaam-v3-ctc</code></td><td><code>istupakov/gigaam-v3-onnx</code></td><td>260 MB</td><td>RU only</td><td>fast Russian dictation</td></tr>
+            <tr><td><code>gigaam-v3-rnnt</code></td><td><code>istupakov/gigaam-v3-onnx</code></td><td>290 MB</td><td>RU only</td><td>best Russian quality</td></tr>
+            <tr><td><code>t-one</code></td><td><code>t-tech/T-one</code></td><td>290 MB</td><td>RU only</td><td>noisy / telephony Russian</td></tr>
+            <tr><td><code>vosk-ru-small</code></td><td><code>alphacep/vosk-model-small-ru</code></td><td>30 MB</td><td>RU only</td><td>low-spec laptop CPU</td></tr>
+            <tr><td><code>vosk-ru</code></td><td><code>alphacep/vosk-model-ru</code></td><td>50 MB</td><td>RU only</td><td>balanced CPU choice</td></tr>
+            <tr><td><code>parakeet-tdt-v3</code></td><td><code>istupakov/parakeet-tdt-0.6b-v3-onnx</code></td><td>1.2 GB</td><td>25 langs incl. Russian</td><td>fastest multilingual</td></tr>
+            <tr><td><code>canary-1b-v2</code></td><td><code>istupakov/canary-1b-v2-onnx</code></td><td>2.0 GB</td><td>25 langs incl. Russian</td><td>short-utterance accuracy</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="install" class="section section--alt">
     <div class="container">
       <h2 class="section__title">Install</h2>
       <p class="section__lede">
-        Requires Windows 10/11, Python 3.12, and a microphone. A CUDA-capable
-        GPU is optional but strongly recommended — every preset in the
-        registry now is either a Large-class Whisper variant or GigaAM v3.
+        Requires Windows 10 / 11, Python 3.12, and a microphone. A
+        CUDA-capable GPU is recommended for the larger models
+        (Whisper Large, Parakeet, Canary). Vosk and T-One run
+        comfortably on CPU.
       </p>
       <pre class="code"><code>git clone https://github.com/aa-blinov/lazy-to-text.git
 cd lazy-to-text
@@ -260,7 +311,8 @@ uv run lazy-to-text-ui        # launch the app</code></pre>
         Models tab and click <strong>Download</strong>. Press
         <kbd>Ctrl</kbd>+<kbd>F2</kbd>, speak,
         <kbd>Ctrl</kbd>+<kbd>F3</kbd>; the transcript pastes into the
-        focused window and a confirmation banner pops up.
+        focused window. Or drop a file on the Transcribe tab to
+        process audio / video from disk.
       </p>
       <div class="reqs">
         <div class="reqs__col">
@@ -275,40 +327,39 @@ uv run lazy-to-text-ui        # launch the app</code></pre>
         <div class="reqs__col">
           <h4>VRAM by model</h4>
           <ul>
-            <li>GigaAM v3 e2e CTC — 2 GB</li>
-            <li>GigaAM v3 e2e RNN-T — 2.5 GB</li>
-            <li>Parakeet TDT v3 (multilingual) — 3 GB</li>
-            <li>Whisper Turbo (int8) — 3.5 GB</li>
-            <li>Whisper Distil / Turbo (fp16) — 5–6 GB</li>
-            <li>Whisper Large v3 (int8) — 5 GB</li>
-            <li>Whisper Large v3 (fp16) — 10 GB</li>
+            <li>Vosk RU small / RU — 0.5 / 1 GB</li>
+            <li>GigaAM v3 CTC / RNN-T — 2 / 2.5 GB</li>
+            <li>T-One — 1.5 GB</li>
+            <li>Parakeet TDT v3 — 2 GB</li>
+            <li>Whisper Large v3 Turbo — 4 GB</li>
+            <li>Whisper Large v3 — 6 GB</li>
+            <li>Canary 1B v2 — 4 GB</li>
           </ul>
         </div>
       </div>
     </div>
   </section>
 
-  <section id="roadmap" class="section section--alt">
+  <section id="roadmap" class="section">
     <div class="container">
       <h2 class="section__title">Roadmap</h2>
       <ul class="roadmap">
         <li>Onboarding overlay for first-launch users</li>
         <li>Per-model VRAM forecasting before download</li>
-        <li>Cloud-API backend behind the same <code>TranscriptionBackend</code> Protocol (OpenAI / Groq)</li>
         <li>Light theme + theme switcher</li>
-        <li>System-font detection so we can drop the bundled Inter</li>
+        <li>Word-level timestamps for the file-transcribe view</li>
+        <li>Speaker diarisation (file transcribe → labelled segments)</li>
       </ul>
       <p class="section__note">
-        Done since the previous draft of this page: NVIDIA NeMo /
-        Parakeet TDT v3 multilingual engine, splash screen on cold
-        start, cancel-load button with active-card / config / pill
-        rollback, recording status chip relocated to the sidebar's
-        bottom-left corner, live VU meter, live resource monitor,
-        transcription confirmation toast, GigaAM v3 engine + longform
-        support, distilled / turbo / Russian Whisper presets,
-        per-model inference settings, search + family filter on the
-        model browser, history detail dialog, coloured logs view,
-        sidebar icons + Inter font, smooth pixel scrolling throughout.
+        Done in the latest cycle: ONNX-only refactor (single inference
+        path, all backends collapsed onto <code>onnx-asr</code>);
+        Transcribe tab with drag-drop and bundled ffmpeg; T-One, Vosk
+        RU small / large, Canary 1B v2 added; Storage card with disk
+        usage + Open-folder; refresh-rate-aware smooth-scroll and VU
+        meter (60 / 144 / 240 Hz); cancel-load button; live resource
+        monitor; live VU meter; transcription confirmation toast;
+        searchable history with detail dialog; coloured logs view;
+        smooth pixel scrolling everywhere.
       </p>
     </div>
   </section>
