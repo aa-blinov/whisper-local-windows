@@ -203,15 +203,14 @@ class StateManager:
         finally:
             self.logger.debug("[Pipeline] Enter finally block")
             
-            # Explicitly free audio data memory
-            try:
-                if audio_data is not None:
-                    del audio_data
-                    import gc
-                    gc.collect()
-                    self.logger.debug("[Pipeline] Audio data memory freed")
-            except Exception as e:
-                self.logger.debug(f"[Pipeline] Failed to free audio memory: {e}")
+            # Release the audio buffer. CPython's reference counting frees
+            # the numpy array immediately when the refcount hits zero —
+            # gc.collect() is only needed for cyclic references, which a
+            # plain float32 buffer cannot have, so the explicit sweep was
+            # just wasting 100-300 ms walking the entire object graph
+            # (including loaded model weights) after every transcription.
+            if audio_data is not None:
+                del audio_data
             
             with self._state_lock:
                 self.is_processing = False
