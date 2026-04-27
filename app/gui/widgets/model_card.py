@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
@@ -35,7 +35,39 @@ from app.gui.widgets.nemo_inference_settings_panel import (
 )
 from app.inference_settings import InferenceSettings, NemoInferenceSettings
 from app.model_mapping import ModelInfo, model_url
-from app.utils import is_cached_for_info
+
+
+class _CacheWorkerSignals(QObject):
+    """Signals carrier for ``_CacheCheckWorker``.
+
+    ``QRunnable`` cannot itself hold signals (it doesn't inherit
+    ``QObject``), so the canonical PySide6 pattern is a tiny
+    ``QObject`` companion created on the main thread — Qt then
+    routes the emitted signal back via a queued connection.
+    """
+
+    result = Signal(bool)  # True → model is cached on disk
+
+
+class _CacheCheckWorker(QRunnable):
+    """Run ``is_cached_for_info`` in a thread-pool thread.
+
+    Emits ``signals.result`` with the boolean outcome so the card can
+    update its button label and delete-button visibility without ever
+    blocking the Qt main thread on filesystem calls.
+    """
+
+    def __init__(self, info: ModelInfo) -> None:
+        super().__init__()
+        self.setAutoDelete(True)
+        self._info = info
+        self.signals = _CacheWorkerSignals()
+
+    def run(self) -> None:  # called by QThreadPool on a worker thread
+        from app.utils import is_cached_for_info  # lazy — gets patched version in tests
+
+        cached = is_cached_for_info(self._info)
+        self.signals.result.emit(cached)
 
 
 def _format_size(size_mb: int) -> str:
@@ -108,6 +140,9 @@ class ModelCard(QFrame):
         # ``_loading_elapsed_s`` is the fallback for cached loads.
         self._loading_progress_text: str = ""
         self._loading_elapsed_s: int = 0
+        # Last result from the async cache check.  None = check not yet
+        # complete; False = not cached; True = cached on disk.
+        self._cached: Optional[bool] = None
 
         self.setObjectName("ModelCard")
         self.setProperty("role", "card")
@@ -282,7 +317,7 @@ class ModelCard(QFrame):
         )
         footer.addWidget(self._delete_btn)
 
-        self._select_btn = QPushButton("Select", self)
+        self._select_btn = QPushButton("Download", self)
         self._select_btn.setObjectName("SelectButton")
         self._select_btn.setProperty("role", "primary")
         # Without NoFocus, clicking puts keyboard focus on the button.
@@ -375,20 +410,37 @@ class ModelCard(QFrame):
         self._hf_warning.setVisible(not _has_hf_token())
 
     def refresh_cache_state(self) -> None:
-        """Recompute whether the underlying model is downloaded and update
-        the action button label (``Download`` vs ``Select``) plus the
-        Delete button's visibility."""
-        cached = is_cached_for_info(self._info)
+        """Schedule an async disk check for this model.
+
+        Launches a ``_CacheCheckWorker`` on Qt's global thread pool so
+        the filesystem walk never blocks the main thread.  When the
+        result arrives, ``_apply_cache_result`` updates the button label
+        and delete-button visibility in one atomic update — one disk
+        check per call instead of two.
+        """
+        worker = _CacheCheckWorker(self._info)
+        worker.signals.result.connect(self._apply_cache_result)
+        QThreadPool.globalInstance().start(worker)
+
+    def _apply_cache_result(self, cached: bool) -> None:
+        """Slot — called on the main thread by the queued connection
+        when the thread-pool worker has finished its disk check."""
+        self._cached = cached
         self._select_btn.setText("Select" if cached else "Download")
         self._refresh_delete_visibility()
 
     def _refresh_delete_visibility(self) -> None:
-        """Delete is shown only when (a) weights are on disk, (b) the
-        card isn't currently the active model — yanking the cache out
-        from under a loaded backend would crash the next transcribe —
-        and (c) we aren't mid-load, when the cache state is undefined.
+        """Update Delete button visibility from the last known cache state.
+
+        Uses ``self._cached`` — set by the async worker — so this method
+        never touches the filesystem.  Called from ``_apply_cache_result``,
+        ``set_active``, and ``set_loading`` to keep the button in sync
+        whenever active/loading state changes.
+
+        Delete is shown only when (a) weights are on disk, (b) the card
+        isn't currently the active model, and (c) we aren't mid-load.
         """
-        cached = is_cached_for_info(self._info)
+        cached = self._cached or False  # None → unknown → treat as not cached
         self._delete_btn.setVisible(
             cached and not self._active and not self._loading
         )

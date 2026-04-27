@@ -198,6 +198,136 @@ def test_model_card_badges_carry_category_attribute(qtbot):
     assert cats == {"speed", "quality", "size", "vram", "compute", "lang"}
 
 
+# ---------------------------------------------------------------------------
+# Async cache check tests
+# ---------------------------------------------------------------------------
+
+def test_refresh_cache_state_not_called_on_main_thread(qtbot, monkeypatch):
+    """is_cached_for_info must run in a thread-pool thread, not the main thread."""
+    import threading
+    from app.gui.widgets.model_card import ModelCard
+
+    main_id = threading.get_ident()
+    worker_thread_ids: list[int] = []
+
+    def mock_cached(info):
+        worker_thread_ids.append(threading.get_ident())
+        return False
+
+    monkeypatch.setattr("app.utils.is_cached_for_info", mock_cached)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    # Drain the __init__ worker then clear
+    qtbot.wait(300)
+    worker_thread_ids.clear()
+
+    card.refresh_cache_state()
+    qtbot.wait(300)
+
+    assert len(worker_thread_ids) == 1
+    assert worker_thread_ids[0] != main_id, "is_cached_for_info ran on the Qt main thread"
+
+
+def test_refresh_cache_state_calls_is_cached_exactly_once(qtbot, monkeypatch):
+    """Each refresh_cache_state() triggers exactly one disk check, not two."""
+    from app.gui.widgets.model_card import ModelCard
+
+    call_count: list[int] = []
+
+    monkeypatch.setattr(
+        "app.utils.is_cached_for_info",
+        lambda info: call_count.append(1) or False,
+    )
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    qtbot.wait(300)
+    call_count.clear()
+
+    card.refresh_cache_state()
+    qtbot.wait(300)
+
+    assert len(call_count) == 1, f"Expected 1 disk check, got {len(call_count)}"
+
+
+def test_refresh_cache_state_updates_button_to_select_when_cached(qtbot, monkeypatch):
+    """When the async worker reports the model is on disk, button shows 'Select'."""
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr("app.utils.is_cached_for_info", lambda info: True)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+
+    select_btn = next(
+        b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
+    )
+    qtbot.waitUntil(lambda: select_btn.text() == "Select", timeout=2000)
+
+
+def test_refresh_cache_state_updates_button_to_download_when_not_cached(qtbot, monkeypatch):
+    """When the async worker reports the model is absent, button shows 'Download'."""
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr("app.utils.is_cached_for_info", lambda info: False)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+
+    select_btn = next(
+        b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
+    )
+    qtbot.waitUntil(lambda: select_btn.text() == "Download", timeout=2000)
+
+
+def test_set_active_does_not_hit_disk(qtbot, monkeypatch):
+    """set_active() must reuse the last known cache result — no disk I/O."""
+    from app.gui.widgets.model_card import ModelCard
+
+    call_count: list[int] = []
+
+    monkeypatch.setattr(
+        "app.utils.is_cached_for_info",
+        lambda info: call_count.append(1) or True,
+    )
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    qtbot.wait(300)  # let __init__ worker settle
+    call_count.clear()
+
+    card.set_active(True)
+    card.set_active(False)
+    qtbot.wait(100)
+
+    assert len(call_count) == 0, "set_active() triggered unexpected disk I/O"
+
+
+def test_set_loading_does_not_hit_disk(qtbot, monkeypatch):
+    """set_loading() must reuse the last known cache result — no disk I/O."""
+    from app.gui.widgets.model_card import ModelCard
+
+    call_count: list[int] = []
+
+    monkeypatch.setattr(
+        "app.utils.is_cached_for_info",
+        lambda info: call_count.append(1) or True,
+    )
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.set_active(True)
+    qtbot.wait(300)  # let __init__ worker settle
+    call_count.clear()
+
+    card.set_loading(True)
+    card.set_loading(False)
+    qtbot.wait(100)
+
+    assert len(call_count) == 0, "set_loading() triggered unexpected disk I/O"
+
+
 def test_model_card_speed_quality_badges_carry_value_for_styling(qtbot):
     """The QSS ``[cat='speed'][value='fast']`` selector tints fast
     speed badges green; without the ``value`` property nothing
@@ -390,10 +520,9 @@ def test_model_card_inactive_card_ignores_loading(qtbot):
 def test_model_card_button_says_download_when_not_cached(qtbot, monkeypatch):
     """Uncached models advertise the action as 'Download' so the user knows
     the click will fetch weights from the network."""
-    import app.gui.widgets.model_card as model_card_module
     from app.gui.widgets.model_card import ModelCard
 
-    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: False)
+    monkeypatch.setattr("app.utils.is_cached_for_info", lambda info: False)
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
@@ -401,15 +530,14 @@ def test_model_card_button_says_download_when_not_cached(qtbot, monkeypatch):
     select_btn = next(
         b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
     )
-    assert select_btn.text() == "Download"
+    qtbot.waitUntil(lambda: select_btn.text() == "Download", timeout=2000)
 
 
 def test_model_card_button_says_select_when_cached(qtbot, monkeypatch):
     """Once weights are on disk, the action button switches to 'Select'."""
-    import app.gui.widgets.model_card as model_card_module
     from app.gui.widgets.model_card import ModelCard
 
-    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+    monkeypatch.setattr("app.utils.is_cached_for_info", lambda info: True)
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
@@ -417,19 +545,17 @@ def test_model_card_button_says_select_when_cached(qtbot, monkeypatch):
     select_btn = next(
         b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
     )
-    assert select_btn.text() == "Select"
+    qtbot.waitUntil(lambda: select_btn.text() == "Select", timeout=2000)
 
 
 def test_model_card_refresh_cache_state_picks_up_new_state(qtbot, monkeypatch):
     """After a download finishes, calling refresh_cache_state should flip
     the button label without needing to rebuild the card."""
-    import app.gui.widgets.model_card as model_card_module
     from app.gui.widgets.model_card import ModelCard
 
     cache_status = {"cached": False}
     monkeypatch.setattr(
-        model_card_module,
-        "is_cached_for_info",
+        "app.utils.is_cached_for_info",
         lambda info: cache_status["cached"],
     )
 
@@ -438,11 +564,11 @@ def test_model_card_refresh_cache_state_picks_up_new_state(qtbot, monkeypatch):
     select_btn = next(
         b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
     )
-    assert select_btn.text() == "Download"
+    qtbot.waitUntil(lambda: select_btn.text() == "Download", timeout=2000)
 
     cache_status["cached"] = True
     card.refresh_cache_state()
-    assert select_btn.text() == "Select"
+    qtbot.waitUntil(lambda: select_btn.text() == "Select", timeout=2000)
 
 
 def test_model_card_emits_select_signal_with_alias(qtbot):
@@ -488,41 +614,41 @@ def test_model_card_delete_button_hidden_when_not_cached(qtbot, monkeypatch):
     """Nothing to delete → no button. Otherwise the user gets an
     enabled control that does nothing (or worse, fires a confirm
     dialog over an empty cache)."""
-    import app.gui.widgets.model_card as model_card_module
     from app.gui.widgets.model_card import ModelCard
 
-    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: False)
+    monkeypatch.setattr("app.utils.is_cached_for_info", lambda info: False)
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
+    qtbot.wait(300)  # let async worker settle
     assert not _delete_btn(card).isVisible()
 
 
 def test_model_card_delete_button_visible_when_cached_and_inactive(qtbot, monkeypatch):
-    import app.gui.widgets.model_card as model_card_module
     from app.gui.widgets.model_card import ModelCard
 
-    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+    monkeypatch.setattr("app.utils.is_cached_for_info", lambda info: True)
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
     card.show()
     qtbot.waitExposed(card)
-    assert _delete_btn(card).isVisible()
+    qtbot.waitUntil(lambda: _delete_btn(card).isVisible(), timeout=2000)
 
 
 def test_model_card_delete_button_hidden_when_active(qtbot, monkeypatch):
     """Deleting the loaded model would crash the running backend —
     hide the button until the user picks a different active card."""
-    import app.gui.widgets.model_card as model_card_module
     from app.gui.widgets.model_card import ModelCard
 
-    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+    monkeypatch.setattr("app.utils.is_cached_for_info", lambda info: True)
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
     card.show()
     qtbot.waitExposed(card)
+    # Wait for cache check to complete so _cached = True
+    qtbot.waitUntil(lambda: card._cached is True, timeout=2000)
     card.set_active(True)
     assert not _delete_btn(card).isVisible()
 
@@ -531,29 +657,32 @@ def test_model_card_delete_button_hidden_when_loading(qtbot, monkeypatch):
     """Mid-download / mid-deserialise the cache state is undefined —
     hiding Delete avoids confusing the user with a button that might
     succeed or fail depending on timing."""
-    import app.gui.widgets.model_card as model_card_module
     from app.gui.widgets.model_card import ModelCard
 
-    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+    monkeypatch.setattr("app.utils.is_cached_for_info", lambda info: True)
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
     card.show()
     qtbot.waitExposed(card)
+    card.set_active(True)
+    # Wait for cache check to complete so _cached = True
+    qtbot.waitUntil(lambda: card._cached is True, timeout=2000)
     card.set_loading(True)
     assert not _delete_btn(card).isVisible()
 
 
 def test_model_card_delete_button_emits_signal_with_alias(qtbot, monkeypatch):
-    import app.gui.widgets.model_card as model_card_module
     from app.gui.widgets.model_card import ModelCard
 
-    monkeypatch.setattr(model_card_module, "is_cached_for_info", lambda info: True)
+    monkeypatch.setattr("app.utils.is_cached_for_info", lambda info: True)
 
     card = ModelCard(_make_info())
     qtbot.addWidget(card)
     card.show()
     qtbot.waitExposed(card)
+    # Wait until the delete button becomes visible (async cache result arrived)
+    qtbot.waitUntil(lambda: _delete_btn(card).isVisible(), timeout=2000)
 
     with qtbot.waitSignal(card.delete_requested, timeout=1000) as blocker:
         qtbot.mouseClick(_delete_btn(card), Qt.LeftButton)
@@ -564,13 +693,11 @@ def test_model_card_delete_button_emits_signal_with_alias(qtbot, monkeypatch):
 def test_model_card_refresh_cache_state_toggles_delete_visibility(qtbot, monkeypatch):
     """After a Download or Delete completes, the controller calls
     ``refresh_cache_state`` — Delete's visibility must follow."""
-    import app.gui.widgets.model_card as model_card_module
     from app.gui.widgets.model_card import ModelCard
 
     cache_status = {"cached": True}
     monkeypatch.setattr(
-        model_card_module,
-        "is_cached_for_info",
+        "app.utils.is_cached_for_info",
         lambda info: cache_status["cached"],
     )
 
@@ -578,11 +705,11 @@ def test_model_card_refresh_cache_state_toggles_delete_visibility(qtbot, monkeyp
     qtbot.addWidget(card)
     card.show()
     qtbot.waitExposed(card)
-    assert _delete_btn(card).isVisible()
+    qtbot.waitUntil(lambda: _delete_btn(card).isVisible(), timeout=2000)
 
     cache_status["cached"] = False
     card.refresh_cache_state()
-    assert not _delete_btn(card).isVisible()
+    qtbot.waitUntil(lambda: not _delete_btn(card).isVisible(), timeout=2000)
 
 
 # ---- HF token warning (GigaAM only) ----------------------------------------
