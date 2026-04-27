@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -25,6 +25,7 @@ from app.model_mapping import FAMILIES, MODELS, ModelInfo
 
 
 _FILTER_ALL = "All"
+SEARCH_DEBOUNCE_MS = 200  # ms to wait after last keystroke before filtering
 
 
 class ModelsView(QWidget):
@@ -40,6 +41,7 @@ class ModelsView(QWidget):
     def __init__(
         self,
         models: Optional[Sequence[ModelInfo]] = None,
+        search_debounce_ms: int = SEARCH_DEBOUNCE_MS,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -146,7 +148,14 @@ class ModelsView(QWidget):
         self._active_alias: Optional[str] = None
         self._locked = False
         self._search_query: str = ""
+        self._pending_search: str = ""
         self._family_filter: str = _FILTER_ALL
+
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(search_debounce_ms)
+        self._search_timer.timeout.connect(self._apply_search)
+
         self._apply_filter()
 
     def active_alias(self) -> Optional[str]:
@@ -234,7 +243,11 @@ class ModelsView(QWidget):
         ]
 
     def _on_search_changed(self, text: str) -> None:
-        self._search_query = text.lower().strip()
+        self._pending_search = text.lower().strip()
+        self._search_timer.start()  # resets countdown on each keystroke
+
+    def _apply_search(self) -> None:
+        self._search_query = self._pending_search
         self._apply_filter()
 
     def _on_family_chip_clicked(self, label: str) -> None:

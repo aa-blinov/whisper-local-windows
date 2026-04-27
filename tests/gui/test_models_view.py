@@ -277,11 +277,12 @@ def test_models_view_search_filters_by_substring(qtbot):
     from PySide6.QtWidgets import QLineEdit
     from app.gui.views.models_view import ModelsView
 
-    view = ModelsView()
+    view = ModelsView(search_debounce_ms=0)
     qtbot.addWidget(view)
 
     search = view.findChild(QLineEdit, "ModelsSearchEdit")
     search.setText("turbo")
+    qtbot.wait(50)  # let debounce timer fire
 
     aliases = set(view.visible_aliases())
     assert "turbo" in aliases
@@ -297,11 +298,12 @@ def test_models_view_search_matches_canonical_and_language(qtbot):
     from PySide6.QtWidgets import QLineEdit
     from app.gui.views.models_view import ModelsView
 
-    view = ModelsView()
+    view = ModelsView(search_debounce_ms=0)
     qtbot.addWidget(view)
 
     search = view.findChild(QLineEdit, "ModelsSearchEdit")
     search.setText("russian")
+    qtbot.wait(50)
 
     aliases = set(view.visible_aliases())
     assert "large-v3-ru" in aliases
@@ -337,11 +339,12 @@ def test_models_view_no_match_shows_empty_state(qtbot):
     from PySide6.QtWidgets import QLineEdit
     from app.gui.views.models_view import ModelsView
 
-    view = ModelsView()
+    view = ModelsView(search_debounce_ms=0)
     qtbot.addWidget(view)
 
     search = view.findChild(QLineEdit, "ModelsSearchEdit")
     search.setText("definitely-no-such-model")
+    qtbot.wait(50)
 
     assert view.visible_aliases() == []
     assert view._stack.currentWidget() is view._empty_state
@@ -352,11 +355,72 @@ def test_models_view_clearing_search_restores_all_cards(qtbot):
     from app.gui.views.models_view import ModelsView
     from app.model_mapping import MODELS
 
-    view = ModelsView()
+    view = ModelsView(search_debounce_ms=0)
     qtbot.addWidget(view)
 
     search = view.findChild(QLineEdit, "ModelsSearchEdit")
     search.setText("turbo")
-    search.setText("")
+    search.setText("")  # both coalesced by debounce — only "" fires
+    qtbot.wait(50)
 
     assert set(view.visible_aliases()) == {m.alias for m in MODELS}
+
+
+# ---- Search debounce --------------------------------------------------------
+
+
+def test_models_view_search_debounce_does_not_filter_immediately(qtbot):
+    """Typing must not hide cards until the debounce timer fires —
+    without this, every keystroke rebuilds card visibility for all models."""
+    from app.gui.views.models_view import ModelsView
+
+    DEBOUNCE_MS = 120
+    view = ModelsView(search_debounce_ms=DEBOUNCE_MS)
+    qtbot.addWidget(view)
+
+    all_aliases = set(view.visible_aliases())
+    assert len(all_aliases) > 1  # sanity — multiple cards visible
+
+    # Keystroke without waiting.
+    view._on_search_changed("turbo")
+
+    # Immediately after: all cards still visible (filter not yet applied).
+    assert set(view.visible_aliases()) == all_aliases, (
+        "_apply_filter must not fire synchronously on each keystroke"
+    )
+
+    # After debounce fires: only turbo cards survive.
+    qtbot.wait(DEBOUNCE_MS + 60)
+    aliases_after = set(view.visible_aliases())
+    assert "turbo" in aliases_after
+    assert "large-v3" not in aliases_after
+
+
+def test_models_view_search_debounce_rapid_keystrokes_single_filter(qtbot):
+    """Five rapid keystrokes must coalesce into one _apply_filter call."""
+    from app.gui.views.models_view import ModelsView
+
+    DEBOUNCE_MS = 120
+    view = ModelsView(search_debounce_ms=DEBOUNCE_MS)
+    qtbot.addWidget(view)
+
+    all_count = len(view.visible_aliases())
+
+    for prefix in ("t", "tu", "tur", "turb", "turbo"):
+        view._on_search_changed(prefix)
+
+    # Still unfiltered (timer keeps restarting).
+    assert len(view.visible_aliases()) == all_count
+
+    qtbot.wait(DEBOUNCE_MS + 60)
+    # "turbo" query matches only turbo cards.
+    assert len(view.visible_aliases()) < all_count
+
+
+def test_models_view_search_debounce_timer_is_single_shot(qtbot):
+    """Debounce timer must be single-shot so filtering stops after one pass."""
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView()
+    qtbot.addWidget(view)
+    assert view._search_timer.isSingleShot()
