@@ -506,18 +506,22 @@ QPushButton[role="cancel-load"]:pressed {
 
 QScrollBar:vertical {
     background-color: transparent;
-    width: 10px;
-    margin: 4px 2px;
+    width: 12px;
+    margin: 2px 2px 2px 2px;
 }
 
 QScrollBar::handle:vertical {
-    background-color: {{color.border}};
+    background-color: {{color.bg_hover}};
     border-radius: 4px;
-    min-height: 24px;
+    min-height: 32px;
 }
 
 QScrollBar::handle:vertical:hover {
     background-color: {{color.text_muted}};
+}
+
+QScrollBar::handle:vertical:pressed {
+    background-color: {{color.text_secondary}};
 }
 
 QScrollBar::add-line:vertical,
@@ -533,18 +537,22 @@ QScrollBar::sub-page:vertical {
 
 QScrollBar:horizontal {
     background-color: transparent;
-    height: 10px;
-    margin: 2px 4px;
+    height: 12px;
+    margin: 2px 2px 2px 2px;
 }
 
 QScrollBar::handle:horizontal {
-    background-color: {{color.border}};
+    background-color: {{color.bg_hover}};
     border-radius: 4px;
-    min-width: 24px;
+    min-width: 32px;
 }
 
 QScrollBar::handle:horizontal:hover {
     background-color: {{color.text_muted}};
+}
+
+QScrollBar::handle:horizontal:pressed {
+    background-color: {{color.text_secondary}};
 }
 
 QScrollBar::add-line:horizontal,
@@ -650,6 +658,18 @@ QTableView {
     border-radius: {{radius.sm}};
     gridline-color: {{color.border}};
     selection-background-color: {{color.accent}};
+    /* Suppress the per-cell focus rectangle Qt draws by default —
+       the row-selection background already gives the user enough of
+       a "this row is active" cue, the extra dotted border on the
+       focused cell looked like a stray artifact next to the
+       scrollbar. */
+    outline: none;
+}
+
+QTableView:focus {
+    /* Re-state the resting border so the table doesn't flash to
+       a blue 'focused' frame when the user clicks into it. */
+    border: 1px solid {{color.border}};
 }
 
 QHeaderView::section {
