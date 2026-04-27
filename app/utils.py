@@ -98,17 +98,15 @@ def get_project_models_path() -> str:
     - **Installed wheel**: CWD ``/models``.
     - **Dev**: project root ``/models``.
 
-    Used as the default ``HF_HOME`` so faster-whisper /
-    huggingface_hub keep their downloads where ``is_model_cached``
-    can find them. Settings → Storage card lets the user override
-    this path; this is just the default when they haven't.
+    Used as the default ``HF_HOME`` so ``onnx-asr`` / ``huggingface_hub``
+    keep their downloads where ``is_model_cached`` can find them.
+    Settings → Storage card lets the user override this path; this
+    is just the default when they haven't.
 
-    Pure path resolution — no filesystem side effects. ``HF_HOME``
-    consumers (huggingface_hub.snapshot_download, gigaam.load_model)
-    create the directory themselves on first download via their own
-    ``os.makedirs(..., exist_ok=True)``, so probing this function
-    from cache-status code shouldn't seed empty ``models/`` dirs as
-    a side effect.
+    Pure path resolution — no filesystem side effects.
+    ``huggingface_hub.snapshot_download`` creates the directory
+    itself on first download, so probing this function from cache-
+    status code shouldn't seed empty ``models/`` dirs as a side effect.
     """
     if getattr(sys, "frozen", False):
         base = _user_local_data_dir()
@@ -122,9 +120,9 @@ def get_project_models_path() -> str:
 def cached_models_size(root: str) -> int:
     """Sum bytes used by downloaded weights under ``root``.
 
-    Looks at the two subtrees the app manages — ``<root>/hub`` for
-    HF-hosted Whisper models and ``<root>/gigaam`` for GigaAM ckpt
-    files. Returns 0 if neither exists. Used by the Storage card's
+    Walks the ``<root>/hub`` subtree (the HuggingFace cache layout
+    used by every model now that the app is ONNX-only).  Returns 0
+    if the hub directory doesn't exist.  Used by the Storage card's
     migration prompt to show the user how much would move.
 
     Doesn't follow symlinks (``Path.stat`` would resolve them and
@@ -133,22 +131,18 @@ def cached_models_size(root: str) -> int:
     """
     if not root:
         return 0
-    base = Path(root)
-    if not base.is_dir():
+    target = Path(root) / "hub"
+    if not target.is_dir():
         return 0
     total = 0
-    for sub in ("hub", "gigaam"):
-        target = base / sub
-        if not target.is_dir():
+    for path in target.rglob("*"):
+        try:
+            if path.is_file() and not path.is_symlink():
+                total += path.stat().st_size
+        except OSError:
+            # Race or permission error — ignore the file rather
+            # than failing the whole sum.
             continue
-        for path in target.rglob("*"):
-            try:
-                if path.is_file() and not path.is_symlink():
-                    total += path.stat().st_size
-            except OSError:
-                # Race or permission error — ignore the file rather
-                # than failing the whole sum.
-                continue
     return total
 
 
@@ -239,9 +233,8 @@ def get_models_root(configured: Optional[str]) -> str:
     ``<exe-dir>/models`` when frozen).
 
     Used by ``app.py`` at startup to decide what to put into
-    ``HF_HOME`` and ``GIGAAM_MODELS_DIR``. No filesystem side
-    effects — neither branch calls ``mkdir``; HF Hub /
-    GigaAM create the directory themselves on first download.
+    ``HF_HOME``.  No filesystem side effects — neither branch calls
+    ``mkdir``; HF Hub creates the directory itself on first download.
     """
     if configured and configured.strip():
         return configured
@@ -274,37 +267,6 @@ def is_model_cached(canonical: str) -> bool:
         if snap.is_dir() and any(snap.iterdir()):
             return True
     return False
-
-
-def _gigaam_cache_dir() -> Path:
-    """Resolve the GigaAM checkpoint directory.
-
-    Honours ``GIGAAM_MODELS_DIR`` (set by ``app.py`` at startup from
-    the configured ``storage.models_dir``); falls back to the
-    library's own default ``~/.cache/gigaam`` so existing installs
-    keep finding their downloads after upgrading to a build that
-    supports the override.
-    """
-    env_dir = os.environ.get("GIGAAM_MODELS_DIR")
-    if env_dir:
-        return Path(env_dir)
-    return Path.home() / ".cache" / "gigaam"
-
-
-def is_gigaam_cached(model_name: str) -> bool:
-    """Return True if GigaAM has the given model checkpoint on disk.
-
-    GigaAM downloads to ``<cache_dir>/<model_name>.ckpt`` (NOT the HF
-    hub layout) — every weights file lives next to the others as a
-    single ``.ckpt``. Checks the file is present and non-empty.
-    """
-    if not model_name:
-        return False
-    candidate = _gigaam_cache_dir() / f"{model_name}.ckpt"
-    try:
-        return candidate.is_file() and candidate.stat().st_size > 0
-    except OSError:
-        return False
 
 
 def is_onnx_model_cached(canonical: str) -> bool:
@@ -386,31 +348,6 @@ def delete_cached_model(canonical: str) -> bool:
         log.warning(
             "Failed to delete cached model %s at %s: %s",
             canonical, repo_dir, exc,
-        )
-        return False
-    return True
-
-
-def delete_gigaam_cached(model_name: str) -> bool:
-    """Remove the GigaAM checkpoint file for ``model_name``.
-
-    GigaAM keeps every weights file as a single ``.ckpt`` inside
-    ``<cache_dir>`` (configurable via ``GIGAAM_MODELS_DIR``, defaults
-    to ``~/.cache/gigaam``) — no shared blobs, no metadata sidecars
-    to worry about. Returns True iff the file existed and was
-    unlinked.
-    """
-    if not model_name:
-        return False
-    candidate = _gigaam_cache_dir() / f"{model_name}.ckpt"
-    if not candidate.is_file():
-        return False
-    try:
-        candidate.unlink()
-    except OSError as exc:
-        log.warning(
-            "Failed to delete GigaAM checkpoint %s at %s: %s",
-            model_name, candidate, exc,
         )
         return False
     return True

@@ -266,18 +266,13 @@ def _apply_hf_token(configured: Optional[str]) -> bool:
 def _apply_storage_path(configured: Optional[str]) -> str:
     """Resolve and apply the user's chosen models directory to env vars.
 
-    ``HF_HOME`` is always set (faster-whisper / huggingface_hub
-    ignores the system-wide ``~/.cache/huggingface`` only when this is
-    set). ``GIGAAM_MODELS_DIR`` is set ONLY when the user has
-    explicitly picked a custom path — leaving it unset keeps GigaAM
-    on its library default ``~/.cache/gigaam`` so existing installs
-    don't have their already-downloaded ckpt files orphaned by the
-    upgrade. Returns the resolved hub root for logging.
+    Sets ``HF_HOME`` so ``huggingface_hub`` (used by ``onnx-asr``)
+    downloads weights into our managed root instead of the system-
+    wide ``~/.cache/huggingface``.  Returns the resolved hub root
+    for logging.
 
-    Must run before any ``huggingface_hub`` or ``gigaam`` import: HF
-    reads ``HF_HOME`` once at module load, GigaAM doesn't but its
-    ``download_root`` is read per-call so the env var has to be in
-    place by the time ``GigaamBackend.load`` runs.
+    Must run before any ``huggingface_hub`` import: HF reads
+    ``HF_HOME`` once at module load.
     """
     from app.utils import get_models_root
 
@@ -290,11 +285,6 @@ def _apply_storage_path(configured: Optional[str]) -> str:
     # (just uses more disk for duplicated files), so the warning is
     # noise that clutters our Logs view.
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-    is_custom = bool(configured and str(configured).strip())
-    if is_custom:
-        os.environ["GIGAAM_MODELS_DIR"] = str(Path(root) / "gigaam")
-    else:
-        os.environ.pop("GIGAAM_MODELS_DIR", None)
     return root
 
 
@@ -356,10 +346,9 @@ def main() -> int:
     import logging
 
     # Read the configured ``storage.models_dir`` (may be empty for
-    # 'use the default') from config.yaml, then plant ``HF_HOME`` and
-    # ``GIGAAM_MODELS_DIR`` BEFORE the libraries that need them get
-    # imported. ConfigManager itself doesn't pull in HF/torch so we
-    # can safely import it first.
+    # 'use the default') from config.yaml, then plant ``HF_HOME``
+    # BEFORE huggingface_hub gets imported.  ConfigManager itself
+    # doesn't pull in HF so we can safely import it first.
     from app.config_manager import ConfigManager
 
     _early_config = ConfigManager()

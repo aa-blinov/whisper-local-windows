@@ -53,9 +53,8 @@ def _apply_hf_token_to_env(configured: Optional[str]) -> bool:
 
 def _apply_env_for_models_root(configured: str) -> str:
     """Mirror the user's chosen models root into the live process
-    environment so the next ``WhisperModel(download_root=…)`` and
-    ``gigaam.load_model(download_root=…)`` calls pick it up without
-    a restart.
+    environment so the next ``onnx_asr.load_model(...)`` call's
+    ``huggingface_hub`` download picks it up without a restart.
 
     Mirrors the startup logic in ``app.gui.app._apply_storage_path``
     — kept in lockstep so 'change live' and 'apply on next launch'
@@ -67,13 +66,6 @@ def _apply_env_for_models_root(configured: str) -> str:
 
     root = get_models_root(configured)
     _os.environ["HF_HOME"] = root
-    if configured and configured.strip():
-        _os.environ["GIGAAM_MODELS_DIR"] = str(Path(root) / "gigaam")
-    else:
-        # Reset → drop the env override so GigaAM goes back to its
-        # library default ``~/.cache/gigaam`` (and existing-install
-        # ckpt files there stay reachable).
-        _os.environ.pop("GIGAAM_MODELS_DIR", None)
     return root
 
 
@@ -481,12 +473,15 @@ class AppController(QObject):
             if answer == QMessageBox.Yes:
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 try:
-                    for sub in ("hub", "gigaam"):
-                        result = move_cached_dir(
-                            str(Path(old_root) / sub),
-                            str(Path(chosen) / sub),
-                        )
-                        move_outcomes.append((sub, result))
+                    # Single-engine app — only the HF hub subtree
+                    # exists.  The legacy ``gigaam`` subtree (used by
+                    # the old gigaam-Python backend) was retired with
+                    # the ONNX-only refactor.
+                    result = move_cached_dir(
+                        str(Path(old_root) / "hub"),
+                        str(Path(chosen) / "hub"),
+                    )
+                    move_outcomes.append(("hub", result))
                 finally:
                     QApplication.restoreOverrideCursor()
 
