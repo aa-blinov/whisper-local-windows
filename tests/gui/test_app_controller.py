@@ -1157,6 +1157,68 @@ def test_controller_hf_token_clear_button_wipes_config_and_env(
     assert window.shortcuts_view.hf_token() == ""
 
 
+def test_controller_open_storage_folder_uses_os_startfile(qtbot, monkeypatch):
+    """Clicking ``Open folder`` must call ``os.startfile`` with the
+    resolved storage path.  Regression test for a NameError that
+    crashed the click because ``os`` wasn't imported in
+    ``app_controller.py``."""
+    import os as _os
+
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root",
+        lambda v: v or "C:/resolved/default",
+    )
+    captured: list = []
+    monkeypatch.setattr(_os, "startfile", lambda p: captured.append(p))
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_open_requested.emit()
+
+    assert captured == ["C:/resolved/default"], (
+        "expected os.startfile to be called with the resolved path"
+    )
+
+
+def test_controller_open_storage_folder_creates_dir_if_missing(
+    qtbot, monkeypatch, tmp_path,
+):
+    """Brand-new install (cache dir doesn't exist yet): the open-folder
+    handler creates the directory before launching Explorer so the
+    user doesn't get a 'path not found' popup from the OS."""
+    import os as _os
+
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    fresh_dir = tmp_path / "models-fresh"
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda _v: str(fresh_dir)
+    )
+    monkeypatch.setattr(_os, "startfile", lambda p: None)
+
+    assert not fresh_dir.exists()
+
+    AppController(config=config, window=window)
+    window.shortcuts_view.storage_open_requested.emit()
+
+    assert fresh_dir.exists(), (
+        "expected the controller to mkdir before opening Explorer"
+    )
+
+
 def test_controller_storage_reset_clears_config_and_updates_env(
     qtbot, monkeypatch,
 ):

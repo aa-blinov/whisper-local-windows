@@ -100,7 +100,10 @@ class ShortcutsView(QWidget):
 
         hint_wrapper = QWidget(self)
         hint_wrapper_layout = QVBoxLayout(hint_wrapper)
-        hint_wrapper_layout.setContentsMargins(28, 22, 28, 0)
+        # Bottom margin separates the description from the first card
+        # so the text doesn't kiss the card border on scroll — without
+        # this the muted hint visually merged with the dark card frame.
+        hint_wrapper_layout.setContentsMargins(28, 22, 28, 14)
         hint_wrapper_layout.setSpacing(0)
         hint = QLabel(
             "Microphone, global hotkeys, paste behaviour. "
