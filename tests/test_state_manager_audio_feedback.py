@@ -6,7 +6,39 @@ stand-ins to verify just the hotkey acoustic-feedback contract:
   start sound, so the user always hears that their keypress was received.
 """
 
+import importlib.util
+import sys
 from unittest.mock import MagicMock
+
+# Several native / heavy extensions may not be installed in all test
+# environments.  Pre-inject stubs ONLY when the module is genuinely absent
+# so we don't shadow a real installed package on dev machines.
+#
+# ``importlib.util.find_spec`` is used instead of the bare
+# ``if _mod not in sys.modules`` guard to avoid replacing a real
+# (but not-yet-imported) package with a Mock.  For dotted names like
+# ``ruamel.yaml`` the call can raise ``ModuleNotFoundError`` when the
+# parent has already been stubbed (it lacks a real ``__path__``), so we
+# wrap it in a try/except and treat that as "not available".
+def _is_available(name: str) -> bool:
+    if name in sys.modules:
+        return True
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ModuleNotFoundError, AttributeError, ValueError):
+        return False
+
+
+for _mod in (
+    "sounddevice",
+    "ruamel",
+    "ruamel.yaml",
+    "pyperclip",
+    "pynput",
+    "pynput.keyboard",
+):
+    if not _is_available(_mod):
+        sys.modules[_mod] = MagicMock()
 
 
 def _build_state_manager(can_start: bool):
@@ -109,3 +141,44 @@ def test_toggle_does_not_play_start_sound_when_already_recording():
     sm.toggle_recording()
 
     sm.audio_feedback.play_start_sound.assert_not_called()
+
+
+# ---- prewarm-on-model-load tests -------------------------------------------
+
+
+def test_set_model_loading_prewarns_audio_on_completion():
+    """When model loading ends (False after True), prewarm() must be called.
+
+    Windows releases idle audio devices after a few seconds. By the time a
+    model finishes loading the device opened at startup is almost certainly
+    closed. Without a re-warm the first recording-start click after model
+    load is silently dropped.
+    """
+    sm = _build_state_manager(can_start=False)
+    sm.is_model_loading = True   # pretend we were in model_loading
+
+    sm.set_model_loading(False)
+
+    sm.audio_feedback.prewarm.assert_called_once()
+
+
+def test_set_model_loading_does_not_prewarm_when_loading_starts():
+    """Entering model_loading must NOT trigger prewarm — no point warming the
+    device before the backend starts a potentially multi-minute download."""
+    sm = _build_state_manager(can_start=False)
+    sm.is_model_loading = False
+
+    sm.set_model_loading(True)
+
+    sm.audio_feedback.prewarm.assert_not_called()
+
+
+def test_set_model_loading_does_not_prewarm_if_state_unchanged():
+    """Calling set_model_loading(False) when already False must be a no-op
+    (no state change, no prewarm)."""
+    sm = _build_state_manager(can_start=False)
+    sm.is_model_loading = False   # already not loading
+
+    sm.set_model_loading(False)
+
+    sm.audio_feedback.prewarm.assert_not_called()

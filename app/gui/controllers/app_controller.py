@@ -1056,17 +1056,22 @@ class AppController(QObject):
         if self._history is None:
             return
         entries = self._history.get_entries()
-        self._window.history_view.set_entries(entries)
+        if not entries:
+            return
+        # Prepend the newest entry (index 0) without resetting the whole
+        # table model — beginInsertRows preserves scroll position and
+        # selection when the user is reading history while transcribing.
+        max_entries = getattr(self._history, "max_entries", 0)
+        self._window.history_view.prepend_entry(entries[0], max_entries)
         # Pop a confirmation toast for the most recent entry — gives
         # the user a visible "yes, the hotkey worked" moment that
         # was missing from the silent clipboard-paste flow.
-        if entries:
+        try:
+            latest_text = getattr(entries[0], "text", "") or ""
+        except Exception:  # pragma: no cover — defensive
+            latest_text = ""
+        if latest_text:
             try:
-                latest_text = getattr(entries[0], "text", "") or ""
+                self._window.toast.show_message(latest_text)
             except Exception:  # pragma: no cover — defensive
-                latest_text = ""
-            if latest_text:
-                try:
-                    self._window.toast.show_message(latest_text)
-                except Exception:  # pragma: no cover — defensive
-                    pass
+                pass

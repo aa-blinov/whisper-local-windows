@@ -57,6 +57,23 @@ def _format_size(num_bytes: int) -> str:
     return f"{n:.1f} GB"
 
 
+class _SplashScreen(QSplashScreen):
+    """QSplashScreen with two fixes applied:
+
+    1. ``mousePressEvent`` is suppressed — the base class hides the
+       window on any click, which is confusing during a long model load
+       when the user accidentally clicks on the progress text.
+
+    2. Window flags are replaced so the OS renders a real title bar
+       with a minimize button instead of a frameless overlay.
+    """
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        # Deliberately do NOT call super() — QSplashScreen.mousePressEvent
+        # calls hide(), which we want to suppress.
+        event.accept()
+
+
 def make_splash(app_name: str = "Lazy to Text") -> QSplashScreen:
     """Build a small dark-themed splash widget.
 
@@ -96,14 +113,22 @@ def make_splash(app_name: str = "Lazy to Text") -> QSplashScreen:
         painter.drawText(
             24, 70, _SPLASH_W - 48, 24,
             Qt.AlignVCenter | Qt.AlignLeft,
-            "Preparing model… you can move or minimise this window.",
+            "Preparing model…",
         )
     finally:
         painter.end()
 
-    splash = QSplashScreen(pixmap)
-    # Stay-on-top so the user always sees progress; not modal.
-    splash.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+    splash = _SplashScreen(pixmap)
+    # Use a regular window with OS title bar so the user gets a real
+    # minimize button.  QSplashScreen's default Qt.SplashScreen flag
+    # implies Qt.FramelessWindowHint which removes all OS decorations.
+    splash.setWindowFlags(
+        Qt.Window
+        | Qt.WindowStaysOnTopHint
+        | Qt.WindowMinimizeButtonHint
+        | Qt.WindowTitleHint
+    )
+    splash.setWindowTitle(app_name)
     return splash
 
 

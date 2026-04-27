@@ -64,13 +64,21 @@ class AudioFeedback:
             self.logger.info("Audio feedback disabled", extra={'user_message': True})
         else:
             self._validate_sound_files()
-            self._prewarm()
+            self.prewarm()
             self.logger.info("Audio feedback enabled...", extra={'user_message': True})
 
-    def _prewarm(self):
-        """Wake the Windows audio subsystem so the first user-triggered
-        play_*_sound is heard rather than dropped during device-open latency.
+    def prewarm(self) -> None:
+        """Wake the Windows audio subsystem so the next play_*_sound call is
+        heard rather than silently dropped during device-open latency.
+
+        Windows releases an idle audio device after a few seconds.  The
+        initial call happens at construction time; call this again whenever a
+        long pause (e.g. model loading) may have caused the device to close.
+        No-ops immediately if audio feedback is disabled.
         """
+        if not self.enabled:
+            return
+
         def warm():
             try:
                 winsound.PlaySound(

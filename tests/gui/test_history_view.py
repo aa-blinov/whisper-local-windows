@@ -130,7 +130,7 @@ def test_set_entries_populates_table(qtbot):
 def test_search_filter_narrows_rows(qtbot):
     from app.gui.views.history_view import HistoryView
 
-    view = HistoryView()
+    view = HistoryView(search_debounce_ms=0)
     qtbot.addWidget(view)
 
     entries = [
@@ -142,6 +142,7 @@ def test_search_filter_narrows_rows(qtbot):
 
     search = view.findChild(QLineEdit, "HistorySearchEdit")
     search.setText("banana")
+    qtbot.wait(50)  # let debounce timer fire
 
     table = _table(view)
     proxy = table.model()
@@ -152,7 +153,7 @@ def test_search_filter_narrows_rows(qtbot):
 def test_count_label_reflects_visible_rows(qtbot):
     from app.gui.views.history_view import HistoryView
 
-    view = HistoryView()
+    view = HistoryView(search_debounce_ms=0)
     qtbot.addWidget(view)
 
     view.set_entries(_make_entries(3))
@@ -162,6 +163,7 @@ def test_count_label_reflects_visible_rows(qtbot):
 
     search = view.findChild(QLineEdit, "HistorySearchEdit")
     search.setText("entry text 1")
+    qtbot.wait(50)
     assert "1" in label.text()
 
 
@@ -386,3 +388,140 @@ def test_history_model_column_passes_unknown_canonical_through(qtbot):
     model = HistoryTableModel([entry])
     cell = model.data(model.index(0, 2), Qt.DisplayRole)
     assert cell == "some-org/custom-model"
+
+
+# ---- prepend_entry ----------------------------------------------------------
+
+
+# ---- Search debounce --------------------------------------------------------
+
+
+def test_history_search_debounce_does_not_filter_immediately(qtbot):
+    """Typing must not filter the table until the debounce timer fires.
+    Without this, every keystroke causes a full QSortFilterProxyModel pass."""
+    from app.gui.views.history_view import HistoryView
+
+    DEBOUNCE_MS = 120
+    view = HistoryView(search_debounce_ms=DEBOUNCE_MS)
+    qtbot.addWidget(view)
+
+    entries = [
+        FakeEntry(0.0, "alpha text", 1.0, "m", "en"),
+        FakeEntry(1.0, "beta text", 1.0, "m", "en"),
+    ]
+    view.set_entries(entries)
+
+    # Simulate a keystroke without waiting.
+    view._on_search_changed("alpha")
+
+    # Immediately after: both rows must still be visible (no filter yet).
+    proxy = _table(view).model()
+    assert proxy.rowCount() == 2, (
+        "Filter must not apply synchronously on keystroke"
+    )
+
+    # After debounce fires: only the matching row survives.
+    qtbot.wait(DEBOUNCE_MS + 60)
+    assert proxy.rowCount() == 1
+    assert proxy.data(proxy.index(0, 1), Qt.DisplayRole) == "alpha text"
+
+
+def test_history_search_debounce_rapid_keystrokes_single_filter(qtbot):
+    """Five rapid keystrokes must not apply the filter five times."""
+    from app.gui.views.history_view import HistoryView
+
+    DEBOUNCE_MS = 120
+    view = HistoryView(search_debounce_ms=DEBOUNCE_MS)
+    qtbot.addWidget(view)
+    view.set_entries(_make_entries(3))
+
+    proxy = _table(view).model()
+
+    # Rapid partial inputs — each restarts the timer.
+    for prefix in ("e", "en", "ent", "entr", "entry"):
+        view._on_search_changed(prefix)
+
+    # Still unfiltered (timer hasn't fired).
+    assert proxy.rowCount() == 3
+
+    # After debounce: all three entries match "entry" → still 3.
+    qtbot.wait(DEBOUNCE_MS + 60)
+    assert proxy.rowCount() == 3  # "entry text N" all match
+
+
+def test_history_search_debounce_timer_is_single_shot(qtbot):
+    """The debounce timer must be single-shot so filtering stops after
+    one pass and doesn't keep running on a fixed interval."""
+    from app.gui.views.history_view import HistoryView
+
+    view = HistoryView()
+    qtbot.addWidget(view)
+    assert view._search_timer.isSingleShot()
+
+
+# ---- prepend_entry ----------------------------------------------------------
+
+
+def test_history_model_prepend_entry_inserts_at_top(qtbot):
+    """prepend_entry must place the new entry at row 0, not the bottom."""
+    from app.gui.views.history_view import HistoryTableModel
+
+    model = HistoryTableModel(_make_entries(2))
+    new_entry = FakeEntry(99.0, "newest", 1.0, "m", "en")
+    model.prepend_entry(new_entry)
+
+    assert model.rowCount() == 3
+    assert model.data(model.index(0, 1), Qt.DisplayRole) == "newest"
+
+
+def test_history_model_prepend_entry_emits_rows_inserted_not_model_reset(qtbot):
+    """prepend_entry must emit rowsInserted, NOT modelReset.
+
+    A full reset discards the view's scroll position and selection on
+    every transcription — catastrophic UX when history is long.
+    """
+    from app.gui.views.history_view import HistoryTableModel
+
+    model = HistoryTableModel(_make_entries(2))
+
+    reset_fired: list = []
+    inserted_fired: list = []
+    model.modelReset.connect(lambda: reset_fired.append(True))
+    model.rowsInserted.connect(lambda *_: inserted_fired.append(True))
+
+    model.prepend_entry(FakeEntry(99.0, "newest", 1.0, "m", "en"))
+
+    assert reset_fired == [], "modelReset must NOT fire on prepend_entry"
+    assert inserted_fired != [], "rowsInserted must fire on prepend_entry"
+
+
+def test_history_model_prepend_trims_oldest_when_over_cap(qtbot):
+    """When max_entries is exceeded after a prepend, the oldest row is dropped."""
+    from app.gui.views.history_view import HistoryTableModel
+
+    model = HistoryTableModel(_make_entries(3))  # [text 0, text 1, text 2]
+    model.prepend_entry(FakeEntry(99.0, "newest", 1.0, "m", "en"), max_entries=3)
+
+    assert model.rowCount() == 3
+    texts = [model.data(model.index(r, 1), Qt.DisplayRole) for r in range(3)]
+    assert texts[0] == "newest"
+    assert "entry text 2" not in texts  # oldest dropped
+
+
+def test_history_view_prepend_entry_adds_row_at_top(qtbot):
+    """HistoryView.prepend_entry delegates to the model and updates the count."""
+    from app.gui.views.history_view import HistoryView
+
+    view = HistoryView()
+    qtbot.addWidget(view)
+    view.set_entries(_make_entries(2))
+
+    view.prepend_entry(FakeEntry(99.0, "newest", 1.0, "m", "en"))
+
+    proxy = _table(view).model()
+    assert proxy.rowCount() == 3
+    assert proxy.data(proxy.index(0, 1), Qt.DisplayRole) == "newest"
+
+    label = view.findChild(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel,
+                           "HistoryCountLabel")
+    assert "3" in label.text()

@@ -309,30 +309,62 @@ class AudioRecorder:
 
     @staticmethod
     def _resample_to(audio: np.ndarray, source_sr: int, target_sr: int) -> np.ndarray:
-        """Resample a numpy audio buffer to ``target_sr`` using linear
-        interpolation. Quality is acceptable for STT — Whisper handles a
-        wide range of input. Avoids pulling scipy in just for this."""
+        """Resample a numpy audio buffer to ``target_sr``.
+
+        Uses ``scipy.signal.resample_poly`` (polyphase FIR) instead of
+        linear interpolation for two reasons:
+
+        1. **Memory** — linear interpolation required two float64 arrays of
+           ``len(audio)`` samples as coordinate vectors (x_old, x_new),
+           inflating peak RAM by ~4× the audio size during downsampling.
+           ``resample_poly`` uses a fixed-size FIR filter kernel regardless
+           of audio length — O(filter_len), not O(N).
+
+        2. **Quality** — polyphase filtering applies a proper anti-aliasing
+           low-pass before decimation; linear interpolation has no such
+           filter, allowing content above the target Nyquist to alias back
+           into the speech band.
+
+        For multi-channel (stereo) input the resampling is done along the
+        time axis (axis=0), preserving channel count.  The caller
+        (``_process_audio_data``) is responsible for the subsequent
+        stereo-to-mono mix-down.
+        """
         if source_sr == target_sr or len(audio) == 0:
             return audio.astype(np.float32)
-        # If stereo (or multi-channel), resample each channel independently
-        # then average — keeps things simple and Whisper-friendly.
-        if audio.ndim == 2:
-            channels = [
-                AudioRecorder._resample_to(audio[:, c], source_sr, target_sr)
-                for c in range(audio.shape[1])
-            ]
-            return np.mean(np.stack(channels, axis=1), axis=1).astype(np.float32)
 
-        ratio = target_sr / source_sr
-        target_len = int(round(len(audio) * ratio))
-        if target_len <= 0:
-            return audio.astype(np.float32)
-        # np.interp with floating positions performs linear interpolation.
-        x_old = np.arange(len(audio), dtype=np.float64)
-        x_new = np.linspace(
-            0, len(audio) - 1, num=target_len, endpoint=True, dtype=np.float64,
-        )
-        return np.interp(x_new, x_old, audio).astype(np.float32)
+        from math import gcd
+
+        try:
+            from scipy.signal import resample_poly as _resample_poly
+        except ImportError:
+            # scipy is a listed dependency (pyproject.toml) but guard here
+            # in case the environment is missing it.  Fall back to linear
+            # interpolation — lower quality (aliasing possible) but
+            # functional.  Install scipy to restore polyphase quality:
+            #   pip install scipy
+            import logging
+            logging.getLogger(__name__).warning(
+                "scipy not available — falling back to linear resampler. "
+                "Run 'pip install scipy' for better audio quality."
+            )
+            length_in = audio.shape[0]
+            length_out = int(length_in * target_sr / source_sr)
+            x_old = np.linspace(0.0, 1.0, length_in)
+            x_new = np.linspace(0.0, 1.0, length_out)
+            if audio.ndim == 2:
+                return np.stack(
+                    [np.interp(x_new, x_old, audio[:, ch]) for ch in range(audio.shape[1])],
+                    axis=1,
+                ).astype(np.float32)
+            return np.interp(x_new, x_old, audio).astype(np.float32)
+
+        g = gcd(int(source_sr), int(target_sr))
+        up = int(target_sr) // g    # e.g. 48 kHz → 16 kHz: up=1, down=3
+        down = int(source_sr) // g
+
+        axis = 0 if audio.ndim == 2 else -1
+        return _resample_poly(audio, up, down, axis=axis).astype(np.float32)
     
     def cancel_recording(self):
         if not self.is_recording:

@@ -84,6 +84,57 @@ def test_make_splash_returns_widget(qtbot):
     assert splash.isVisible()
 
 
+def test_splash_click_does_not_hide(qtbot):
+    """Clicking the splash must NOT hide it.
+
+    QSplashScreen.mousePressEvent() hides the window on any click by
+    default — during a long model load this makes the progress
+    disappear the moment the user accidentally clicks anywhere on it.
+    """
+    from PySide6.QtCore import Qt
+
+    from app.gui.splash import make_splash
+
+    splash = make_splash("Test App")
+    qtbot.addWidget(splash)
+    splash.show()
+
+    assert splash.isVisible()
+    qtbot.mouseClick(splash, Qt.LeftButton)
+    assert splash.isVisible(), "Splash must stay visible after a click"
+
+
+def test_splash_has_minimize_button_hint(qtbot):
+    """The splash must advertise WindowMinimizeButtonHint so the OS
+    renders a real minimize button in the title bar.  Without it the
+    user can't send the splash to the taskbar while the model loads."""
+    from PySide6.QtCore import Qt
+
+    from app.gui.splash import make_splash
+
+    splash = make_splash("Test App")
+    qtbot.addWidget(splash)
+
+    assert bool(splash.windowFlags() & Qt.WindowMinimizeButtonHint), (
+        "Splash must have WindowMinimizeButtonHint"
+    )
+
+
+def test_splash_is_not_frameless(qtbot):
+    """The splash must NOT be frameless — a frameless window has no
+    title bar, so there is no OS minimize button regardless of hints."""
+    from PySide6.QtCore import Qt
+
+    from app.gui.splash import make_splash
+
+    splash = make_splash("Test App")
+    qtbot.addWidget(splash)
+
+    assert not bool(splash.windowFlags() & Qt.FramelessWindowHint), (
+        "Splash must not be frameless — it needs an OS title bar"
+    )
+
+
 def test_wait_for_backend_returns_ready_when_status_ready(qtbot):
     from PySide6.QtWidgets import QApplication
 
@@ -279,12 +330,18 @@ def test_wait_for_backend_updates_splash_with_progress(qtbot):
     # Collect label texts while the splash is live. QTimer fires inside
     # wait_for_backend because processEvents() is pumped every 20 ms.
     seen_messages: List[str] = []
+    _active = [True]  # mutable flag — set to False after wait_for_backend returns
 
     def _capture() -> None:
-        for lbl in splash.findChildren(QLabel):
-            t = lbl.text()
-            if t and t not in seen_messages:
-                seen_messages.append(t)
+        if not _active[0]:
+            return  # wait_for_backend already finished — don't touch the splash
+        try:
+            for lbl in splash.findChildren(QLabel):
+                t = lbl.text()
+                if t and t not in seen_messages:
+                    seen_messages.append(t)
+        except RuntimeError:
+            return  # C++ object already deleted — stop rescheduling
         QTimer.singleShot(40, _capture)
 
     QTimer.singleShot(40, _capture)
@@ -296,6 +353,10 @@ def test_wait_for_backend_updates_splash_with_progress(qtbot):
         app=app,
         timeout_s=2.0,
     )
+
+    # Stop the recurring capture timer — any pending tick will see _active=False
+    # and return immediately without touching the (already-closed) splash.
+    _active[0] = False
 
     # Some captured text should include a percentage after the progress
     # callback fired.
