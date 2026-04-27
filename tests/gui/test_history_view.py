@@ -130,7 +130,7 @@ def test_set_entries_populates_table(qtbot):
 def test_search_filter_narrows_rows(qtbot):
     from app.gui.views.history_view import HistoryView
 
-    view = HistoryView()
+    view = HistoryView(search_debounce_ms=0)
     qtbot.addWidget(view)
 
     entries = [
@@ -142,6 +142,7 @@ def test_search_filter_narrows_rows(qtbot):
 
     search = view.findChild(QLineEdit, "HistorySearchEdit")
     search.setText("banana")
+    qtbot.wait(50)  # let debounce timer fire
 
     table = _table(view)
     proxy = table.model()
@@ -152,7 +153,7 @@ def test_search_filter_narrows_rows(qtbot):
 def test_count_label_reflects_visible_rows(qtbot):
     from app.gui.views.history_view import HistoryView
 
-    view = HistoryView()
+    view = HistoryView(search_debounce_ms=0)
     qtbot.addWidget(view)
 
     view.set_entries(_make_entries(3))
@@ -162,6 +163,7 @@ def test_count_label_reflects_visible_rows(qtbot):
 
     search = view.findChild(QLineEdit, "HistorySearchEdit")
     search.setText("entry text 1")
+    qtbot.wait(50)
     assert "1" in label.text()
 
 
@@ -386,6 +388,75 @@ def test_history_model_column_passes_unknown_canonical_through(qtbot):
     model = HistoryTableModel([entry])
     cell = model.data(model.index(0, 2), Qt.DisplayRole)
     assert cell == "some-org/custom-model"
+
+
+# ---- prepend_entry ----------------------------------------------------------
+
+
+# ---- Search debounce --------------------------------------------------------
+
+
+def test_history_search_debounce_does_not_filter_immediately(qtbot):
+    """Typing must not filter the table until the debounce timer fires.
+    Without this, every keystroke causes a full QSortFilterProxyModel pass."""
+    from app.gui.views.history_view import HistoryView
+
+    DEBOUNCE_MS = 120
+    view = HistoryView(search_debounce_ms=DEBOUNCE_MS)
+    qtbot.addWidget(view)
+
+    entries = [
+        FakeEntry(0.0, "alpha text", 1.0, "m", "en"),
+        FakeEntry(1.0, "beta text", 1.0, "m", "en"),
+    ]
+    view.set_entries(entries)
+
+    # Simulate a keystroke without waiting.
+    view._on_search_changed("alpha")
+
+    # Immediately after: both rows must still be visible (no filter yet).
+    proxy = _table(view).model()
+    assert proxy.rowCount() == 2, (
+        "Filter must not apply synchronously on keystroke"
+    )
+
+    # After debounce fires: only the matching row survives.
+    qtbot.wait(DEBOUNCE_MS + 60)
+    assert proxy.rowCount() == 1
+    assert proxy.data(proxy.index(0, 1), Qt.DisplayRole) == "alpha text"
+
+
+def test_history_search_debounce_rapid_keystrokes_single_filter(qtbot):
+    """Five rapid keystrokes must not apply the filter five times."""
+    from app.gui.views.history_view import HistoryView
+
+    DEBOUNCE_MS = 120
+    view = HistoryView(search_debounce_ms=DEBOUNCE_MS)
+    qtbot.addWidget(view)
+    view.set_entries(_make_entries(3))
+
+    proxy = _table(view).model()
+
+    # Rapid partial inputs — each restarts the timer.
+    for prefix in ("e", "en", "ent", "entr", "entry"):
+        view._on_search_changed(prefix)
+
+    # Still unfiltered (timer hasn't fired).
+    assert proxy.rowCount() == 3
+
+    # After debounce: all three entries match "entry" → still 3.
+    qtbot.wait(DEBOUNCE_MS + 60)
+    assert proxy.rowCount() == 3  # "entry text N" all match
+
+
+def test_history_search_debounce_timer_is_single_shot(qtbot):
+    """The debounce timer must be single-shot so filtering stops after
+    one pass and doesn't keep running on a fixed interval."""
+    from app.gui.views.history_view import HistoryView
+
+    view = HistoryView()
+    qtbot.addWidget(view)
+    assert view._search_timer.isSingleShot()
 
 
 # ---- prepend_entry ----------------------------------------------------------

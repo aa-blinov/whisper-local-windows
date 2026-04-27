@@ -9,6 +9,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QSortFilterProxyModel,
     Qt,
+    QTimer,
     Signal,
 )
 # Qt is imported above for the alignment flags used by the empty state.
@@ -192,12 +193,19 @@ class HistoryDetailDialog(QDialog):
         QApplication.clipboard().setText(self._text.toPlainText())
 
 
+SEARCH_DEBOUNCE_MS = 200  # ms to wait after last keystroke before filtering
+
+
 class HistoryView(QWidget):
     clear_requested = Signal()
     copy_requested = Signal(str)
     export_requested = Signal()
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        search_debounce_ms: int = SEARCH_DEBOUNCE_MS,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("HistoryView")
 
@@ -234,6 +242,12 @@ class HistoryView(QWidget):
         self._proxy.setSourceModel(self._source_model)
         self._proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self._proxy.setFilterKeyColumn(1)  # Text column
+
+        self._pending_search: str = ""
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(search_debounce_ms)
+        self._search_timer.timeout.connect(self._apply_search)
 
         # Wrap the table in a card so it reads as a defined surface
         # against the view background instead of floating with no
@@ -328,7 +342,11 @@ class HistoryView(QWidget):
     # ---- internal -----------------------------------------------------------
 
     def _on_search_changed(self, text: str) -> None:
-        self._proxy.setFilterFixedString(text)
+        self._pending_search = text
+        self._search_timer.start()  # resets countdown on each keystroke
+
+    def _apply_search(self) -> None:
+        self._proxy.setFilterFixedString(self._pending_search)
         self._refresh_count()
 
     def _refresh_count(self, *_args) -> None:
