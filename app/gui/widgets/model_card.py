@@ -370,7 +370,10 @@ class ModelCard(QFrame):
         return self._active
 
     def set_active(self, active: bool) -> None:
-        self._active = bool(active)
+        new_active = bool(active)
+        if new_active == self._active:
+            return  # no state change — skip widget updates and style recalc
+        self._active = new_active
         self.setProperty("active", self._active)
         self._active_pill.setVisible(self._active)
         self._select_btn.setVisible(not self._active)
@@ -467,9 +470,13 @@ class ModelCard(QFrame):
     def set_loading(self, loading: bool) -> None:
         """Reflect backend load state on the active pill — swap 'Active' for
         'Loading…' with a different colour while the model is loading."""
-        self._loading = bool(loading)
-        # Both pill-text inputs reset every transition so a fresh load
-        # never inherits stale numbers from a previous one.
+        new_loading = bool(loading)
+        if new_loading == self._loading:
+            return  # no state change \u2014 skip pill update and style recalc
+        self._loading = new_loading
+        # Reset pill-text inputs only on actual state transitions so a
+        # fresh load never inherits stale numbers from a previous one, but
+        # repeated set_loading(True) calls don't wipe in-progress text.
         self._loading_progress_text = ""
         self._loading_elapsed_s = 0
         if self._loading:

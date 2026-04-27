@@ -424,3 +424,87 @@ def test_models_view_search_debounce_timer_is_single_shot(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
     assert view._search_timer.isSingleShot()
+
+
+# ---- Loading-event dispatch (O(1) not O(n)) --------------------------------
+
+
+def test_set_loading_progress_dispatches_only_to_active_card(qtbot):
+    """set_loading_progress must reach only the active card, not every card.
+
+    During a model download tqdm fires dozens of times per second.
+    Fanning the event out to all ~15 cards burns O(n) Python call overhead
+    on each tick even though 14 of the calls are immediately no-ops inside
+    the card.  The view must dispatch directly to the active card.
+    """
+    from app.model_mapping import get_model
+    from app.gui.views.models_view import ModelsView
+
+    subset = (get_model("turbo"), get_model("large-v3"))
+    view = ModelsView(models=subset)
+    qtbot.addWidget(view)
+    view.set_active("turbo")
+    view.set_loading(True)
+
+    received: dict[str, list] = {"turbo": [], "large-v3": []}
+    for alias, card in view._cards.items():
+        orig = card.set_loading_progress
+        def _spy(c, t, _alias=alias, _orig=orig):
+            received[_alias].append((c, t))
+            _orig(c, t)
+        card.set_loading_progress = _spy
+
+    view.set_loading_progress(50_000_000, 100_000_000)
+
+    assert received["turbo"] == [(50_000_000, 100_000_000)], "active card must get progress"
+    assert received["large-v3"] == [], "inactive card must not be called at all"
+
+
+def test_set_loading_elapsed_dispatches_only_to_active_card(qtbot):
+    """set_loading_elapsed must reach only the active card.
+
+    The elapsed-seconds timer fires every second throughout a model load.
+    Looping all cards on each tick wastes O(n) calls for no gain.
+    """
+    from app.model_mapping import get_model
+    from app.gui.views.models_view import ModelsView
+
+    subset = (get_model("turbo"), get_model("large-v3"))
+    view = ModelsView(models=subset)
+    qtbot.addWidget(view)
+    view.set_active("turbo")
+    view.set_loading(True)
+
+    received: dict[str, list] = {"turbo": [], "large-v3": []}
+    for alias, card in view._cards.items():
+        orig = card.set_loading_elapsed
+        def _spy(s, _alias=alias, _orig=orig):
+            received[_alias].append(s)
+            _orig(s)
+        card.set_loading_elapsed = _spy
+
+    view.set_loading_elapsed(5)
+
+    assert received["turbo"] == [5], "active card must get elapsed tick"
+    assert received["large-v3"] == [], "inactive card must not be called at all"
+
+
+def test_set_loading_progress_noop_when_no_active_card(qtbot):
+    """set_loading_progress with no active card must not raise."""
+    from app.model_mapping import get_model
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView(models=(get_model("turbo"),))
+    qtbot.addWidget(view)
+    # No set_active call — _active_alias is None
+    view.set_loading_progress(50, 100)  # must not raise
+
+
+def test_set_loading_elapsed_noop_when_no_active_card(qtbot):
+    """set_loading_elapsed with no active card must not raise."""
+    from app.model_mapping import get_model
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView(models=(get_model("turbo"),))
+    qtbot.addWidget(view)
+    view.set_loading_elapsed(3)  # must not raise

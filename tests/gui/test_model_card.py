@@ -362,6 +362,63 @@ def test_set_loading_does_not_hit_disk(qtbot, monkeypatch):
     assert len(call_count) == 0, "set_loading() triggered unexpected disk I/O"
 
 
+# ---- Style-recalculation guard (no-op when state unchanged) ----------------
+
+
+def test_set_active_same_value_is_noop(qtbot, monkeypatch):
+    """set_active() called with the same value must leave visible state
+    unchanged — no pill toggle, no widget flicker."""
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr("app.utils.is_cached_for_info", lambda info: False)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+
+    # Initially inactive — calling set_active(False) again must be a no-op.
+    assert card.is_active() is False
+    card.set_active(False)
+    assert card.is_active() is False
+    # Use isHidden(): isVisible() requires all ancestors to be shown, but
+    # isHidden() reflects only whether *this* widget was explicitly hidden.
+    assert card._active_pill.isHidden(), "pill must stay hidden"
+
+    # Activate, then call again — must not double-toggle.
+    card.set_active(True)
+    assert card.is_active() is True
+    card.set_active(True)
+    assert card.is_active() is True
+    assert not card._active_pill.isHidden(), "pill must stay visible"
+
+
+def test_set_loading_same_value_preserves_progress_text(qtbot, monkeypatch):
+    """set_loading(True) on an already-loading card must not reset the
+    progress text that was already rendered on the pill.
+
+    ModelsView.set_loading loops all cards; without the no-op guard each
+    card resets its pill text on every call — the user would see the
+    progress percentage blink back to 'Loading…' on the next loop pass.
+    """
+    from app.gui.widgets.model_card import ModelCard
+
+    monkeypatch.setattr("app.utils.is_cached_for_info", lambda info: False)
+
+    card = ModelCard(_make_info())
+    qtbot.addWidget(card)
+    card.set_active(True)
+    card.set_loading(True)
+
+    # Simulate 50 % download progress.
+    card.set_loading_progress(50, 100)
+    assert "50%" in card._active_pill.text()
+
+    # Calling set_loading(True) again must NOT reset the progress text.
+    card.set_loading(True)
+    assert "50%" in card._active_pill.text(), (
+        "repeated set_loading(True) must not wipe the progress text"
+    )
+
+
 def test_model_card_speed_quality_badges_carry_value_for_styling(qtbot):
     """The QSS ``[cat='speed'][value='fast']`` selector tints fast
     speed badges green; without the ``value`` property nothing
