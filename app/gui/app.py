@@ -291,6 +291,60 @@ def _apply_storage_path(configured: Optional[str]) -> str:
     return root
 
 
+def _autoload_persisted_model(backend) -> None:
+    """Kick off the persisted model load if its weights are already on disk.
+
+    Called once at startup, after the recording stack is built but
+    before the main window is shown.  Returns immediately — the
+    backend's ``load()`` spawns a daemon thread internally and the
+    UI paints the loading state from the model card / topbar polling
+    machinery.
+
+    Behaviour:
+
+    - ``backend is None``        → no-op (early shutdown / tests).
+    - Model in registry, cached  → log + ``backend.load()``.
+    - Model in registry, NOT     → log "skipping auto-load"; user has
+      cached                       to click Download deliberately so
+                                   they see the progress bar (a silent
+                                   1.5 GB transfer would feel like a
+                                   hang).
+    - Unknown model id (raw HF   → fall back to the lenient HF cache
+      path the user pasted)        check; load if anything's on disk.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    if backend is None:
+        return
+
+    from app.model_mapping import alias_for, get_model
+
+    canonical = backend.current_model()
+    try:
+        info = get_model(alias_for(canonical))
+    except KeyError:
+        info = None
+        cached = is_model_cached(canonical)
+    else:
+        cached = is_cached_for_info(info)
+
+    if not cached:
+        log.info(
+            "Persisted model %s is not cached — skipping auto-load. "
+            "Waiting for the user to pick a model.",
+            canonical,
+        )
+        return
+
+    display = info.display_name if info is not None else canonical
+    log.info(
+        "Persisted model %s is cached — kicking off background load.",
+        display,
+    )
+    backend.load()
+
+
 def main() -> int:
     import logging
 
@@ -424,90 +478,7 @@ def main() -> int:
             hotkey_listener=hotkey_listener,
         )
 
-    splash = None
-    if backend is not None:
-        # Auto-load only models whose weights are already cached on disk.
-        # Triggering a fresh download silently on startup is a UX
-        # foot-gun — the user just sees the spinner stuck on
-        # "Loading model…" with no idea that 1.5 GB are coming over
-        # the wire. Force a deliberate click on a Download button in
-        # that case so progress is visible and consensual.
-        from app.model_mapping import alias_for, get_model
-
-        canonical = backend.current_model()
-        try:
-            info_for_load = get_model(alias_for(canonical))
-            cached = is_cached_for_info(info_for_load)
-        except KeyError:
-            info_for_load = None
-            cached = is_model_cached(canonical)
-        # ONNX Runtime loads in a few seconds with no GIL-blocking
-        # cold import.  There is no need to freeze startup behind a
-        # splash for ONNX models — the main window appears instantly
-        # and the model loads in the background.  This branch is now
-        # dead code but kept as a guard in case a non-ONNX backend
-        # ever returns from ``get_model`` (legacy registry rows etc.).
-        if cached and getattr(info_for_load, "backend_kind", "") != "onnx_asr":
-            # Pre-load the backend BEFORE creating the main window so
-            # the GIL-locked NeMo / torch import doesn't freeze a
-            # half-built UI. The splash widget is movable and
-            # minimisable while we pump processEvents, which means
-            # the user can drag it / send it to the taskbar even
-            # while ``import nemo`` holds the GIL most of the time
-            # (Qt grabs short windows between Python yields).
-            from app.gui.splash import make_splash, wait_for_backend
-
-            display_name = (
-                info_for_load.display_name if info_for_load is not None else canonical
-            )
-            splash = make_splash("Lazy to Text")
-            splash.show()
-            qt_app.processEvents()
-            logging.getLogger(__name__).info(
-                "Pre-loading %s on the main thread (splash up)…",
-                display_name,
-            )
-            result = wait_for_backend(
-                splash=splash,
-                backend=backend,
-                display_name=display_name,
-                app=qt_app,
-                timeout_s=1800.0,
-            )
-            logging.getLogger(__name__).info(
-                "Pre-load finished: %s", result,
-            )
-            if result == "stopped":
-                # User cancelled the startup load — shut down cleanly
-                # and exit without opening the main window.
-                splash.close()
-                backend.shutdown()
-                if recording_controller is not None:
-                    recording_controller.shutdown()
-                return 0
-        elif cached:
-            # cached=True but splash intentionally skipped (ONNX backends
-            # have no GIL-blocking cold import, so we don't freeze startup
-            # behind a splash).  Still need to actually start the load —
-            # backend.load() returns immediately (it spawns a daemon
-            # thread internally), so the main window paints right away
-            # and the model becomes ready a few seconds later in the
-            # background.  Without this call the topbar pill shows
-            # "Current model: …" but the hotkey listener never sees
-            # ``health_check() == True`` and rejects every Ctrl+F2 with
-            # "Model is not ready yet".
-            logging.getLogger(__name__).info(
-                "Persisted model %s is cached — kicking off background "
-                "load (no splash needed for this backend kind).",
-                canonical,
-            )
-            backend.load()
-        else:
-            logging.getLogger(__name__).info(
-                "Persisted model %s is not cached — skipping auto-load. "
-                "Waiting for the user to pick a model.",
-                canonical,
-            )
+    _autoload_persisted_model(backend)
 
     history = state_manager.history_manager if state_manager is not None else None
 
@@ -535,16 +506,6 @@ def main() -> int:
     resource_monitor = ResourceMonitor(parent=window)
     resource_monitor.metrics_updated.connect(window.topbar.set_resource_metrics)
     resource_monitor.start()
-
-    if splash is not None:
-        # Tear the splash down once the main window is ready to take
-        # over. ``finish`` waits for the next ``window.show()`` — but
-        # we call it explicitly to be sure the splash isn't lingering
-        # when ``app.exec()`` starts.
-        try:
-            splash.finish(window)
-        except Exception:  # pragma: no cover — defensive
-            pass
 
     window.show()
 
