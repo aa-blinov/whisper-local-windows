@@ -279,12 +279,18 @@ def test_wait_for_backend_updates_splash_with_progress(qtbot):
     # Collect label texts while the splash is live. QTimer fires inside
     # wait_for_backend because processEvents() is pumped every 20 ms.
     seen_messages: List[str] = []
+    _active = [True]  # mutable flag — set to False after wait_for_backend returns
 
     def _capture() -> None:
-        for lbl in splash.findChildren(QLabel):
-            t = lbl.text()
-            if t and t not in seen_messages:
-                seen_messages.append(t)
+        if not _active[0]:
+            return  # wait_for_backend already finished — don't touch the splash
+        try:
+            for lbl in splash.findChildren(QLabel):
+                t = lbl.text()
+                if t and t not in seen_messages:
+                    seen_messages.append(t)
+        except RuntimeError:
+            return  # C++ object already deleted — stop rescheduling
         QTimer.singleShot(40, _capture)
 
     QTimer.singleShot(40, _capture)
@@ -296,6 +302,10 @@ def test_wait_for_backend_updates_splash_with_progress(qtbot):
         app=app,
         timeout_s=2.0,
     )
+
+    # Stop the recurring capture timer — any pending tick will see _active=False
+    # and return immediately without touching the (already-closed) splash.
+    _active[0] = False
 
     # Some captured text should include a percentage after the progress
     # callback fired.
