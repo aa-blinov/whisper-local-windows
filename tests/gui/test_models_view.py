@@ -199,36 +199,40 @@ def test_models_view_refresh_cache_state_propagates_to_all_cards(qtbot, monkeypa
     """When the cache state for any model changes (e.g. a download just
     finished), the view's refresh_cache_state must update every card so
     freshly-downloaded models flip from 'Download' to 'Select'."""
-    import app.gui.widgets.model_card as model_card_module
     from app.gui.views.models_view import ModelsView
     from app.gui.widgets.model_card import ModelCard
     from PySide6.QtWidgets import QPushButton
 
     cache_status = {"cached": False}
+    # Cache check runs in a QThreadPool worker — patch at the source module.
     monkeypatch.setattr(
-        model_card_module,
-        "is_cached_for_info",
+        "app.utils.is_cached_for_info",
         lambda info: cache_status["cached"],
     )
 
     view = ModelsView()
     qtbot.addWidget(view)
 
-    # Initially, every Select button should advertise Download.
-    for card in view.findChildren(ModelCard):
-        btn = next(
+    def _select_btn(card):
+        return next(
             b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
         )
-        assert btn.text() == "Download"
+
+    # Wait for the initial async workers to settle — all cards → Download.
+    cards = view.findChildren(ModelCard)
+    qtbot.waitUntil(
+        lambda: all(_select_btn(c).text() == "Download" for c in cards),
+        timeout=3000,
+    )
 
     cache_status["cached"] = True
     view.refresh_cache_state()
 
-    for card in view.findChildren(ModelCard):
-        btn = next(
-            b for b in card.findChildren(QPushButton) if b.objectName() == "SelectButton"
-        )
-        assert btn.text() == "Select"
+    # After refresh, all cards should flip to Select asynchronously.
+    qtbot.waitUntil(
+        lambda: all(_select_btn(c).text() == "Select" for c in cards),
+        timeout=3000,
+    )
 
 
 def test_set_locked_false_re_enables_buttons_for_inactive_cards(qtbot):
