@@ -35,8 +35,6 @@ def _is_available(name: str) -> bool:
 
 for _mod in (
     "sounddevice",
-    "ruamel",
-    "ruamel.yaml",
     "pyperclip",
     "pynput",
     "pynput.keyboard",

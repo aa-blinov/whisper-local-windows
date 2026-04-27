@@ -17,7 +17,6 @@ dependencies = [
     "sounddevice>=0.5.5",
     "global-hotkeys>=0.1.7; platform_system=='Windows'",
     "pyperclip>=1.11.0",
-    "ruamel.yaml>=0.19.1",
     "pywin32>=311; platform_system=='Windows'",
     "pyautogui>=0.9.54; platform_system=='Windows'",
     "requests>=2.33.1",

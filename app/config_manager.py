@@ -4,7 +4,8 @@ import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict
-from ruamel.yaml import YAML
+
+import yaml
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "whisper": {
@@ -85,7 +86,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 class ConfigManager:
     def __init__(self, config_filename: str = "config.yaml"):
         self.logger = logging.getLogger(__name__)
-        self.yaml = YAML()
         self.base_dir = self._resolve_base_dir()
         self.config_path = self.base_dir / config_filename
         self.config: Dict[str, Any] = {}
@@ -181,7 +181,7 @@ class ConfigManager:
                 # through the regular YAML reader + defaults merge.
                 try:
                     with open(path, "r", encoding="utf-8") as f:
-                        data = self.yaml.load(f) or {}
+                        data = yaml.safe_load(f) or {}
                     self.config = self._fill_defaults(data, DEFAULT_CONFIG)
                     self._migrate_legacy_whisper_section()
                     return
@@ -196,7 +196,7 @@ class ConfigManager:
             return
         try:
             with open(path, "r", encoding="utf-8") as f:
-                data = self.yaml.load(f) or {}
+                data = yaml.safe_load(f) or {}
             self.config = self._fill_defaults(data, DEFAULT_CONFIG)
             self._migrate_legacy_whisper_section()
         except Exception as e:
@@ -224,16 +224,26 @@ class ConfigManager:
         return result
 
     def _write_config_file(self):
+        # Write to a .tmp sibling first, then rename atomically so a crash
+        # mid-write never leaves a half-written (corrupted) config.yaml.
+        tmp = self.config_path.with_suffix(".tmp")
         try:
-            # Make sure the parent dir exists — on a fresh install
-            # the user-config dir under ``%APPDATA%`` may not have
-            # been created yet.
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                self.yaml.dump(self.config, f)
-            self.logger.info(f"Saved configuration to {self.config_path}")
+            with open(tmp, "w", encoding="utf-8") as f:
+                yaml.dump(
+                    self.config, f,
+                    allow_unicode=True,
+                    default_flow_style=False,
+                    sort_keys=False,
+                )
+            os.replace(tmp, self.config_path)
+            self.logger.info("Saved configuration to %s", self.config_path)
         except Exception as e:
-            self.logger.error(f"Error writing configuration: {e}")
+            self.logger.error("Error writing configuration: %s", e)
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     # --- Migration from legacy schema (model_size / whisper_model / whisper_url) ---
     def _migrate_legacy_whisper_section(self, write_if_changed: bool = False):

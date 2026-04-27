@@ -189,3 +189,40 @@ def test_subsequent_writes_go_to_user_config(fresh_appdata, monkeypatch):
     text = cm.config_path.read_text(encoding="utf-8")
     assert "ctrl+f5" in text
     assert cm.config_path.parent == fresh_appdata / "LazyToText"
+
+
+# ---- atomic write ----------------------------------------------------------
+
+
+def test_write_leaves_no_tmp_file(fresh_appdata, monkeypatch):
+    """Atomic write must clean up the ``.tmp`` staging file regardless
+    of outcome — a leftover ``.tmp`` means the swap never completed
+    and the previous file should still be intact."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "C:/foo/LazyToText.exe", raising=False)
+
+    from app.config_manager import ConfigManager
+
+    cm = ConfigManager()
+    cm.update_user_setting("audio", "channels", 2)
+
+    tmp = cm.config_path.with_suffix(".tmp")
+    assert not tmp.exists(), ".tmp staging file must be removed after a successful write"
+
+
+def test_config_round_trips_through_yaml(fresh_appdata, monkeypatch):
+    """Values written by ConfigManager must survive a YAML round-trip —
+    read back from disk and compare to what was stored in-memory."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "C:/foo/LazyToText.exe", raising=False)
+
+    import yaml
+    from app.config_manager import ConfigManager
+
+    cm = ConfigManager()
+    cm.update_user_setting("clipboard", "key_simulation_delay", 0.07)
+    cm.update_user_setting("whisper", "language", "ru")
+
+    on_disk = yaml.safe_load(cm.config_path.read_text(encoding="utf-8"))
+    assert on_disk["clipboard"]["key_simulation_delay"] == pytest.approx(0.07)
+    assert on_disk["whisper"]["language"] == "ru"
