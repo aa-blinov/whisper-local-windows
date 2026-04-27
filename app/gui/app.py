@@ -266,39 +266,89 @@ def _apply_hf_token(configured: Optional[str]) -> bool:
 def _apply_storage_path(configured: Optional[str]) -> str:
     """Resolve and apply the user's chosen models directory to env vars.
 
-    ``HF_HOME`` is always set (faster-whisper / huggingface_hub
-    ignores the system-wide ``~/.cache/huggingface`` only when this is
-    set). ``GIGAAM_MODELS_DIR`` is set ONLY when the user has
-    explicitly picked a custom path — leaving it unset keeps GigaAM
-    on its library default ``~/.cache/gigaam`` so existing installs
-    don't have their already-downloaded ckpt files orphaned by the
-    upgrade. Returns the resolved hub root for logging.
+    Sets ``HF_HOME`` so ``huggingface_hub`` (used by ``onnx-asr``)
+    downloads weights into our managed root instead of the system-
+    wide ``~/.cache/huggingface``.  Returns the resolved hub root
+    for logging.
 
-    Must run before any ``huggingface_hub`` or ``gigaam`` import: HF
-    reads ``HF_HOME`` once at module load, GigaAM doesn't but its
-    ``download_root`` is read per-call so the env var has to be in
-    place by the time ``GigaamBackend.load`` runs.
+    Must run before any ``huggingface_hub`` import: HF reads
+    ``HF_HOME`` once at module load.
     """
     from app.utils import get_models_root
 
     root = get_models_root(configured)
     os.environ["HF_HOME"] = root
-    is_custom = bool(configured and str(configured).strip())
-    if is_custom:
-        os.environ["GIGAAM_MODELS_DIR"] = str(Path(root) / "gigaam")
-    else:
-        os.environ.pop("GIGAAM_MODELS_DIR", None)
+    # Suppress the per-download warning about symlinks not being
+    # available on Windows.  Symlinks require either admin rights or
+    # Developer Mode to be enabled; neither is realistic for a
+    # consumer dictation app.  The HF cache works fine without them
+    # (just uses more disk for duplicated files), so the warning is
+    # noise that clutters our Logs view.
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     return root
+
+
+def _autoload_persisted_model(backend) -> None:
+    """Kick off the persisted model load if its weights are already on disk.
+
+    Called once at startup, after the recording stack is built but
+    before the main window is shown.  Returns immediately — the
+    backend's ``load()`` spawns a daemon thread internally and the
+    UI paints the loading state from the model card / topbar polling
+    machinery.
+
+    Behaviour:
+
+    - ``backend is None``        → no-op (early shutdown / tests).
+    - Model in registry, cached  → log + ``backend.load()``.
+    - Model in registry, NOT     → log "skipping auto-load"; user has
+      cached                       to click Download deliberately so
+                                   they see the progress bar (a silent
+                                   1.5 GB transfer would feel like a
+                                   hang).
+    - Unknown model id (raw HF   → fall back to the lenient HF cache
+      path the user pasted)        check; load if anything's on disk.
+    """
+    import logging
+
+    log = logging.getLogger(__name__)
+    if backend is None:
+        return
+
+    from app.model_mapping import alias_for, get_model
+
+    canonical = backend.current_model()
+    try:
+        info = get_model(alias_for(canonical))
+    except KeyError:
+        info = None
+        cached = is_model_cached(canonical)
+    else:
+        cached = is_cached_for_info(info)
+
+    if not cached:
+        log.info(
+            "Persisted model %s is not cached — skipping auto-load. "
+            "Waiting for the user to pick a model.",
+            canonical,
+        )
+        return
+
+    display = info.display_name if info is not None else canonical
+    log.info(
+        "Persisted model %s is cached — kicking off background load.",
+        display,
+    )
+    backend.load()
 
 
 def main() -> int:
     import logging
 
     # Read the configured ``storage.models_dir`` (may be empty for
-    # 'use the default') from config.yaml, then plant ``HF_HOME`` and
-    # ``GIGAAM_MODELS_DIR`` BEFORE the libraries that need them get
-    # imported. ConfigManager itself doesn't pull in HF/torch so we
-    # can safely import it first.
+    # 'use the default') from config.yaml, then plant ``HF_HOME``
+    # BEFORE huggingface_hub gets imported.  ConfigManager itself
+    # doesn't pull in HF so we can safely import it first.
     from app.config_manager import ConfigManager
 
     _early_config = ConfigManager()
@@ -424,67 +474,7 @@ def main() -> int:
             hotkey_listener=hotkey_listener,
         )
 
-    splash = None
-    if backend is not None:
-        # Auto-load only models whose weights are already cached on disk.
-        # Triggering a fresh download silently on startup is a UX
-        # foot-gun — the user just sees the spinner stuck on
-        # "Loading model…" with no idea that 1.5 GB are coming over
-        # the wire. Force a deliberate click on a Download button in
-        # that case so progress is visible and consensual.
-        from app.model_mapping import alias_for, get_model
-
-        canonical = backend.current_model()
-        try:
-            info_for_load = get_model(alias_for(canonical))
-            cached = is_cached_for_info(info_for_load)
-        except KeyError:
-            info_for_load = None
-            cached = is_model_cached(canonical)
-        if cached:
-            # Pre-load the backend BEFORE creating the main window so
-            # the GIL-locked NeMo / torch import doesn't freeze a
-            # half-built UI. The splash widget is movable and
-            # minimisable while we pump processEvents, which means
-            # the user can drag it / send it to the taskbar even
-            # while ``import nemo`` holds the GIL most of the time
-            # (Qt grabs short windows between Python yields).
-            from app.gui.splash import make_splash, wait_for_backend
-
-            display_name = (
-                info_for_load.display_name if info_for_load is not None else canonical
-            )
-            splash = make_splash("Lazy to Text")
-            splash.show()
-            qt_app.processEvents()
-            logging.getLogger(__name__).info(
-                "Pre-loading %s on the main thread (splash up)…",
-                display_name,
-            )
-            result = wait_for_backend(
-                splash=splash,
-                backend=backend,
-                display_name=display_name,
-                app=qt_app,
-                timeout_s=1800.0,
-            )
-            logging.getLogger(__name__).info(
-                "Pre-load finished: %s", result,
-            )
-            if result == "stopped":
-                # User cancelled the startup load — shut down cleanly
-                # and exit without opening the main window.
-                splash.close()
-                backend.shutdown()
-                if recording_controller is not None:
-                    recording_controller.shutdown()
-                return 0
-        else:
-            logging.getLogger(__name__).info(
-                "Persisted model %s is not cached — skipping auto-load. "
-                "Waiting for the user to pick a model.",
-                canonical,
-            )
+    _autoload_persisted_model(backend)
 
     history = state_manager.history_manager if state_manager is not None else None
 
@@ -512,16 +502,6 @@ def main() -> int:
     resource_monitor = ResourceMonitor(parent=window)
     resource_monitor.metrics_updated.connect(window.topbar.set_resource_metrics)
     resource_monitor.start()
-
-    if splash is not None:
-        # Tear the splash down once the main window is ready to take
-        # over. ``finish`` waits for the next ``window.show()`` — but
-        # we call it explicitly to be sure the splash isn't lingering
-        # when ``app.exec()`` starts.
-        try:
-            splash.finish(window)
-        except Exception:  # pragma: no cover — defensive
-            pass
 
     window.show()
 

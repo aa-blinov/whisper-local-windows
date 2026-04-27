@@ -63,6 +63,16 @@ class TranscriptionBackend(Protocol):
         """
         ...
 
+    def transcribe_file(self, path: str) -> Optional[str]:
+        """Transcribe an audio file from disk.
+
+        The backend handles its own audio decoding (WAV / FLAC / OGG /
+        MP3 depending on what its loader supports).  Returns the
+        transcribed text, or ``None`` when the backend is not ready,
+        the file is unreadable, or the model produced an empty result.
+        """
+        ...
+
     def shutdown(self) -> None:
         """Release resources, stop background threads. Idempotent."""
         ...

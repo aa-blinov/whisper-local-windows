@@ -20,12 +20,12 @@ def test_models_view_custom_registry(qtbot):
     from app.gui.widgets.model_card import ModelCard
     from app.model_mapping import get_model
 
-    subset = (get_model("turbo"), get_model("large-v3"))
+    subset = (get_model("whisper-large-v3-turbo"), get_model("whisper-large-v3"))
     view = ModelsView(models=subset)
     qtbot.addWidget(view)
 
     cards = view.findChildren(ModelCard)
-    assert [c.alias() for c in cards] == ["turbo", "large-v3"]
+    assert [c.alias() for c in cards] == ["whisper-large-v3-turbo", "whisper-large-v3"]
 
 
 def test_models_view_set_active_marks_correct_card(qtbot):
@@ -35,13 +35,13 @@ def test_models_view_set_active_marks_correct_card(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    view.set_active("large-v3")
-    assert view.active_alias() == "large-v3"
+    view.set_active("whisper-large-v3")
+    assert view.active_alias() == "whisper-large-v3"
 
     cards = {c.alias(): c for c in view.findChildren(ModelCard)}
-    assert cards["large-v3"].is_active() is True
+    assert cards["whisper-large-v3"].is_active() is True
     for alias, card in cards.items():
-        if alias != "large-v3":
+        if alias != "whisper-large-v3":
             assert card.is_active() is False
 
 
@@ -52,12 +52,12 @@ def test_models_view_set_active_switches_cleanly(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    view.set_active("turbo")
-    view.set_active("large-v3")
+    view.set_active("whisper-large-v3-turbo")
+    view.set_active("whisper-large-v3")
 
     cards = {c.alias(): c for c in view.findChildren(ModelCard)}
-    assert cards["turbo"].is_active() is False
-    assert cards["large-v3"].is_active() is True
+    assert cards["whisper-large-v3-turbo"].is_active() is False
+    assert cards["whisper-large-v3"].is_active() is True
 
 
 def test_models_view_set_active_rejects_unknown(qtbot):
@@ -80,7 +80,7 @@ def test_models_view_set_active_none_clears_all(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    view.set_active("large-v3")
+    view.set_active("whisper-large-v3")
     view.set_active(None)
 
     assert view.active_alias() is None
@@ -96,12 +96,12 @@ def test_models_view_emits_model_selected_when_card_emits(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "distil-large-v3")
+    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "vosk-ru-small")
 
     with qtbot.waitSignal(view.model_selected, timeout=1000) as blocker:
         card.select_requested.emit(card.alias())
 
-    assert blocker.args == ["distil-large-v3"]
+    assert blocker.args == ["vosk-ru-small"]
 
 
 def test_models_view_emits_model_delete_requested_when_card_emits(qtbot):
@@ -113,12 +113,12 @@ def test_models_view_emits_model_delete_requested_when_card_emits(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "distil-large-v3")
+    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "vosk-ru-small")
 
     with qtbot.waitSignal(view.model_delete_requested, timeout=1000) as blocker:
         card.delete_requested.emit(card.alias())
 
-    assert blocker.args == ["distil-large-v3"]
+    assert blocker.args == ["vosk-ru-small"]
 
 
 def test_models_view_starts_with_no_active(qtbot):
@@ -166,13 +166,13 @@ def test_models_view_set_loading_elapsed_propagates_to_active_card(qtbot):
 
     view = ModelsView()
     qtbot.addWidget(view)
-    view.set_active("turbo")
+    view.set_active("whisper-large-v3-turbo")
     view.set_loading(True)
 
     view.set_loading_elapsed(5)
 
     cards = {c.alias(): c for c in view.findChildren(ModelCard)}
-    assert "5" in cards["turbo"]._active_pill.text()
+    assert "5" in cards["whisper-large-v3-turbo"]._active_pill.text()
 
 
 def test_models_view_set_loading_progress_propagates_to_active_card(qtbot):
@@ -184,13 +184,13 @@ def test_models_view_set_loading_progress_propagates_to_active_card(qtbot):
 
     view = ModelsView()
     qtbot.addWidget(view)
-    view.set_active("turbo")
+    view.set_active("whisper-large-v3-turbo")
     view.set_loading(True)
 
     view.set_loading_progress(50, 100)
 
     cards = {c.alias(): c for c in view.findChildren(ModelCard)}
-    assert "50%" in cards["turbo"]._active_pill.text()
+    assert "50%" in cards["whisper-large-v3-turbo"]._active_pill.text()
     # Inactive cards' pills are hidden — text doesn't matter to the
     # user, but we don't want to crash trying to update them either.
 
@@ -241,17 +241,17 @@ def test_set_locked_false_re_enables_buttons_for_inactive_cards(qtbot):
 
     view = ModelsView()
     qtbot.addWidget(view)
-    view.set_active("large-v3")
+    view.set_active("whisper-large-v3")
 
     view.set_locked(True)
     view.set_locked(False)
 
     cards = {c.alias(): c for c in view.findChildren(ModelCard)}
     # Active card's Select stays hidden/disabled (active state).
-    assert cards["large-v3"].is_active() is True
+    assert cards["whisper-large-v3"].is_active() is True
     # Inactive cards must be clickable again.
     select_btn = next(
-        b for b in cards["turbo"].findChildren(__import__('PySide6.QtWidgets', fromlist=['QPushButton']).QPushButton)
+        b for b in cards["whisper-large-v3-turbo"].findChildren(__import__('PySide6.QtWidgets', fromlist=['QPushButton']).QPushButton)
         if b.objectName() == "SelectButton"
     )
     assert select_btn.isEnabled()
@@ -285,16 +285,17 @@ def test_models_view_search_filters_by_substring(qtbot):
     qtbot.wait(50)  # let debounce timer fire
 
     aliases = set(view.visible_aliases())
-    assert "turbo" in aliases
-    assert "turbo-int8" in aliases
-    assert "large-v3" not in aliases
-    assert "gigaam-v3-e2e-rnnt" not in aliases
+    # 'turbo' substring matches the Whisper Turbo card (alias and family)
+    # but not the plain Whisper / GigaAM / Parakeet cards.
+    assert "whisper-large-v3-turbo" in aliases
+    assert "gigaam-v3-rnnt" not in aliases
+    assert "parakeet-tdt-v3" not in aliases
 
 
 def test_models_view_search_matches_canonical_and_language(qtbot):
     """The haystack covers alias, canonical, display name,
-    description, language, family — so 'russian' or 'bzikst'
-    both narrow to the RU fine-tunes."""
+    description, language, family — so 'russian' surfaces every card
+    that mentions Russian in its language column."""
     from PySide6.QtWidgets import QLineEdit
     from app.gui.views.models_view import ModelsView
 
@@ -306,12 +307,15 @@ def test_models_view_search_matches_canonical_and_language(qtbot):
     qtbot.wait(50)
 
     aliases = set(view.visible_aliases())
-    assert "large-v3-ru" in aliases
-    assert "large-v3-ru-int8" in aliases
-    # GigaAM also says "Russian (only)" so it surfaces here too.
-    assert "gigaam-v3-e2e-rnnt" in aliases
-    # English-only cards filtered out.
-    assert "distil-large-v3" not in aliases
+    # GigaAM is Russian-only, Vosk is Russian-only, Parakeet/Canary say
+    # "incl. Russian" — all surface.
+    assert "gigaam-v3-rnnt" in aliases
+    assert "gigaam-v3-ctc" in aliases
+    assert "vosk-ru-small" in aliases
+    # Plain multilingual Whisper cards don't tag "Russian" specifically
+    # — should be filtered out by the language-specific search.
+    assert "whisper-large-v3-turbo" not in aliases
+    assert "whisper-large-v3" not in aliases
 
 
 def test_models_view_family_chip_filters_by_family(qtbot):
@@ -359,7 +363,7 @@ def test_models_view_clearing_search_restores_all_cards(qtbot):
     qtbot.addWidget(view)
 
     search = view.findChild(QLineEdit, "ModelsSearchEdit")
-    search.setText("turbo")
+    search.setText("whisper-large-v3-turbo")
     search.setText("")  # both coalesced by debounce — only "" fires
     qtbot.wait(50)
 
@@ -382,7 +386,7 @@ def test_models_view_search_debounce_does_not_filter_immediately(qtbot):
     assert len(all_aliases) > 1  # sanity — multiple cards visible
 
     # Keystroke without waiting.
-    view._on_search_changed("turbo")
+    view._on_search_changed("whisper-large-v3-turbo")
 
     # Immediately after: all cards still visible (filter not yet applied).
     assert set(view.visible_aliases()) == all_aliases, (
@@ -392,8 +396,8 @@ def test_models_view_search_debounce_does_not_filter_immediately(qtbot):
     # After debounce fires: only turbo cards survive.
     qtbot.wait(DEBOUNCE_MS + 60)
     aliases_after = set(view.visible_aliases())
-    assert "turbo" in aliases_after
-    assert "large-v3" not in aliases_after
+    assert "whisper-large-v3-turbo" in aliases_after
+    assert "whisper-large-v3" not in aliases_after
 
 
 def test_models_view_search_debounce_rapid_keystrokes_single_filter(qtbot):
@@ -406,14 +410,14 @@ def test_models_view_search_debounce_rapid_keystrokes_single_filter(qtbot):
 
     all_count = len(view.visible_aliases())
 
-    for prefix in ("t", "tu", "tur", "turb", "turbo"):
+    for prefix in ("t", "tu", "tur", "turb", "whisper-large-v3-turbo"):
         view._on_search_changed(prefix)
 
     # Still unfiltered (timer keeps restarting).
     assert len(view.visible_aliases()) == all_count
 
     qtbot.wait(DEBOUNCE_MS + 60)
-    # "turbo" query matches only turbo cards.
+    # "whisper-large-v3-turbo" query matches only turbo cards.
     assert len(view.visible_aliases()) < all_count
 
 
@@ -424,3 +428,87 @@ def test_models_view_search_debounce_timer_is_single_shot(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
     assert view._search_timer.isSingleShot()
+
+
+# ---- Loading-event dispatch (O(1) not O(n)) --------------------------------
+
+
+def test_set_loading_progress_dispatches_only_to_active_card(qtbot):
+    """set_loading_progress must reach only the active card, not every card.
+
+    During a model download tqdm fires dozens of times per second.
+    Fanning the event out to all ~15 cards burns O(n) Python call overhead
+    on each tick even though 14 of the calls are immediately no-ops inside
+    the card.  The view must dispatch directly to the active card.
+    """
+    from app.model_mapping import get_model
+    from app.gui.views.models_view import ModelsView
+
+    subset = (get_model("whisper-large-v3-turbo"), get_model("whisper-large-v3"))
+    view = ModelsView(models=subset)
+    qtbot.addWidget(view)
+    view.set_active("whisper-large-v3-turbo")
+    view.set_loading(True)
+
+    received: dict[str, list] = {"whisper-large-v3-turbo": [], "whisper-large-v3": []}
+    for alias, card in view._cards.items():
+        orig = card.set_loading_progress
+        def _spy(c, t, _alias=alias, _orig=orig):
+            received[_alias].append((c, t))
+            _orig(c, t)
+        card.set_loading_progress = _spy
+
+    view.set_loading_progress(50_000_000, 100_000_000)
+
+    assert received["whisper-large-v3-turbo"] == [(50_000_000, 100_000_000)], "active card must get progress"
+    assert received["whisper-large-v3"] == [], "inactive card must not be called at all"
+
+
+def test_set_loading_elapsed_dispatches_only_to_active_card(qtbot):
+    """set_loading_elapsed must reach only the active card.
+
+    The elapsed-seconds timer fires every second throughout a model load.
+    Looping all cards on each tick wastes O(n) calls for no gain.
+    """
+    from app.model_mapping import get_model
+    from app.gui.views.models_view import ModelsView
+
+    subset = (get_model("whisper-large-v3-turbo"), get_model("whisper-large-v3"))
+    view = ModelsView(models=subset)
+    qtbot.addWidget(view)
+    view.set_active("whisper-large-v3-turbo")
+    view.set_loading(True)
+
+    received: dict[str, list] = {"whisper-large-v3-turbo": [], "whisper-large-v3": []}
+    for alias, card in view._cards.items():
+        orig = card.set_loading_elapsed
+        def _spy(s, _alias=alias, _orig=orig):
+            received[_alias].append(s)
+            _orig(s)
+        card.set_loading_elapsed = _spy
+
+    view.set_loading_elapsed(5)
+
+    assert received["whisper-large-v3-turbo"] == [5], "active card must get elapsed tick"
+    assert received["whisper-large-v3"] == [], "inactive card must not be called at all"
+
+
+def test_set_loading_progress_noop_when_no_active_card(qtbot):
+    """set_loading_progress with no active card must not raise."""
+    from app.model_mapping import get_model
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView(models=(get_model("whisper-large-v3-turbo"),))
+    qtbot.addWidget(view)
+    # No set_active call — _active_alias is None
+    view.set_loading_progress(50, 100)  # must not raise
+
+
+def test_set_loading_elapsed_noop_when_no_active_card(qtbot):
+    """set_loading_elapsed with no active card must not raise."""
+    from app.model_mapping import get_model
+    from app.gui.views.models_view import ModelsView
+
+    view = ModelsView(models=(get_model("whisper-large-v3-turbo"),))
+    qtbot.addWidget(view)
+    view.set_loading_elapsed(3)  # must not raise

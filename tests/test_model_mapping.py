@@ -1,4 +1,4 @@
-"""Tests for the extended model registry."""
+"""Tests for the ONNX-only model registry."""
 
 import pytest
 
@@ -10,25 +10,28 @@ def test_model_info_exposes_required_fields():
     from app.model_mapping import ModelInfo
 
     info = ModelInfo(
-        alias="large-v3",
-        canonical="Systran/faster-whisper-large-v3",
-        display_name="Large v3",
+        alias="whisper-large-v3",
+        canonical="onnx-community/whisper-large-v3",
+        display_name="Whisper Large v3",
         size_mb=3000,
-        vram_gb=10.0,
+        vram_gb=6.0,
         speed="slow",
         quality="excellent",
         languages="multilingual",
-        description="Highest-quality multilingual model.",
+        description="Highest-quality multilingual Whisper.",
     )
-    assert info.alias == "large-v3"
-    assert info.canonical == "Systran/faster-whisper-large-v3"
-    assert info.display_name == "Large v3"
+    assert info.alias == "whisper-large-v3"
+    assert info.canonical == "onnx-community/whisper-large-v3"
+    assert info.display_name == "Whisper Large v3"
     assert info.size_mb == 3000
-    assert info.vram_gb == 10.0
+    assert info.vram_gb == 6.0
     assert info.speed == "slow"
     assert info.quality == "excellent"
     assert info.languages == "multilingual"
     assert info.description
+    # Defaults
+    assert info.backend_kind == "onnx_asr"
+    assert info.onnx_family == "whisper"
 
 
 def test_model_info_rejects_invalid_speed():
@@ -65,6 +68,63 @@ def test_model_info_rejects_invalid_quality():
         )
 
 
+def test_model_info_onnx_load_id_defaults_to_canonical():
+    """When the registry entry doesn't specify a separate load id (the
+    common case — most onnx-asr models accept their HF repo path
+    directly), ``onnx_load_id`` mirrors ``canonical``."""
+    from app.model_mapping import ModelInfo
+
+    info = ModelInfo(
+        alias="x",
+        canonical="onnx-community/whisper-large-v3",
+        display_name="X",
+        size_mb=1, vram_gb=0.1,
+        speed="fast", quality="good",
+        languages="multilingual", description="",
+    )
+    assert info.onnx_load_id == "onnx-community/whisper-large-v3"
+
+
+def test_model_info_onnx_load_id_can_differ_from_canonical():
+    """T-One's repo is at ``t-tech/T-one`` (capital T) on HF, but
+    ``onnx_asr.load_model`` only accepts the lowercase identifier
+    ``t-tech/t-one``.  ``onnx_load_id`` decouples the two so we can
+    cache by HF path while loading by the canonical onnx-asr id."""
+    from app.model_mapping import ModelInfo
+
+    info = ModelInfo(
+        alias="x",
+        canonical="t-tech/T-one",
+        display_name="X",
+        size_mb=1, vram_gb=0.1,
+        speed="fast", quality="good",
+        languages="Russian (only)", description="",
+        family="T-One",
+        onnx_family="gigaam",
+        onnx_load_id="t-tech/t-one",
+    )
+    assert info.canonical == "t-tech/T-one"
+    assert info.onnx_load_id == "t-tech/t-one"
+
+
+def test_model_info_rejects_invalid_onnx_family():
+    from app.model_mapping import ModelInfo
+
+    with pytest.raises(ValueError):
+        ModelInfo(
+            alias="x",
+            canonical="x",
+            display_name="X",
+            size_mb=1,
+            vram_gb=0.1,
+            speed="fast",
+            quality="good",
+            languages="multilingual",
+            description="",
+            onnx_family="bogus",
+        )
+
+
 def test_model_info_is_frozen():
     from app.model_mapping import ModelInfo
 
@@ -87,20 +147,37 @@ def test_model_info_is_frozen():
 
 
 def test_registry_contains_core_models():
+    """The post-ONNX-only lineup: a Whisper turbo, a small Whisper for
+    CPU users, GigaAM for Russian, Parakeet for multilingual."""
     from app.model_mapping import MODELS, aliases
 
-    # Lineup is the post-cleanup powerful presets — large-v3 family
-    # plus turbo / distil and Russian fine-tunes.
     expected = {
-        "turbo",
-        "distil-large-v3",
-        "large-v3",
-        "large-v3-int8",
-        "large-v3-ru",
-        "large-v3-ru-int8",
+        "whisper-large-v3-turbo",
+        "vosk-ru-small",
+        "gigaam-v3-rnnt",
+        "parakeet-tdt-v3",
     }
     assert expected.issubset(set(aliases()))
     assert len(MODELS) == len(aliases())
+
+
+def test_every_registry_entry_uses_onnx_asr_backend():
+    """The single-engine invariant: every model goes through onnx_asr."""
+    from app.model_mapping import MODELS
+
+    for info in MODELS:
+        assert info.backend_kind == "onnx_asr", (
+            f"{info.alias} should use onnx_asr backend, got {info.backend_kind!r}"
+        )
+
+
+def test_every_registry_entry_has_a_valid_onnx_family():
+    from app.model_mapping import MODELS, ONNX_FAMILIES
+
+    for info in MODELS:
+        assert info.onnx_family in ONNX_FAMILIES, (
+            f"{info.alias} has invalid onnx_family {info.onnx_family!r}"
+        )
 
 
 def test_registry_preserves_order_between_models_and_aliases():
@@ -112,10 +189,10 @@ def test_registry_preserves_order_between_models_and_aliases():
 def test_get_model_returns_info_by_alias():
     from app.model_mapping import ModelInfo, get_model
 
-    info = get_model("large-v3")
+    info = get_model("whisper-large-v3-turbo")
     assert isinstance(info, ModelInfo)
-    assert info.alias == "large-v3"
-    assert info.canonical == "Systran/faster-whisper-large-v3"
+    assert info.alias == "whisper-large-v3-turbo"
+    assert info.canonical == "onnx-community/whisper-large-v3-turbo"
 
 
 def test_get_model_raises_on_unknown_alias():
@@ -138,7 +215,9 @@ def test_alias_to_model_derived_from_registry():
 def test_canonical_for_returns_canonical_for_known_alias():
     from app.model_mapping import canonical_for
 
-    assert canonical_for("large-v3") == "Systran/faster-whisper-large-v3"
+    assert canonical_for("whisper-large-v3-turbo") == (
+        "onnx-community/whisper-large-v3-turbo"
+    )
 
 
 def test_canonical_for_passes_through_unknown_names():
@@ -150,7 +229,9 @@ def test_canonical_for_passes_through_unknown_names():
 def test_alias_for_returns_alias_for_known_canonical():
     from app.model_mapping import alias_for
 
-    assert alias_for("Systran/faster-whisper-large-v3") == "large-v3"
+    assert alias_for("onnx-community/whisper-large-v3-turbo") == (
+        "whisper-large-v3-turbo"
+    )
 
 
 def test_alias_for_passes_through_unknown_canonicals():
@@ -168,23 +249,20 @@ def test_every_registry_entry_carries_a_known_family():
         )
 
 
-def test_model_url_for_faster_whisper_points_at_hf_repo():
+def test_model_url_points_at_hf_repo():
+    """Every model is hosted on Hugging Face now — the URL should
+    always be the HF repo path."""
     from app.model_mapping import get_model, model_url
 
-    info = get_model("large-v3")
+    info = get_model("whisper-large-v3-turbo")
     assert model_url(info) == (
-        "https://huggingface.co/Systran/faster-whisper-large-v3"
+        "https://huggingface.co/onnx-community/whisper-large-v3-turbo"
     )
 
+    gigaam = get_model("gigaam-v3-rnnt")
+    assert model_url(gigaam) == "https://huggingface.co/istupakov/gigaam-v3-onnx"
 
-def test_model_url_for_gigaam_points_at_github():
-    """GigaAM doesn't ship via Hugging Face — its weights come from
-    Sber's CDN. The closest "model home" the user can browse is the
-    project's GitHub README, so all GigaAM cards link there."""
-    from app.model_mapping import get_model, model_url
-
-    info = get_model("gigaam-v3-e2e-ctc")
-    assert model_url(info) == "https://github.com/salute-developers/GigaAM"
-
-    info_rnnt = get_model("gigaam-v3-e2e-rnnt")
-    assert model_url(info_rnnt) == "https://github.com/salute-developers/GigaAM"
+    parakeet = get_model("parakeet-tdt-v3")
+    assert model_url(parakeet) == (
+        "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx"
+    )

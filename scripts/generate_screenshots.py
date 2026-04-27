@@ -2,9 +2,10 @@
 
 Run with::
 
-    QT_QPA_PLATFORM=offscreen uv run python scripts/generate_screenshots.py
+    uv run python scripts/generate_screenshots.py
 
-Drops files into ``docs/screenshots/``. Used to populate the README.
+Drops files into ``docs/screenshots/``. Used to populate the README
+and the docs site (``docs/index.html``).
 """
 
 from __future__ import annotations
@@ -13,7 +14,6 @@ import logging
 import os
 import sys
 import time
-import types
 from pathlib import Path
 
 # NB: do NOT force offscreen here — that platform plugin has no link to the
@@ -28,7 +28,6 @@ _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
 
 from PySide6.QtCore import QSize  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app.gui.app import build_application  # noqa: E402
 from app.gui.log_bridge import QtLogBridge  # noqa: E402
@@ -40,49 +39,61 @@ WINDOW_SIZE = QSize(1100, 720)
 
 
 class _FakeHistory:
-    """Stand-in for HistoryManager with a realistic-looking dataset."""
+    """Stand-in for HistoryManager with a realistic ONNX-era dataset."""
 
     def __init__(self) -> None:
         now = time.time()
         self._entries = [
             TranscriptionEntry(
                 timestamp=now - 60,
-                text="Quick reminder: ship the PySide migration this week.",
-                duration=3.4,
-                model="large-v3",
-                language="en",
+                text=(
+                    "Quick reminder: ship the ONNX-only refactor this week — "
+                    "saves us four gigabytes on every install."
+                ),
+                duration=4.1,
+                model="parakeet-tdt-v3",
+                language=None,
             ),
             TranscriptionEntry(
                 timestamp=now - 1200,
                 text=(
-                    "Customer feedback summary: the Logs tab finally shows "
-                    "what happens during transcription, and the auto-save "
-                    "Shortcuts tab is much friendlier."
+                    "Customer feedback summary: the Transcribe tab handles "
+                    "MP4 / MKV / WebM out of the box now thanks to the "
+                    "bundled ffmpeg fallback."
                 ),
                 duration=11.7,
-                model="large-v3",
+                model="whisper-large-v3-turbo",
                 language="en",
             ),
             TranscriptionEntry(
                 timestamp=now - 3600,
-                text="Action item: reproduce the duplicate-launch warning on a clean install.",
+                text=(
+                    "Action item: reproduce the case-sensitive T-One "
+                    "loader bug on a brand-new install before Friday."
+                ),
                 duration=4.9,
-                model="large-v3",
-                language="en",
+                model="t-one",
+                language="ru",
             ),
             TranscriptionEntry(
                 timestamp=now - 7200,
-                text="Daily standup notes — keeping the in-process backend warm at 1.4 GB VRAM, fine for now.",
+                text=(
+                    "Daily standup notes — keeping Parakeet warm at "
+                    "1.4 GB VRAM, comfortable on a 4 GB card."
+                ),
                 duration=6.2,
-                model="medium",
-                language="en",
+                model="parakeet-tdt-v3",
+                language=None,
             ),
             TranscriptionEntry(
                 timestamp=now - 86400,
-                text="Yesterday I tried the turbo-int8 build for quick replies — surprisingly usable on a 6 GB GPU.",
+                text=(
+                    "Tested Vosk RU on the netbook yesterday — usable "
+                    "transcription on a CPU-only laptop, fifty megs total."
+                ),
                 duration=4.0,
-                model="turbo-int8",
-                language="en",
+                model="vosk-ru",
+                language="ru",
             ),
         ]
 
@@ -96,10 +107,11 @@ class _FakeHistory:
 class _FakeConfig:
     def __init__(self) -> None:
         self._data = {
-            "whisper": {"model": "large-v3"},
+            "whisper": {"model": "parakeet-tdt-v3"},
             "hotkey": {
                 "start_recording_hotkey": "ctrl+f2",
                 "stop_recording_hotkey": "ctrl+f3",
+                "cancel_recording_hotkey": "ctrl+f6",
             },
             "clipboard": {"auto_paste": True},
         }
@@ -121,12 +133,22 @@ def _seed_logs(window) -> None:
     logger.setLevel(logging.DEBUG)
     try:
         logger.info("Audio feedback enabled...")
-        logger.info("Recording stack built: model=large-v3 kind=faster_whisper device=auto compute_type=float16")
+        logger.info(
+            "Recording stack built: model=istupakov/parakeet-tdt-0.6b-v3-onnx "
+            "kind=onnx_asr device=auto compute_type=float32"
+        )
         logger.info("Primary instance acquired mutex LazyToTextQt_SingleInstance")
-        logger.info("Hotkeys registered: ctrl+f2 (start) / ctrl+f3 (stop)")
-        logger.info("Backend running on tcp://localhost:10300")
+        logger.info("Hotkeys registered: ctrl+f2 (start) / ctrl+f3 (stop) / ctrl+f6 (cancel)")
+        logger.info(
+            "Loading ONNX model istupakov/parakeet-tdt-0.6b-v3-onnx "
+            "(load_id=nemo-parakeet-tdt-0.6b-v3, family=parakeet, "
+            "providers=None, quantization=None)…"
+        )
+        logger.info("OnnxAsr model istupakov/parakeet-tdt-0.6b-v3-onnx ready")
         logger.warning("Container log buffer at 80% — consider rotating soon.")
-        logger.info("Transcription complete (3.4s) — 'Quick reminder: ship the PySide migration...'")
+        logger.info(
+            "Transcription complete (4.1s) — 'Quick reminder: ship the ONNX-only refactor this week…'"
+        )
         logger.debug("[Pipeline] Audio data memory freed")
     finally:
         logger.removeHandler(bridge.handler())
@@ -141,15 +163,34 @@ def _seed_resource_metrics(window) -> None:
     empty bar that misrepresents what the app actually shows in use."""
     window.topbar.set_resource_metrics(
         {
-            "cpu_percent": 23.0,
-            "ram_percent": 38.7,
-            "ram_used_mb": 12_700.0,
+            "cpu_percent": 18.0,
+            "ram_percent": 32.4,
+            "ram_used_mb": 10_600.0,
             "ram_total_mb": 32_768.0,
-            "gpu_util_percent": 67.0,
-            "gpu_vram_used_mb": 4_300.0,
-            "gpu_vram_total_mb": 8_192.0,
+            "gpu_util_percent": 4.0,
+            "gpu_vram_used_mb": 1_900.0,
+            "gpu_vram_total_mb": 16_384.0,
         }
     )
+
+
+def _seed_transcribe_view(window) -> None:
+    """Pre-fill the Transcribe view with a sample result so the
+    screenshot shows the populated state instead of the empty placeholder."""
+    sample_path = (
+        r"C:\Users\you\Desktop\interview-recording.m4a"
+    )
+    sample_text = (
+        "Yeah, so the move to ONNX runtime really paid off — we shipped "
+        "the install size from four gigabytes down to about seven "
+        "hundred megs, and cold start dropped from a minute and a half "
+        "to about four seconds. The Transcribe tab handles M4A and MP4 "
+        "out of the box now, no separate codec install. Russian quality "
+        "on T-One is noticeably better than Whisper for noisy audio."
+    )
+    view = window.transcribe_view
+    view.set_busy(sample_path)
+    view.set_result(sample_text)
 
 
 def _capture(window, name: str) -> Path:
@@ -176,16 +217,17 @@ def main() -> int:
 
     _seed_logs(window)
     _seed_resource_metrics(window)
+    _seed_transcribe_view(window)
 
     # Force one initial paint so the layout settles before we grab.
     for _ in range(5):
         app.processEvents()
 
-    sections = ("models", "shortcuts", "history", "logs")
+    sections = ("models", "transcribe", "history", "logs", "shortcuts")
     for key in sections:
         window.sidebar.set_active(key)
-        # Repeatedly drain events; offscreen platform sometimes needs a few
-        # ticks before the layout reflects the new active view.
+        # Repeatedly drain events; the window/layout sometimes needs
+        # several ticks before the new active view paints.
         for _ in range(8):
             app.processEvents()
         _capture(window, key)

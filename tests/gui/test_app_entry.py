@@ -1,5 +1,6 @@
 """Tests for the Qt application entry point helpers."""
 
+import pytest
 from PySide6.QtWidgets import QApplication
 
 
@@ -43,13 +44,13 @@ def test_build_application_does_not_wire_controller_when_config_absent(qapp):
     assert window.findChildren(AppController) == []
 
 
-def test_build_application_wires_controller_when_config_provided(qapp):
+def test_build_application_wires_controller_when_config_provided(qapp, monkeypatch):
     from app.gui.app import build_application
     from app.gui.controllers.app_controller import AppController
 
     class StubConfig:
         def __init__(self):
-            self._data = {"whisper": {"model": "large-v3"}}
+            self._data = {"whisper": {"model": "whisper-large-v3"}}
 
         def get_setting(self, section, key):
             return self._data.get(section, {}).get(key)
@@ -57,10 +58,19 @@ def test_build_application_wires_controller_when_config_provided(qapp):
         def update_user_setting(self, section, key, value):
             self._data.setdefault(section, {})[key] = value
 
+    # Pretend the configured model is cached so the controller restores
+    # it as the active card on startup.  The cache check itself is
+    # tested separately in tests/test_utils.py.
+    import app.gui.controllers.app_controller as controller_module
+
+    monkeypatch.setattr(
+        controller_module, "is_cached_for_info", lambda info: True
+    )
+
     _app, window = build_application(config=StubConfig())
     controllers = window.findChildren(AppController)
     assert len(controllers) == 1
-    assert window.models_view.active_alias() == "large-v3"
+    assert window.models_view.active_alias() == "whisper-large-v3"
 
 
 def test_build_application_does_not_install_log_bridge_by_default(qapp):
@@ -101,6 +111,123 @@ def test_build_application_sets_window_icon(qapp):
     assert not app.windowIcon().isNull()
     # MainWindow inherits the app icon by default.
     assert not window.windowIcon().isNull()
+
+
+# ---- Persisted-model auto-load --------------------------------------------
+
+
+class _FakeBackend:
+    """Minimal backend stub: records load() and current_model()."""
+
+    def __init__(self, model: str) -> None:
+        self._model = model
+        self.load_called = 0
+
+    def current_model(self) -> str:
+        return self._model
+
+    def load(self) -> None:
+        self.load_called += 1
+
+
+def test_autoload_kicks_off_load_when_model_is_cached(monkeypatch):
+    """When the persisted model is in the registry AND its weights are
+    already on disk, the helper must call ``backend.load()`` so the
+    backend transitions ``stopped → loading → ready`` in the
+    background — otherwise the topbar shows the model name but the
+    hotkey listener rejects every press with 'Model is not ready yet'."""
+    import app.gui.app as app_module
+
+    backend = _FakeBackend("whisper-large-v3-turbo")
+    monkeypatch.setattr(app_module, "is_cached_for_info", lambda info: True)
+
+    app_module._autoload_persisted_model(backend)
+    assert backend.load_called == 1
+
+
+def test_autoload_skips_load_when_model_not_cached(monkeypatch):
+    """If the configured model isn't downloaded yet, don't auto-load —
+    force the user to click Download deliberately so they see the
+    progress bar and aren't surprised by a 1.5 GB silent transfer."""
+    import app.gui.app as app_module
+
+    backend = _FakeBackend("whisper-large-v3-turbo")
+    monkeypatch.setattr(app_module, "is_cached_for_info", lambda info: False)
+
+    app_module._autoload_persisted_model(backend)
+    assert backend.load_called == 0
+
+
+def test_autoload_falls_back_to_canonical_check_for_unknown_model(monkeypatch):
+    """If the configured model isn't in the registry (legacy entry,
+    user-pasted HF id), the helper still tries the lenient HF cache
+    check and loads if anything is on disk."""
+    import app.gui.app as app_module
+
+    backend = _FakeBackend("some/unknown-model")
+    monkeypatch.setattr(app_module, "is_model_cached", lambda canonical: True)
+    # is_cached_for_info shouldn't even be reached for an unknown model.
+    monkeypatch.setattr(
+        app_module,
+        "is_cached_for_info",
+        lambda info: pytest.fail("should not call is_cached_for_info for unknown id"),
+    )
+
+    app_module._autoload_persisted_model(backend)
+    assert backend.load_called == 1
+
+
+def test_autoload_no_op_when_backend_is_none():
+    """Sanity: helper must accept None backend without raising — main()
+    can be called with backend=None during early shutdown / tests."""
+    import app.gui.app as app_module
+
+    # Must not raise.
+    app_module._autoload_persisted_model(None)
+
+
+def test_apply_storage_path_silences_hf_symlinks_warning(monkeypatch, tmp_path):
+    """Without HF_HUB_DISABLE_SYMLINKS_WARNING set, every model
+    download spams the Logs view with the same one-line warning
+    about Windows symlinks needing Developer Mode / admin.  We
+    suppress it once during startup."""
+    import os
+
+    monkeypatch.delenv("HF_HUB_DISABLE_SYMLINKS_WARNING", raising=False)
+
+    from app.gui.app import _apply_storage_path
+
+    _apply_storage_path(str(tmp_path))
+    assert os.environ.get("HF_HUB_DISABLE_SYMLINKS_WARNING") == "1"
+
+
+def test_apply_storage_path_does_not_overwrite_user_symlinks_setting(
+    monkeypatch, tmp_path,
+):
+    """If the user (or a parent process) explicitly set the env var
+    to something else, leave it alone — they may have a reason."""
+    import os
+
+    monkeypatch.setenv("HF_HUB_DISABLE_SYMLINKS_WARNING", "0")
+
+    from app.gui.app import _apply_storage_path
+
+    _apply_storage_path(str(tmp_path))
+    assert os.environ.get("HF_HUB_DISABLE_SYMLINKS_WARNING") == "0"
+
+
+def test_app_module_no_longer_imports_splash():
+    """The splash module is gone (ONNX backends load in seconds, no
+    GIL-blocking import to hide).  Make sure nothing in app.py
+    still references it."""
+    import inspect
+
+    import app.gui.app as app_module
+
+    src = inspect.getsource(app_module)
+    assert "splash" not in src.lower(), (
+        "app.py should not reference the splash anymore"
+    )
 
 
 # ---- AUMID icon registry registration --------------------------------------

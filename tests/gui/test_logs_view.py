@@ -299,3 +299,49 @@ def test_logs_clear_drops_buffered_records(qtbot):
     view._on_toggle_network(True)
     text = view.findChild(QPlainTextEdit, "LogsTextArea").toPlainText()
     assert "alpha" not in text
+
+
+def test_rerender_preserves_all_visible_records(qtbot):
+    """_rerender must show every record that passes the current filter —
+    the batched implementation (setUpdatesEnabled + beginEditBlock) must
+    not drop or duplicate entries compared to the naive loop."""
+    from PySide6.QtWidgets import QPlainTextEdit
+    from app.gui.views.logs_view import LogsView
+
+    view = LogsView(search_debounce_ms=0)
+    qtbot.addWidget(view)
+
+    messages = [f"msg-{i}" for i in range(20)]
+    for i, msg in enumerate(messages):
+        view.append_record(f"12:00:{i:02d}", "INFO", "app.state_manager", msg)
+
+    # Force a full _rerender via the network toggle.
+    view._on_toggle_network(True)
+    view._on_toggle_network(False)
+
+    text = view.findChild(QPlainTextEdit, "LogsTextArea").toPlainText()
+    for msg in messages:
+        assert msg in text, f"record '{msg}' missing after _rerender"
+
+
+def test_rerender_respects_search_filter(qtbot):
+    """Records that do not match the search query must be absent after
+    _rerender — batched mode must apply the same _record_visible logic."""
+    from PySide6.QtWidgets import QPlainTextEdit
+    from app.gui.views.logs_view import LogsView
+
+    view = LogsView(search_debounce_ms=0)
+    qtbot.addWidget(view)
+
+    view.append_record("12:00:00", "INFO", "app.state_manager", "apple")
+    view.append_record("12:00:01", "INFO", "app.state_manager", "banana")
+    view.append_record("12:00:02", "INFO", "app.state_manager", "cherry")
+
+    # Simulate debounced search: set query and call _apply_search directly.
+    view._search_query = "banana"
+    view._rerender()
+
+    text = view.findChild(QPlainTextEdit, "LogsTextArea").toPlainText()
+    assert "banana" in text
+    assert "apple" not in text
+    assert "cherry" not in text

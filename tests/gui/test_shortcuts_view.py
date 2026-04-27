@@ -275,6 +275,71 @@ def test_set_storage_path_marks_default_explicitly(qtbot):
     assert "default" in text.lower()
 
 
+def _storage_size_label(view):
+    from PySide6.QtWidgets import QLabel
+    return view.findChild(QLabel, "StorageSizeLabel")
+
+
+def _open_storage_btn(view):
+    from PySide6.QtWidgets import QPushButton
+    return view.findChild(QPushButton, "OpenStorageButton")
+
+
+def test_storage_card_has_size_label(qtbot):
+    """The Storage card carries a label that shows total bytes used
+    by downloaded weights — without it the user has no idea how much
+    disk the cache eats and whether they should move it to a bigger
+    drive.  Starts blank until the controller computes the size."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+
+    label = _storage_size_label(view)
+    assert label is not None
+
+
+def test_set_storage_size_updates_label(qtbot):
+    """``set_storage_size(text)`` writes the human-readable size into
+    the label.  The controller does the formatting (bytes → ``"3.4 GB"``)
+    so the view stays free of locale rules."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+
+    view.set_storage_size("3.4 GB")
+    text = _storage_size_label(view).text()
+    assert "3.4 GB" in text
+
+
+def test_storage_card_has_open_folder_button(qtbot):
+    """A direct-to-Explorer button is the user's escape hatch — once
+    they know how much is used, they want to inspect / clean up."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+
+    btn = _open_storage_btn(view)
+    assert btn is not None
+
+
+def test_open_folder_button_emits_request(qtbot):
+    """Same delegation pattern as Change/Reset — the view emits, the
+    controller actually opens the folder (so we can mock subprocess
+    in tests)."""
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+
+    btn = _open_storage_btn(view)
+    with qtbot.waitSignal(view.storage_open_requested, timeout=1000):
+        qtbot.mouseClick(btn, Qt.LeftButton)
+
+
 def test_change_storage_button_emits_request(qtbot):
     """The view delegates path-picking to the controller — the
     button itself just emits a request signal and the controller

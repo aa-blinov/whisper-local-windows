@@ -448,3 +448,48 @@ img {
     display: none;
   }
 }
+
+
+/* ---- Model lookup table -------------------------------------------------- */
+
+.model-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #2d3140;
+  border-radius: 8px;
+  background-color: #1a1d24;
+}
+
+.model-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.model-table th,
+.model-table td {
+  padding: 10px 14px;
+  text-align: left;
+  border-bottom: 1px solid #2d3140;
+}
+
+.model-table thead th {
+  background-color: #252932;
+  color: #b8bcc6;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.model-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.model-table tbody tr:hover {
+  background-color: #252932;
+}
+
+.model-table code {
+  font-size: 12px;
+  white-space: nowrap;
+}

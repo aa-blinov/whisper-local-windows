@@ -3,7 +3,7 @@
 import pytest
 
 
-DEFAULT_KEYS = ("models", "shortcuts", "history", "logs")
+DEFAULT_KEYS = ("models", "transcribe", "history", "logs", "shortcuts")
 
 
 def test_sidebar_instantiates_with_default_items(qtbot):

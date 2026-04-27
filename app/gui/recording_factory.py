@@ -42,12 +42,11 @@ def build_recording_stack(
     feedback_cfg = config_manager.get_audio_feedback_config()
     hotkey_cfg = config_manager.get_hotkey_config()
 
-    # Resolve the model name. Accept either an alias from the registry
-    # (e.g. ``large-v3`` or ``gigaam-v2-ctc``) or a full Hugging Face id;
-    # ``RoutedBackend`` decides which engine to instantiate based on the
-    # alias' ``backend_kind`` and falls back to faster-whisper for bare
-    # repo paths.
-    raw_model = whisper_cfg.get("model") or "large-v3"
+    # Resolve the model name.  Accept either an alias from the
+    # registry (e.g. ``whisper-large-v3-turbo`` or ``gigaam-v3-rnnt``)
+    # or a full Hugging Face id; the ONNX backend handles both via
+    # ``onnx_asr.load_model``.
+    raw_model = whisper_cfg.get("model") or "whisper-large-v3-turbo"
 
     audio_feedback = AudioFeedback(
         enabled=bool(feedback_cfg.get("enabled", True)),

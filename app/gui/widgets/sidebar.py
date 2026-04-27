@@ -23,15 +23,17 @@ from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 NavItem = Tuple[str, str]
 _DEFAULT_ITEMS: tuple[NavItem, ...] = (
     ("models", "Models"),
-    ("shortcuts", "Settings"),
+    ("transcribe", "Transcribe"),
     ("history", "History"),
     ("logs", "Logs"),
+    ("shortcuts", "Settings"),
 )
 # Filename (without ``.svg``) inside ``app/gui/styles/icons/`` for
 # each nav key. Heroicons (outline, 24×24) — line-style works at
 # 20 px sidebar size and ages better than custom icons.
 _KEY_ICON_FILES: dict[str, str] = {
     "models": "models",
+    "transcribe": "transcribe",
     "shortcuts": "settings",
     "history": "history",
     "logs": "logs",

@@ -17,7 +17,6 @@ dependencies = [
     "sounddevice>=0.5.5",
     "global-hotkeys>=0.1.7; platform_system=='Windows'",
     "pyperclip>=1.11.0",
-    "ruamel.yaml>=0.19.1",
     "pywin32>=311; platform_system=='Windows'",
     "pyautogui>=0.9.54; platform_system=='Windows'",
     "requests>=2.33.1",
@@ -25,29 +24,28 @@ dependencies = [
     "pyinstaller>=6.20.0",
     "pyside6>=6.11.0",
     "scipy>=1.11",
-    "faster-whisper>=1.2.1",
-    "nvidia-cublas-cu12>=12.8",
-    "nvidia-cudnn-cu12>=9.0",
-    "torch>=2.0",
-    "torchaudio>=2.0",
+    # libsndfile bindings — fast in-process decoder for the
+    # WAV / FLAC / OGG / OPUS / AIFF family used by the file-
+    # transcribe view (and as a fast path before falling back to
+    # ffmpeg).
+    "soundfile>=0.12",
+    # Static ffmpeg binary (~70 MB on Windows) bundled as a Python
+    # wheel.  Used as the fallback decoder for everything libsndfile
+    # can't handle: MP3 / M4A / AAC / WMA / WebM / MOV / MKV / AVI /
+    # FLV / 3GP, etc.  Means the file-transcribe view accepts any
+    # common audio or video container without making the user
+    # install ffmpeg system-wide.
+    "imageio-ffmpeg>=0.5",
     "psutil>=6.0",
-    # Used by the resource monitor in the topbar to report GPU VRAM /
-    # utilisation. Falls back gracefully on machines without an
-    # NVIDIA driver — the widget just hides the GPU bar.
+    # GPU monitoring in the topbar (NVML).  Falls back gracefully on
+    # machines without an NVIDIA driver.
     "nvidia-ml-py>=12.0",
-    # ``[longform]`` pulls in pyannote-audio for VAD-based segmentation
-    # so ``model.transcribe_longform`` works on captures > 25 seconds.
-    # Requires the user to have accepted the gated
-    # ``pyannote/segmentation-3.0`` model on Hugging Face with
-    # ``HF_TOKEN`` set; without that, ``transcribe_longform`` will
-    # raise and we fall back to plain ``transcribe``.
-    "gigaam[longform] @ git+https://github.com/salute-developers/GigaAM",
-    # NVIDIA NeMo — needed for Parakeet TDT v3 (multilingual, 25
-    # languages incl. Russian) and the Canary v2 family. Heavy
-    # dependency tree (PyTorch Lightning, hydra, lhotse, librosa)
-    # but everything torch-y already came in via faster-whisper /
-    # gigaam, so the marginal install size is ~600-800 MB.
-    "nemo_toolkit[asr]>=2.0",
+    # The single ASR backend.  ``onnx-asr`` covers Whisper, GigaAM v3
+    # and Parakeet TDT v3 via ONNX Runtime — no PyTorch, no NeMo, no
+    # CTranslate2.  ``[gpu,hub]`` pulls in ``onnxruntime-gpu`` (CUDA
+    # acceleration) and ``huggingface-hub`` (model downloads).  Drops
+    # the install size from ~4 GB (with torch + NeMo) to ~700 MB.
+    "onnx-asr[gpu,hub]>=0.11.0",
 ]
 
 [project.scripts]

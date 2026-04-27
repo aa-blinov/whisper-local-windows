@@ -1,17 +1,17 @@
 whisper:
-  backend_mode: local
-  model: large-v3
+  model: parakeet-tdt-v3-onnx
   language: ru
   beam_size: 20
-  local_url: http://localhost:10300
-  external_url: http://remote-host:10300
+  compute_type: float32
 hotkey:
   start_recording_hotkey: ctrl+f2
   stop_recording_hotkey: ctrl+f3
+  cancel_recording_hotkey: ctrl+f6
 audio:
   channels: 1
   dtype: float32
   max_duration: 300
+  device: 31
 clipboard:
   auto_paste: 1
   preserve_clipboard: false
@@ -41,3 +41,7 @@ history:
   enabled: true
   max_entries: 1000
   auto_cleanup_days: 30
+storage:
+  models_dir: ''
+huggingface:
+  token: ''

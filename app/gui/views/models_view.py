@@ -187,17 +187,25 @@ class ModelsView(QWidget):
             card.set_loading(loading)
 
     def set_loading_progress(self, current: int, total: int) -> None:
-        """Forward backend download progress to every card. Each card
-        ignores the update unless it's currently in the loading state,
-        so only the active-and-loading card actually repaints."""
-        for card in self._cards.values():
+        """Forward backend download progress to the active card only.
+
+        tqdm fires this many times per second during a download; routing
+        it to every card via a loop wasted O(n) Python call overhead on
+        each tick even though n-1 of those calls were immediate no-ops
+        inside the card (``if not self._loading: return``).
+        """
+        card = self._cards.get(self._active_alias)
+        if card is not None:
             card.set_loading_progress(current, total)
 
     def set_loading_elapsed(self, seconds: int) -> None:
-        """Forward the elapsed-seconds tick to every card. Used for
-        cached model loads where no tqdm progress fires; the active
-        card surfaces it so the user sees the wait advancing."""
-        for card in self._cards.values():
+        """Forward the elapsed-seconds tick to the active card only.
+
+        The controller fires this once per second throughout a model load;
+        routing it through all cards was O(n) work for one repaint.
+        """
+        card = self._cards.get(self._active_alias)
+        if card is not None:
             card.set_loading_elapsed(seconds)
 
     def set_inference_settings(
