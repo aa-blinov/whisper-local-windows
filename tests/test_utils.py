@@ -627,3 +627,94 @@ def test_get_project_models_path_frozen_falls_back_when_localappdata_missing(
     assert not result.exists(), (
         "path resolver must not create the directory as a side effect"
     )
+
+
+# ---- is_onnx_model_cached ---------------------------------------------------
+
+
+def _make_onnx_snapshot(hub_root: Path, canonical: str, with_weights: bool = True) -> Path:
+    """Lay out a minimal HF snapshot for an ONNX model repo.
+
+    If ``with_weights=True``, an ``.onnx`` file is included — simulates
+    a completed download. Otherwise only ``config.json`` is present —
+    simulates a failed/partial download where huggingface_hub wrote the
+    config before the weights transfer finished.
+    """
+    repo_dir = hub_root / f"models--{canonical.replace('/', '--')}"
+    snap_dir = repo_dir / "snapshots" / "deadbeef"
+    snap_dir.mkdir(parents=True)
+    (snap_dir / "config.json").write_text("{}")
+    if with_weights:
+        (snap_dir / "model.onnx").write_bytes(b"fake onnx weights")
+    return repo_dir
+
+
+def test_is_onnx_model_cached_true_when_onnx_file_present(tmp_path, monkeypatch):
+    """A completed ONNX download has a ``.onnx`` file in the snapshot —
+    must be reported as cached."""
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    canonical = "istupakov/parakeet-tdt-0.6b-v3-onnx"
+    _make_onnx_snapshot(tmp_path / "hub", canonical, with_weights=True)
+
+    from app.utils import is_onnx_model_cached
+
+    assert is_onnx_model_cached(canonical) is True
+
+
+def test_is_onnx_model_cached_false_when_only_config_present(tmp_path, monkeypatch):
+    """A partial/failed download has only ``config.json`` — must NOT be
+    reported as cached so the app doesn't attempt to auto-load and hang."""
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    canonical = "istupakov/parakeet-tdt-0.6b-v3-onnx"
+    _make_onnx_snapshot(tmp_path / "hub", canonical, with_weights=False)
+
+    from app.utils import is_onnx_model_cached
+
+    assert is_onnx_model_cached(canonical) is False
+
+
+def test_is_onnx_model_cached_false_when_no_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+
+    from app.utils import is_onnx_model_cached
+
+    assert is_onnx_model_cached("istupakov/parakeet-tdt-0.6b-v3-onnx") is False
+
+
+def test_is_cached_for_info_uses_onnx_check_for_onnx_parakeet(tmp_path, monkeypatch):
+    """``is_cached_for_info`` must route onnx_parakeet models through
+    ``is_onnx_model_cached`` (requires .onnx file) — not the generic
+    ``is_model_cached`` which accepts any file and gives false positives
+    for partial downloads."""
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    canonical = "istupakov/parakeet-tdt-0.6b-v3-onnx"
+
+    from app.model_mapping import ModelInfo
+    from app.utils import is_cached_for_info
+
+    info = ModelInfo(
+        alias="parakeet-tdt-v3-onnx",
+        canonical=canonical,
+        display_name="Parakeet ONNX",
+        size_mb=1200,
+        vram_gb=2.0,
+        speed="fast",
+        quality="excellent",
+        languages="multilingual",
+        description="x",
+        compute_type="float32",
+        backend_kind="onnx_parakeet",
+        family="Parakeet",
+    )
+
+    # Partial download — only config.json.
+    _make_onnx_snapshot(tmp_path / "hub", canonical, with_weights=False)
+    assert is_cached_for_info(info) is False, (
+        "partial ONNX download (no .onnx file) must not report as cached"
+    )
+
+    # Full download — .onnx file present.
+    snap = (tmp_path / "hub" / f"models--{canonical.replace('/', '--')}"
+            / "snapshots" / "deadbeef")
+    (snap / "model.onnx").write_bytes(b"weights")
+    assert is_cached_for_info(info) is True

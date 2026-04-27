@@ -441,7 +441,11 @@ def main() -> int:
         except KeyError:
             info_for_load = None
             cached = is_model_cached(canonical)
-        if cached:
+        # ONNX Runtime loads in a few seconds with no GIL-blocking
+        # cold import — there is no need to freeze startup behind a
+        # splash. Let the model load in the background after the main
+        # window is ready so the user always sees the UI immediately.
+        if cached and getattr(info_for_load, "backend_kind", "") != "onnx_parakeet":
             # Pre-load the backend BEFORE creating the main window so
             # the GIL-locked NeMo / torch import doesn't freeze a
             # half-built UI. The splash widget is movable and
@@ -479,6 +483,16 @@ def main() -> int:
                 if recording_controller is not None:
                     recording_controller.shutdown()
                 return 0
+        elif cached:
+            # cached=True but splash intentionally skipped (e.g. onnx_parakeet
+            # which loads in seconds without a GIL-blocking cold import).
+            # The AppController will trigger the load in the background once
+            # the main window is ready.
+            logging.getLogger(__name__).info(
+                "Persisted model %s is cached — deferring load to main window "
+                "(no splash needed for this backend kind).",
+                canonical,
+            )
         else:
             logging.getLogger(__name__).info(
                 "Persisted model %s is not cached — skipping auto-load. "

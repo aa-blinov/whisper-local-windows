@@ -307,12 +307,43 @@ def is_gigaam_cached(model_name: str) -> bool:
         return False
 
 
+def is_onnx_model_cached(canonical: str) -> bool:
+    """Return True only when actual ONNX weight files are present in the
+    HF hub snapshot for ``canonical``.
+
+    ``is_model_cached`` is too lenient for ONNX repos: huggingface_hub
+    writes ``config.json`` first, long before the large ``.onnx`` weights
+    arrive, so a failed / partial download already satisfies the
+    ``any(snap.iterdir())`` check.  We require at least one ``.onnx`` file
+    to avoid triggering the startup auto-load on an incomplete download.
+    """
+    if not canonical:
+        return False
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        hub_root = Path(hf_home) / "hub"
+    else:
+        hub_root = Path.home() / ".cache" / "huggingface" / "hub"
+    repo_dir = hub_root / f"models--{canonical.replace('/', '--')}"
+    if not repo_dir.is_dir():
+        return False
+    snapshots = repo_dir / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    for snap in snapshots.iterdir():
+        if snap.is_dir() and any(snap.glob("*.onnx")):
+            return True
+    return False
+
+
 def is_cached_for_info(info) -> bool:
     """Dispatch the cache check by ``info.backend_kind`` so the UI can
     ask one question regardless of which engine backs a model."""
     kind = getattr(info, "backend_kind", "faster_whisper")
     if kind == "gigaam":
         return is_gigaam_cached(getattr(info, "canonical", ""))
+    if kind == "onnx_parakeet":
+        return is_onnx_model_cached(getattr(info, "canonical", ""))
     return is_model_cached(getattr(info, "canonical", ""))
 
 
