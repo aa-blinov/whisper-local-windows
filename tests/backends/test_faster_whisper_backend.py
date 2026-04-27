@@ -405,6 +405,47 @@ def test_tqdm_patch_skips_trivial_bars_to_avoid_jumps():
     assert 75_000_000 in totals
 
 
+def test_tqdm_patch_survives_null_stdout(monkeypatch):
+    """``pythonw.exe`` sets sys.stdout to None (no console attached).
+    tqdm wraps sys.stdout and tries to call fp.write() during refresh()
+    / display() — that raises ``AttributeError: 'NoneType' object has
+    no attribute 'write'``.  The patch must swallow that error so ONNX
+    / NeMo downloads don't crash the load thread with a tqdm traceback.
+
+    Regression test for: onnx_asr.load_model() → hf_hub_download() →
+    tqdm.refresh() → AttributeError when sys.stdout is None."""
+    import sys
+    import tqdm.auto
+
+    from app.backends.faster_whisper_backend import (
+        FasterWhisperBackend,
+        _install_tqdm_progress,
+    )
+
+    _install_tqdm_progress()
+
+    captured: list = []
+    FasterWhisperBackend.set_progress_callback(
+        lambda c, t, d: captured.append((c, t, d))
+    )
+    try:
+        original_stdout = sys.stdout
+        monkeypatch.setattr(sys, "stdout", None)
+
+        # Must not raise — this is the exact crash path from the ONNX backend.
+        bar = tqdm.auto.tqdm(total=10_000_000, desc="model.onnx", disable=False)
+        bar.update(5_000_000)
+        bar.refresh()
+        bar.close()
+    finally:
+        FasterWhisperBackend.set_progress_callback(None)
+
+    # Progress callback must still have fired despite the null stdout.
+    assert any(c == 5_000_000 for (c, _, _) in captured), (
+        "expected progress callback to fire even with sys.stdout=None"
+    )
+
+
 # ---- Shutdown --------------------------------------------------------------
 
 

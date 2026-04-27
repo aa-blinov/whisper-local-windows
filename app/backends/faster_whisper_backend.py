@@ -74,14 +74,30 @@ def _install_tqdm_progress() -> None:
             self._fire()
             return ret
 
+        def display(self, *args, **kwargs):
+            # ``pythonw.exe`` (no console) leaves sys.stdout as None.
+            # tqdm.display() calls fp.write() where fp wraps sys.stdout —
+            # the wrapped None raises AttributeError. Swallow it: we don't
+            # need console output, progress goes via _fire() → callback.
+            try:
+                return super().display(*args, **kwargs)
+            except (AttributeError, TypeError):
+                pass
+
         def refresh(self, *args, **kwargs):
-            ret = super().refresh(*args, **kwargs)
+            try:
+                ret = super().refresh(*args, **kwargs)
+            except (AttributeError, TypeError):
+                ret = None
             self._fire()
             return ret
 
         def close(self):
             self._fire()
-            return super().close()
+            try:
+                return super().close()
+            except (AttributeError, TypeError):
+                pass
 
         def _fire(self):
             cb = _progress_callback
