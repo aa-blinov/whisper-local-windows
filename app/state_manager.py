@@ -59,12 +59,17 @@ class StateManager:
         # hotkey listener could try to start a new recording immediately.
         with self._state_lock:
             self.is_processing = True
-        threading.Thread(
-            target=self._transcription_pipeline,
-            args=(audio_data,),
-            daemon=True,
-            name="transcription-pipeline",
-        ).start()
+        try:
+            threading.Thread(
+                target=self._transcription_pipeline,
+                args=(audio_data,),
+                daemon=True,
+                name="transcription-pipeline",
+            ).start()
+        except Exception:
+            self.logger.exception("Failed to start transcription thread")
+            with self._state_lock:
+                self.is_processing = False
 
     def stop_recording(self, use_auto_enter: bool = False) -> bool:
         currently_recording = self.audio_recorder.get_recording_status()
@@ -76,12 +81,17 @@ class StateManager:
             # start a second recording in the gap before the thread sets it.
             with self._state_lock:
                 self.is_processing = True
-            threading.Thread(
-                target=self._transcription_pipeline,
-                args=(audio_data, use_auto_enter),
-                daemon=True,
-                name="transcription-pipeline",
-            ).start()
+            try:
+                threading.Thread(
+                    target=self._transcription_pipeline,
+                    args=(audio_data, use_auto_enter),
+                    daemon=True,
+                    name="transcription-pipeline",
+                ).start()
+            except Exception:
+                self.logger.exception("Failed to start transcription thread")
+                with self._state_lock:
+                    self.is_processing = False
             return True
         else:
             return False
