@@ -270,12 +270,18 @@ class StateManager:
         with self._state_lock:
             old_state = self.is_model_loading
             self.is_model_loading = loading
-            
+
             if old_state != loading:
                 if loading:
                     self.system_tray.update_state("processing")
                 else:
                     self.system_tray.update_state("idle")
+                    # Re-warm the Windows audio device so the first
+                    # recording-start click after model load is heard.
+                    # The OS releases idle devices after a few seconds;
+                    # by the time any model finishes loading the device
+                    # opened at startup is almost certainly closed again.
+                    self.audio_feedback.prewarm()
     
     def can_start_recording(self) -> bool:
         with self._state_lock:
