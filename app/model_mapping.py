@@ -42,9 +42,11 @@ ONNX_FAMILIES = ("whisper", "gigaam", "parakeet")
 FAMILIES = (
     "Whisper",
     "Whisper Turbo",
-    "Whisper Distil",
     "GigaAM",
     "Parakeet",
+    "T-One",
+    "Vosk",
+    "Canary",
 )
 
 
@@ -111,24 +113,6 @@ MODELS: Tuple[ModelInfo, ...] = (
         ),
         compute_type="float16",
         family="Whisper Turbo",
-        onnx_family="whisper",
-    ),
-    # ---- Whisper Distil v3 -------------------------------------------------
-    ModelInfo(
-        alias="whisper-distil-large-v3",
-        canonical="onnx-community/distil-large-v3-ONNX",
-        display_name="Whisper Distil Large v3",
-        size_mb=1510,
-        vram_gb=3.5,
-        speed="fast",
-        quality="excellent",
-        languages="English-leaning",
-        description=(
-            "Distil-Whisper Large v3 — 6× faster than large-v3 with ~1% WER "
-            "drop.  English-leaning, great for English dictation."
-        ),
-        compute_type="float16",
-        family="Whisper Distil",
         onnx_family="whisper",
     ),
     # ---- Whisper Large v3 (full) -------------------------------------------
@@ -218,6 +202,95 @@ MODELS: Tuple[ModelInfo, ...] = (
         ),
         compute_type="float32",
         family="Parakeet",
+        onnx_family="parakeet",
+    ),
+    # ---- T-One (T-Tech, Russian, Conformer-CTC, ONNX) ---------------------
+    # 71.7M params, trained on 80k hours of Russian (57.9k of telephony).
+    # WER 8.63% on call-center / 6.20% on other Russian telephony — beats
+    # Whisper large-v3 (19.39%) on real-world speech with noise/codecs.
+    # Apache 2.0.  Built-in KenLM beam search → strong on punctuation.
+    # Uses ``gigaam`` onnx_family because the runtime behaviour matches:
+    # Russian-only, no language kwarg passed to recognize().
+    ModelInfo(
+        alias="t-one",
+        canonical="t-tech/T-one",
+        display_name="T-One (Russian, telephony-tuned)",
+        size_mb=290,
+        vram_gb=1.5,
+        speed="fast",
+        quality="excellent",
+        languages="Russian (only)",
+        description=(
+            "T-Tech T-One — Russian Conformer-CTC trained on 80k h of "
+            "speech (mostly telephony).  Crushes Whisper on call-center / "
+            "noisy audio (8.63 % WER vs 19.39 %).  Built-in KenLM beam "
+            "search yields strong punctuation."
+        ),
+        compute_type="float16",
+        family="T-One",
+        onnx_family="gigaam",
+    ),
+    # ---- Vosk Russian (alphacep, Zipformer2 RNN-T, ONNX) ------------------
+    # The lightweight option.  ``vosk-model-small-ru`` is ~30 MB,
+    # ``vosk-model-ru`` is ~50 MB; both run comfortably on CPU.  Useful
+    # for low-spec laptops or as a quick fallback when a heavier model
+    # is mid-download.  WER 6.1 % on Common Voice ru.  Apache 2.0.
+    ModelInfo(
+        alias="vosk-ru-small",
+        canonical="alphacep/vosk-model-small-ru",
+        display_name="Vosk Small (Russian, 30 MB)",
+        size_mb=30,
+        vram_gb=0.5,
+        speed="fast",
+        quality="good",
+        languages="Russian (only)",
+        description=(
+            "Vosk small Russian (Zipformer2 RNN-T) — ultra-lightweight, "
+            "~30 MB, runs easily on CPU.  Quality dips on accented speech "
+            "but fine for clean dictation."
+        ),
+        compute_type="float16",
+        family="Vosk",
+        onnx_family="gigaam",
+    ),
+    ModelInfo(
+        alias="vosk-ru",
+        canonical="alphacep/vosk-model-ru",
+        display_name="Vosk (Russian, 50 MB)",
+        size_mb=50,
+        vram_gb=1.0,
+        speed="fast",
+        quality="excellent",
+        languages="Russian (only)",
+        description=(
+            "Vosk Russian (Zipformer2 RNN-T) — 6.1 % WER on Common Voice "
+            "ru, ~50 MB.  Best speed/size/quality balance on CPU."
+        ),
+        compute_type="float16",
+        family="Vosk",
+        onnx_family="gigaam",
+    ),
+    # ---- NVIDIA Canary 1B v2 (multilingual, ONNX) -------------------------
+    # 1B-param transformer encoder-decoder; 25 languages incl. Russian.
+    # Larger and slightly slower than Parakeet TDT, but stronger on
+    # short utterances.  Auto-detects language; behaves like Parakeet
+    # for our purposes (no language kwarg, current_language() → None).
+    ModelInfo(
+        alias="canary-1b-v2",
+        canonical="istupakov/canary-1b-v2-onnx",
+        display_name="Canary 1B v2 (multilingual)",
+        size_mb=2000,
+        vram_gb=4.0,
+        speed="medium",
+        quality="excellent",
+        languages="25 langs incl. Russian, Ukrainian",
+        description=(
+            "NVIDIA Canary 1B v2 — multilingual transformer encoder-"
+            "decoder, 25 languages with auto-detect.  Stronger than "
+            "Parakeet on short utterances; heavier (1 B params)."
+        ),
+        compute_type="float16",
+        family="Canary",
         onnx_family="parakeet",
     ),
 )

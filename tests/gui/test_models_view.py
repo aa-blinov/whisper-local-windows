@@ -96,12 +96,12 @@ def test_models_view_emits_model_selected_when_card_emits(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "whisper-distil-large-v3")
+    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "whisper-base")
 
     with qtbot.waitSignal(view.model_selected, timeout=1000) as blocker:
         card.select_requested.emit(card.alias())
 
-    assert blocker.args == ["whisper-distil-large-v3"]
+    assert blocker.args == ["whisper-base"]
 
 
 def test_models_view_emits_model_delete_requested_when_card_emits(qtbot):
@@ -113,12 +113,12 @@ def test_models_view_emits_model_delete_requested_when_card_emits(qtbot):
     view = ModelsView()
     qtbot.addWidget(view)
 
-    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "whisper-distil-large-v3")
+    card = next(c for c in view.findChildren(ModelCard) if c.alias() == "whisper-base")
 
     with qtbot.waitSignal(view.model_delete_requested, timeout=1000) as blocker:
         card.delete_requested.emit(card.alias())
 
-    assert blocker.args == ["whisper-distil-large-v3"]
+    assert blocker.args == ["whisper-base"]
 
 
 def test_models_view_starts_with_no_active(qtbot):
@@ -311,7 +311,7 @@ def test_models_view_search_matches_canonical_and_language(qtbot):
     assert "gigaam-v3-rnnt" in aliases
     assert "gigaam-v3-ctc" in aliases
     # English-leaning Distil card filtered out (no "russian" mention).
-    assert "whisper-distil-large-v3" not in aliases
+    assert "whisper-base" not in aliases
 
 
 def test_models_view_family_chip_filters_by_family(qtbot):

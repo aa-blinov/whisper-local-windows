@@ -360,9 +360,9 @@ def test_controller_updates_topbar_on_model_select(qtbot):
     config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window)
-    window.models_view.model_selected.emit("whisper-distil-large-v3")
+    window.models_view.model_selected.emit("whisper-base")
 
-    assert "Distil" in window.topbar._model_pill.text()
+    assert "Base" in window.topbar._model_pill.text()
 
 
 def test_controller_clears_topbar_model_when_unknown(qtbot):
@@ -1747,15 +1747,15 @@ def test_controller_routes_model_select_through_recording_when_present(qtbot):
     rec = FakeRecordingController()
 
     AppController(config=config, window=window, recording=rec)
-    window.models_view.model_selected.emit("whisper-distil-large-v3")
+    window.models_view.model_selected.emit("whisper-base")
 
     # config still updated for persistence
-    assert ("whisper", "model", "whisper-distil-large-v3") in config.writes
+    assert ("whisper", "model", "whisper-base") in config.writes
     # compute_type written too — the registry tells us each card's preference
     assert ("whisper", "compute_type", "float16") in config.writes
     # AND recording stack was asked to actually switch (with compute_type)
     assert rec.model_change_requests == [
-        ("onnx-community/distil-large-v3-ONNX", "float16"),
+        ("onnx-community/whisper-base", "float16"),
     ]
 
 
@@ -1768,10 +1768,10 @@ def test_controller_skips_recording_call_when_recording_absent(qtbot):
     config = FakeConfig({"whisper": {"model": "whisper-large-v3"}})
 
     AppController(config=config, window=window)  # no recording arg
-    window.models_view.model_selected.emit("whisper-distil-large-v3")
+    window.models_view.model_selected.emit("whisper-base")
 
     # Should still write config and not crash.
-    assert ("whisper", "model", "whisper-distil-large-v3") in config.writes
+    assert ("whisper", "model", "whisper-base") in config.writes
 
 
 def test_controller_locks_models_view_when_state_not_idle(qtbot):
