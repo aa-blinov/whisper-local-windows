@@ -283,6 +283,13 @@ def _apply_storage_path(configured: Optional[str]) -> str:
 
     root = get_models_root(configured)
     os.environ["HF_HOME"] = root
+    # Suppress the per-download warning about symlinks not being
+    # available on Windows.  Symlinks require either admin rights or
+    # Developer Mode to be enabled; neither is realistic for a
+    # consumer dictation app.  The HF cache works fine without them
+    # (just uses more disk for duplicated files), so the warning is
+    # noise that clutters our Logs view.
+    os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     is_custom = bool(configured and str(configured).strip())
     if is_custom:
         os.environ["GIGAAM_MODELS_DIR"] = str(Path(root) / "gigaam")

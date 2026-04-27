@@ -186,6 +186,36 @@ def test_autoload_no_op_when_backend_is_none():
     app_module._autoload_persisted_model(None)
 
 
+def test_apply_storage_path_silences_hf_symlinks_warning(monkeypatch, tmp_path):
+    """Without HF_HUB_DISABLE_SYMLINKS_WARNING set, every model
+    download spams the Logs view with the same one-line warning
+    about Windows symlinks needing Developer Mode / admin.  We
+    suppress it once during startup."""
+    import os
+
+    monkeypatch.delenv("HF_HUB_DISABLE_SYMLINKS_WARNING", raising=False)
+
+    from app.gui.app import _apply_storage_path
+
+    _apply_storage_path(str(tmp_path))
+    assert os.environ.get("HF_HUB_DISABLE_SYMLINKS_WARNING") == "1"
+
+
+def test_apply_storage_path_does_not_overwrite_user_symlinks_setting(
+    monkeypatch, tmp_path,
+):
+    """If the user (or a parent process) explicitly set the env var
+    to something else, leave it alone — they may have a reason."""
+    import os
+
+    monkeypatch.setenv("HF_HUB_DISABLE_SYMLINKS_WARNING", "0")
+
+    from app.gui.app import _apply_storage_path
+
+    _apply_storage_path(str(tmp_path))
+    assert os.environ.get("HF_HUB_DISABLE_SYMLINKS_WARNING") == "0"
+
+
 def test_app_module_no_longer_imports_splash():
     """The splash module is gone (ONNX backends load in seconds, no
     GIL-blocking import to hide).  Make sure nothing in app.py
