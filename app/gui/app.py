@@ -486,15 +486,22 @@ def main() -> int:
                     recording_controller.shutdown()
                 return 0
         elif cached:
-            # cached=True but splash intentionally skipped (e.g. onnx_parakeet
-            # which loads in seconds without a GIL-blocking cold import).
-            # The AppController will trigger the load in the background once
-            # the main window is ready.
+            # cached=True but splash intentionally skipped (ONNX backends
+            # have no GIL-blocking cold import, so we don't freeze startup
+            # behind a splash).  Still need to actually start the load —
+            # backend.load() returns immediately (it spawns a daemon
+            # thread internally), so the main window paints right away
+            # and the model becomes ready a few seconds later in the
+            # background.  Without this call the topbar pill shows
+            # "Current model: …" but the hotkey listener never sees
+            # ``health_check() == True`` and rejects every Ctrl+F2 with
+            # "Model is not ready yet".
             logging.getLogger(__name__).info(
-                "Persisted model %s is cached — deferring load to main window "
-                "(no splash needed for this backend kind).",
+                "Persisted model %s is cached — kicking off background "
+                "load (no splash needed for this backend kind).",
                 canonical,
             )
+            backend.load()
         else:
             logging.getLogger(__name__).info(
                 "Persisted model %s is not cached — skipping auto-load. "
