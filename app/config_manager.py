@@ -225,8 +225,8 @@ class ConfigManager:
 
     def _write_config_file(self):
         # Write to a .tmp sibling first, then rename atomically so a crash
-        # mid-write never leaves a half-written (corrupted) config.yaml.
-        tmp = self.config_path.with_suffix(".tmp")
+        # mid-write never leaves a half-written (corrupted) config file.
+        tmp = self.config_path.with_name(self.config_path.name + ".tmp")
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(tmp, "w", encoding="utf-8") as f:
