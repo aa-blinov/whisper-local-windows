@@ -19,6 +19,7 @@ from app.gui.views.logs_view import LogsView
 from app.gui.views.models_view import ModelsView
 from app.gui.views.placeholder import PlaceholderView
 from app.gui.views.shortcuts_view import ShortcutsView
+from app.gui.views.transcribe_view import TranscribeView
 from app.gui.widgets.sidebar import Sidebar
 from app.gui.widgets.toast import Toast
 from app.gui.widgets.topbar import TopBar
@@ -67,12 +68,15 @@ class MainWindow(QMainWindow):
 
         self._views: Dict[str, QWidget] = {}
         self.models_view = ModelsView(parent=self.stack)
+        self.transcribe_view = TranscribeView(parent=self.stack)
         self.logs_view = LogsView(parent=self.stack)
         self.shortcuts_view = ShortcutsView(parent=self.stack)
         self.history_view = HistoryView(parent=self.stack)
         for key in self.sidebar.items():
             if key == "models":
                 view: QWidget = self.models_view
+            elif key == "transcribe":
+                view = self.transcribe_view
             elif key == "logs":
                 view = self.logs_view
             elif key == "shortcuts":

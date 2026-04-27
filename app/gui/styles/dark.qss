@@ -665,3 +665,51 @@ QHeaderView::section {
 QHeaderView::section:last {
     border-right: none;
 }
+
+
+/* ---- Transcribe view ----------------------------------------------------- */
+
+QLabel#TranscribeDropZone {
+    border: 2px dashed {{color.border}};
+    border-radius: {{radius.lg}};
+    color: {{color.text_secondary}};
+    background-color: {{color.bg_secondary}};
+    font-size: 14px;
+    padding: 24px;
+}
+
+QLabel#TranscribeDropZone[dropState="active"] {
+    border-color: {{color.accent}};
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_primary}};
+}
+
+QLabel#TranscribeStatus {
+    color: {{color.text_secondary}};
+    font-size: 13px;
+}
+
+QLabel#TranscribeStatus[status="busy"] {
+    color: {{color.accent_hover}};
+}
+
+QLabel#TranscribeStatus[status="done"] {
+    color: {{color.success}};
+}
+
+QLabel#TranscribeStatus[status="warning"] {
+    color: {{color.warning}};
+}
+
+QLabel#TranscribeStatus[status="error"] {
+    color: {{color.danger}};
+}
+
+QPlainTextEdit#TranscribeOutput {
+    background-color: {{color.bg_secondary}};
+    border: 1px solid {{color.border}};
+    border-radius: {{radius.md}};
+    padding: 12px;
+    color: {{color.text_primary}};
+    font-size: 14px;
+}

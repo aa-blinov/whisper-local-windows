@@ -23,6 +23,7 @@ from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 NavItem = Tuple[str, str]
 _DEFAULT_ITEMS: tuple[NavItem, ...] = (
     ("models", "Models"),
+    ("transcribe", "Transcribe"),
     ("shortcuts", "Settings"),
     ("history", "History"),
     ("logs", "Logs"),
@@ -32,6 +33,7 @@ _DEFAULT_ITEMS: tuple[NavItem, ...] = (
 # 20 px sidebar size and ages better than custom icons.
 _KEY_ICON_FILES: dict[str, str] = {
     "models": "models",
+    "transcribe": "transcribe",
     "shortcuts": "settings",
     "history": "history",
     "logs": "logs",

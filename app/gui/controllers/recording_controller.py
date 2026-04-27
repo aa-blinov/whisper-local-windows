@@ -10,6 +10,7 @@ back onto the Qt main thread via signals.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Optional, Protocol
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -39,6 +40,11 @@ class RecordingController(QObject):
     # (e.g. ``model.bin``). Progress comes from a non-Qt thread inside
     # tqdm — Qt auto-queues the signal cross-thread.
     download_progress = Signal(int, int, str)
+    # File-transcription results, dispatched from the transcribe view.
+    # The ``path`` argument lets the view ignore stale results if the
+    # user picked a second file before the first finished.
+    file_transcribed = Signal(str, str)            # (path, text)
+    file_transcription_failed = Signal(str, str)   # (path, message)
 
     DEFAULT_POLL_INTERVAL_MS = 200
 
@@ -128,6 +134,58 @@ class RecordingController(QObject):
         if recorder is None or not hasattr(recorder, "set_device"):
             return None
         return recorder.set_device(raw)
+
+    def transcribe_file_async(self, path: str) -> None:
+        """Run ``backend.transcribe_file(path)`` on a worker thread and
+        emit ``file_transcribed`` / ``file_transcription_failed`` with
+        the result.
+
+        Returns immediately so the UI thread isn't blocked.  If the
+        backend isn't loaded (or the inner doesn't expose
+        ``transcribe_file``), emits ``file_transcription_failed`` with
+        a friendly error message.
+        """
+        backend = getattr(self._state_manager, "backend", None)
+        if backend is None:
+            self.file_transcription_failed.emit(
+                path, "Бэкенд недоступен.",
+            )
+            return
+        if not getattr(backend, "health_check", lambda: False)():
+            self.file_transcription_failed.emit(
+                path,
+                "Модель ещё не готова — дождитесь окончания загрузки.",
+            )
+            return
+        target = getattr(backend, "transcribe_file", None)
+        if target is None:
+            self.file_transcription_failed.emit(
+                path,
+                "Бэкенд не поддерживает транскрипцию файлов.",
+            )
+            return
+
+        def _run() -> None:
+            try:
+                text = target(path)
+            except Exception as exc:  # pragma: no cover — defensive
+                log.exception("transcribe_file raised for %s", path)
+                self.file_transcription_failed.emit(path, str(exc))
+                return
+            if not text:
+                self.file_transcription_failed.emit(
+                    path,
+                    "Распознавание вернуло пустой результат — "
+                    "возможно, файл повреждён или модель не услышала речь.",
+                )
+                return
+            self.file_transcribed.emit(path, text)
+
+        threading.Thread(
+            target=_run,
+            daemon=True,
+            name=f"transcribe-file:{path[-32:]}",
+        ).start()
 
     def shutdown(self) -> None:
         if self._shutdown_done:

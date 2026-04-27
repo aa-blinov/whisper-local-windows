@@ -265,6 +265,47 @@ class OnnxAsrBackend:
             )
             return None
 
+    def transcribe_file(self, path: str) -> Optional[str]:
+        """Transcribe an audio file from disk.
+
+        Delegates audio decoding to onnx-asr's bundled loader (handles
+        WAV / FLAC / OGG / MP3 depending on what's installed in
+        ``soundfile`` / ``librosa``).  No chunking — the underlying
+        loader resamples to 16 kHz mono internally and the model
+        handles whatever length onnx-asr supports per call.
+
+        For Whisper family the user-selected language is forwarded
+        (same as the ``transcribe`` array path).  Timestamps are
+        intentionally not applied here — the file path produces a
+        paste-ready transcript and a side panel for word offsets
+        doesn't exist yet.
+        """
+        with self._lock:
+            if self._shutdown:
+                return None
+            if self._status != "ready" or self._model is None:
+                log.warning(
+                    "transcribe_file() called but backend status is %r",
+                    self._status,
+                )
+                return None
+            model = self._model
+
+        kwargs: dict = {}
+        if self._family == "whisper":
+            lang = self.current_language()
+            if lang is not None:
+                kwargs["language"] = lang
+
+        try:
+            return _transcribe_chunk(model, path, kwargs)
+        except Exception as exc:
+            log.error(
+                "OnnxAsr transcribe_file failed for %s: %s",
+                path, exc, exc_info=True,
+            )
+            return None
+
     def shutdown(self) -> None:
         """Release resources; move to ``stopped`` (terminal). Idempotent."""
         with self._lock:

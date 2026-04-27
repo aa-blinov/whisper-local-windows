@@ -642,6 +642,161 @@ def test_cancel_load_is_noop_when_not_loading(monkeypatch):
 # ---- Inference settings (timestamps) --------------------------------------
 
 
+# ---- Transcribe a file from disk ------------------------------------------
+
+
+def test_transcribe_file_returns_none_when_not_ready(tmp_path):
+    """Before the model is loaded, ``transcribe_file`` must return None
+    so callers can render a 'model not ready' message instead of
+    crashing on ``NoneType.recognize``."""
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x")
+    fake_audio = tmp_path / "x.wav"
+    fake_audio.write_bytes(b"")
+    assert backend.transcribe_file(str(fake_audio)) is None
+
+
+def test_transcribe_file_passes_path_to_recognize(monkeypatch, tmp_path):
+    """``transcribe_file`` delegates audio decoding to onnx-asr:
+    pass the path verbatim to ``model.recognize`` and let the library
+    handle WAV/FLAC/OGG/MP3 decoding through its bundled audio loader."""
+    _, fake_model = _install_fake_onnx_asr(
+        monkeypatch, recognize_return="from-file"
+    )
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    fake_audio = tmp_path / "demo.wav"
+    fake_audio.write_bytes(b"riffdata")
+
+    text = backend.transcribe_file(str(fake_audio))
+    assert text == "from-file"
+    fake_model.recognize.assert_called_once()
+    args, _kw = fake_model.recognize.call_args
+    assert args[0] == str(fake_audio), (
+        "expected the path itself to be passed to recognize()"
+    )
+
+
+def test_transcribe_file_passes_language_for_whisper(monkeypatch, tmp_path):
+    """Same as the array path: Whisper's recognize() takes a language
+    kwarg and we forward the user-selected one."""
+    _, fake_model = _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(
+        model="onnx-community/whisper-large-v3-turbo",
+        family="whisper",
+        language="ru",
+    )
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    fake_audio = tmp_path / "ru.wav"
+    fake_audio.write_bytes(b"")
+    backend.transcribe_file(str(fake_audio))
+
+    _args, kwargs = fake_model.recognize.call_args
+    assert kwargs.get("language") == "ru"
+
+
+def test_transcribe_file_returns_none_after_shutdown(monkeypatch, tmp_path):
+    _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    backend.shutdown()
+
+    fake_audio = tmp_path / "x.wav"
+    fake_audio.write_bytes(b"")
+    assert backend.transcribe_file(str(fake_audio)) is None
+
+
+def test_transcribe_file_returns_none_on_exception(monkeypatch, tmp_path):
+    """If the audio loader inside onnx-asr can't read the file (corrupt,
+    unsupported format), ``transcribe_file`` swallows the exception and
+    returns None — UI surfaces a friendly 'failed to transcribe' rather
+    than a stack trace."""
+    fake_module, fake_model = _install_fake_onnx_asr(monkeypatch)
+    fake_model.recognize.side_effect = RuntimeError("unsupported format")
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    fake_audio = tmp_path / "broken.bin"
+    fake_audio.write_bytes(b"")
+    assert backend.transcribe_file(str(fake_audio)) is None
+
+
+def test_transcribe_file_extracts_text_from_object_result(monkeypatch, tmp_path):
+    result_obj = MagicMock()
+    result_obj.text = "from-object"
+    _install_fake_onnx_asr(monkeypatch, recognize_return=result_obj)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    fake_audio = tmp_path / "x.wav"
+    fake_audio.write_bytes(b"")
+    assert backend.transcribe_file(str(fake_audio)) == "from-object"
+
+
+def test_transcribe_file_returns_none_on_empty_string(monkeypatch, tmp_path):
+    _install_fake_onnx_asr(monkeypatch, recognize_return="   ")
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    fake_audio = tmp_path / "x.wav"
+    fake_audio.write_bytes(b"")
+    assert backend.transcribe_file(str(fake_audio)) is None
+
+
+def test_transcribe_file_disables_with_timestamps_for_simplicity(
+    monkeypatch, tmp_path,
+):
+    """The file-transcribe path produces a paste-ready transcript;
+    word-level timestamps would require a different output path
+    (history JSON or a side panel) we don't have yet.  Don't apply
+    ``with_timestamps`` even if the user has it enabled in the
+    inference panel — keeps the ``recognize()`` return as a plain
+    string."""
+    _, fake_model = _install_fake_onnx_asr(monkeypatch)
+    fake_model.with_timestamps = MagicMock(return_value=fake_model)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+    from app.inference_settings import NemoInferenceSettings
+
+    backend = OnnxAsrBackend(model="x")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    backend.update_inference_settings(NemoInferenceSettings(timestamps=True))
+
+    fake_audio = tmp_path / "x.wav"
+    fake_audio.write_bytes(b"")
+    backend.transcribe_file(str(fake_audio))
+
+    fake_model.with_timestamps.assert_not_called()
+
+
 def test_with_timestamps_called_when_settings_enable_it(monkeypatch):
     """When the user enables timestamps in inference settings, the backend
     must call ``model.with_timestamps()`` to wrap the model before running

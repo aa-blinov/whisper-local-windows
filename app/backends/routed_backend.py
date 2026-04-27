@@ -164,6 +164,12 @@ class RoutedBackend:
     ) -> Optional[str]:
         return self._inner.transcribe(audio, sample_rate=sample_rate)
 
+    def transcribe_file(self, path: str) -> Optional[str]:
+        target = getattr(self._inner, "transcribe_file", None)
+        if target is None:
+            return None
+        return target(path)
+
     def shutdown(self) -> None:
         self._inner.shutdown()
 

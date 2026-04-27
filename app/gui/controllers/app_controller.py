@@ -172,6 +172,7 @@ class AppController(QObject):
         self._wire_models()
         self._wire_shortcuts()
         self._wire_history()
+        self._wire_transcribe()
         if recording is not None:
             self._wire_recording(recording)
         if tray is not None:
@@ -849,6 +850,62 @@ class AppController(QObject):
     def _on_history_copy(self, text: str) -> None:
         QApplication.clipboard().setText(text)
 
+    # ---- Transcribe-file view -----------------------------------------------
+
+    def _wire_transcribe(self) -> None:
+        """Hook the file-transcribe view into the recording controller.
+
+        File picks dispatch through ``RecordingController.transcribe_file_async``
+        which runs ``backend.transcribe_file`` on a worker and emits a
+        result signal.  The view stays responsive — busy state is shown
+        until the result lands.
+        """
+        view = self._window.transcribe_view
+        view.file_dropped.connect(self._on_transcribe_file_picked)
+
+    def _on_transcribe_file_picked(self, path: str) -> None:
+        view = self._window.transcribe_view
+        view.set_busy(path)
+        if self._recording is None:
+            view.set_error(
+                "Запись не инициализирована — попробуйте перезапустить приложение."
+            )
+            return
+        target = getattr(self._recording, "transcribe_file_async", None)
+        if target is None:
+            view.set_error(
+                "Текущая сборка не умеет транскрибировать файлы."
+            )
+            return
+        # Connect once, lazily — multiple connects from repeated picks
+        # are guarded by Qt.UniqueConnection.
+        try:
+            self._recording.file_transcribed.connect(
+                self._on_transcribe_done, Qt.UniqueConnection,
+            )
+        except (TypeError, RuntimeError):
+            pass
+        try:
+            self._recording.file_transcription_failed.connect(
+                self._on_transcribe_failed, Qt.UniqueConnection,
+            )
+        except (TypeError, RuntimeError):
+            pass
+        target(path)
+
+    def _on_transcribe_done(self, path: str, text: str) -> None:
+        view = self._window.transcribe_view
+        # Ignore stale results: if the user picked a second file the
+        # view's current_file() is the latter; only render the latest.
+        if view.current_file() != path:
+            return
+        view.set_result(text)
+
+    def _on_transcribe_failed(self, path: str, message: str) -> None:
+        view = self._window.transcribe_view
+        if view.current_file() != path:
+            return
+        view.set_error(message)
 
     def _wire_recording(self, recording: _RecordingLike) -> None:
         recording.state_changed.connect(self._window.topbar.set_recording_state)
