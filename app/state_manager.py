@@ -53,16 +53,35 @@ class StateManager:
         self.logger = logging.getLogger(__name__)
     
     def handle_max_recording_duration_reached(self, audio_data):
-        """Called when audio recorder reaches max duration with audio data"""
+        """Called when audio recorder reaches max duration with audio data."""
         self.logger.info("Max recording duration reached - starting transcription")
-        self._transcription_pipeline(audio_data, use_auto_enter=False)
-    
+        # Mark busy before the thread starts to close the race window where the
+        # hotkey listener could try to start a new recording immediately.
+        with self._state_lock:
+            self.is_processing = True
+        threading.Thread(
+            target=self._transcription_pipeline,
+            args=(audio_data,),
+            daemon=True,
+            name="transcription-pipeline",
+        ).start()
+
     def stop_recording(self, use_auto_enter: bool = False) -> bool:
         currently_recording = self.audio_recorder.get_recording_status()
-        
+
         if currently_recording:
             audio_data = self.audio_recorder.stop_recording()
-            self._transcription_pipeline(audio_data, use_auto_enter)
+            # Set is_processing=True *before* spawning the thread so the
+            # hotkey listener sees the busy state synchronously and cannot
+            # start a second recording in the gap before the thread sets it.
+            with self._state_lock:
+                self.is_processing = True
+            threading.Thread(
+                target=self._transcription_pipeline,
+                args=(audio_data, use_auto_enter),
+                daemon=True,
+                name="transcription-pipeline",
+            ).start()
             return True
         else:
             return False

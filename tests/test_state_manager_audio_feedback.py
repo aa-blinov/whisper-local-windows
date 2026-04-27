@@ -1,13 +1,17 @@
-"""Targeted tests for the start-sound-on-hotkey UX guarantee.
+"""Targeted tests for the start-sound-on-hotkey UX guarantee and the
+transcription-pipeline threading contract.
 
 The full StateManager has many collaborators; these tests use light Mock
-stand-ins to verify just the hotkey acoustic-feedback contract:
+stand-ins to verify:
 - pressing the toggle hotkey while idle but unable-to-start still plays the
   start sound, so the user always hears that their keypress was received.
+- the transcription pipeline runs on a dedicated worker thread so the hotkey
+  listener is freed immediately after the user stops recording.
 """
 
 import importlib.util
 import sys
+import threading
 from unittest.mock import MagicMock
 
 # Several native / heavy extensions may not be installed in all test
@@ -182,3 +186,75 @@ def test_set_model_loading_does_not_prewarm_if_state_unchanged():
     sm.set_model_loading(False)
 
     sm.audio_feedback.prewarm.assert_not_called()
+
+
+# ---- pipeline-threading tests -----------------------------------------------
+
+
+def test_stop_recording_pipeline_runs_in_separate_thread():
+    """The transcription pipeline must run on a worker thread so the
+    hotkey-listener thread is freed immediately — the user can press
+    the start hotkey again while Whisper is still transcribing."""
+    sm = _build_state_manager(can_start=True)
+    sm.audio_recorder.get_recording_status.return_value = True
+    sm.audio_recorder.stop_recording.return_value = MagicMock()  # dummy audio
+
+    caller_thread_id = threading.get_ident()
+    pipeline_ran = threading.Event()
+    pipeline_thread_ids: list[int] = []
+
+    def capture_thread(audio_data, use_auto_enter=False):
+        pipeline_thread_ids.append(threading.get_ident())
+        pipeline_ran.set()
+
+    sm._transcription_pipeline = capture_thread
+
+    sm.stop_recording()
+
+    assert pipeline_ran.wait(timeout=2), "pipeline did not run within 2 s"
+    assert pipeline_thread_ids[0] != caller_thread_id, (
+        "pipeline must run on a different thread than the caller"
+    )
+
+
+def test_stop_recording_sets_is_processing_before_pipeline_starts():
+    """is_processing must be True before the worker thread touches it so the
+    hotkey listener cannot start a second recording in the gap between
+    stop_recording() returning and the thread setting is_processing itself."""
+    sm = _build_state_manager(can_start=True)
+    sm.audio_recorder.get_recording_status.return_value = True
+    sm.audio_recorder.stop_recording.return_value = MagicMock()
+
+    # Hold the pipeline thread so it cannot clear is_processing before we check.
+    hold = threading.Event()
+    sm._transcription_pipeline = MagicMock(side_effect=lambda *a, **k: hold.wait(5))
+
+    sm.stop_recording()
+
+    # is_processing is True synchronously — set before the thread starts.
+    assert sm.is_processing is True
+    hold.set()  # release the background thread so it can exit cleanly
+
+
+def test_handle_max_duration_pipeline_runs_in_separate_thread():
+    """handle_max_recording_duration_reached must also offload the pipeline
+    to a worker thread — it's called from the audio-recorder callback, and
+    blocking that thread would starve future audio frames."""
+    sm = _build_state_manager(can_start=True)
+
+    caller_thread_id = threading.get_ident()
+    pipeline_ran = threading.Event()
+    pipeline_thread_ids: list[int] = []
+
+    def capture_thread(audio_data, use_auto_enter=False):
+        pipeline_thread_ids.append(threading.get_ident())
+        pipeline_ran.set()
+
+    sm._transcription_pipeline = capture_thread
+
+    sm.handle_max_recording_duration_reached(MagicMock())
+
+    assert pipeline_ran.wait(timeout=2), "pipeline did not run within 2 s"
+    assert pipeline_thread_ids[0] != caller_thread_id, (
+        "pipeline must run on a different thread than the caller"
+    )
