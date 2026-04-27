@@ -68,6 +68,45 @@ def test_model_info_rejects_invalid_quality():
         )
 
 
+def test_model_info_onnx_load_id_defaults_to_canonical():
+    """When the registry entry doesn't specify a separate load id (the
+    common case — most onnx-asr models accept their HF repo path
+    directly), ``onnx_load_id`` mirrors ``canonical``."""
+    from app.model_mapping import ModelInfo
+
+    info = ModelInfo(
+        alias="x",
+        canonical="onnx-community/whisper-large-v3",
+        display_name="X",
+        size_mb=1, vram_gb=0.1,
+        speed="fast", quality="good",
+        languages="multilingual", description="",
+    )
+    assert info.onnx_load_id == "onnx-community/whisper-large-v3"
+
+
+def test_model_info_onnx_load_id_can_differ_from_canonical():
+    """T-One's repo is at ``t-tech/T-one`` (capital T) on HF, but
+    ``onnx_asr.load_model`` only accepts the lowercase identifier
+    ``t-tech/t-one``.  ``onnx_load_id`` decouples the two so we can
+    cache by HF path while loading by the canonical onnx-asr id."""
+    from app.model_mapping import ModelInfo
+
+    info = ModelInfo(
+        alias="x",
+        canonical="t-tech/T-one",
+        display_name="X",
+        size_mb=1, vram_gb=0.1,
+        speed="fast", quality="good",
+        languages="Russian (only)", description="",
+        family="T-One",
+        onnx_family="gigaam",
+        onnx_load_id="t-tech/t-one",
+    )
+    assert info.canonical == "t-tech/T-one"
+    assert info.onnx_load_id == "t-tech/t-one"
+
+
 def test_model_info_rejects_invalid_onnx_family():
     from app.model_mapping import ModelInfo
 

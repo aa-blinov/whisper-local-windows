@@ -21,8 +21,8 @@ Public API:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Tuple
+from dataclasses import dataclass, field
+from typing import List, Optional, Tuple
 
 
 _SPEED_VALUES = ("fast", "medium", "slow")
@@ -68,6 +68,14 @@ class ModelInfo:
     # (language passing, language reporting).  Independent of the UI
     # ``family`` label which is purely cosmetic.
     onnx_family: str = "whisper"
+    # Identifier passed verbatim to ``onnx_asr.load_model``.  Defaults
+    # to ``canonical`` (the HF repo path), which works for most
+    # models.  Override when ``onnx-asr`` knows the model under a
+    # different name — e.g. ``t-tech/t-one`` (lowercase) for the
+    # capital-T HF repo, or short names like ``gigaam-v3-e2e-rnnt``
+    # for the punctuated GigaAM decoder variant.  ``canonical`` is
+    # still used for the HF cache check and the model URL.
+    onnx_load_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.speed not in _SPEED_VALUES:
@@ -94,6 +102,12 @@ class ModelInfo:
             raise ValueError(
                 f"onnx_family must be one of {ONNX_FAMILIES}, got {self.onnx_family!r}"
             )
+        # Default ``onnx_load_id`` to ``canonical`` so callers can
+        # always read ``info.onnx_load_id`` without an extra ``or``.
+        # ``object.__setattr__`` is the dataclass-friendly way to
+        # mutate a frozen instance from inside ``__post_init__``.
+        if self.onnx_load_id is None:
+            object.__setattr__(self, "onnx_load_id", self.canonical)
 
 
 MODELS: Tuple[ModelInfo, ...] = (
@@ -150,6 +164,9 @@ MODELS: Tuple[ModelInfo, ...] = (
         compute_type="float16",
         family="GigaAM",
         onnx_family="gigaam",
+        # The ``-e2e-`` variant emits text already punctuated and
+        # normalised — no separate punctuator needed for our paste flow.
+        onnx_load_id="gigaam-v3-e2e-ctc",
     ),
     ModelInfo(
         alias="gigaam-v3-rnnt",
@@ -167,6 +184,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         compute_type="float16",
         family="GigaAM",
         onnx_family="gigaam",
+        onnx_load_id="gigaam-v3-e2e-rnnt",
     ),
     # ---- Parakeet TDT v3 (NVIDIA, multilingual, ONNX) ----------------------
     ModelInfo(
@@ -185,6 +203,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         compute_type="float32",
         family="Parakeet",
         onnx_family="parakeet",
+        onnx_load_id="nemo-parakeet-tdt-0.6b-v3",
     ),
     # ---- T-One (T-Tech, Russian, Conformer-CTC, ONNX) ---------------------
     # 71.7M params, trained on 80k hours of Russian (57.9k of telephony).
@@ -211,6 +230,11 @@ MODELS: Tuple[ModelInfo, ...] = (
         compute_type="float16",
         family="T-One",
         onnx_family="gigaam",
+        # HF repo is published at ``t-tech/T-one`` (capital T), but
+        # ``onnx_asr.load_model`` only matches its registry against the
+        # lowercase identifier.  Pass lowercase to load_model; keep the
+        # canonical case for cache directory + URL display.
+        onnx_load_id="t-tech/t-one",
     ),
     # ---- Vosk Russian (alphacep, Zipformer2 RNN-T, ONNX) ------------------
     # The lightweight option.  ``vosk-model-small-ru`` is ~30 MB,
@@ -274,6 +298,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         compute_type="float16",
         family="Canary",
         onnx_family="parakeet",
+        onnx_load_id="nemo-canary-1b-v2",
     ),
 )
 

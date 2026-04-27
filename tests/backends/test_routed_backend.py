@@ -42,9 +42,15 @@ class _FakeBackend:
         self.load_called = True
         self._status = "ready"
 
-    def change_model(self, model: str, compute_type: Optional[str] = None) -> None:
+    def change_model(
+        self, model: str,
+        compute_type: Optional[str] = None,
+        load_id: Optional[str] = None,
+    ) -> None:
         self.changed_to.append((model, compute_type))
         self.model = model
+        if load_id is not None:
+            self.kwargs["load_id"] = load_id
 
     def current_model(self) -> str:
         return self.model

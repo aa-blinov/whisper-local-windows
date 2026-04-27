@@ -142,6 +142,45 @@ def test_load_passes_model_name_to_load_model(monkeypatch):
     assert args[0] == "onnx-community/whisper-base"
 
 
+def test_load_uses_load_id_when_provided(monkeypatch):
+    """When ``load_id`` is passed (because the HF canonical and the
+    onnx-asr identifier differ — T-One, GigaAM e2e, NeMo short names),
+    ``load_model`` must receive the load_id rather than the model
+    name we display in the UI."""
+    fake_module, _ = _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(
+        model="t-tech/T-one",      # what current_model() returns
+        load_id="t-tech/t-one",   # what onnx_asr expects
+    )
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    # current_model() still returns the HF canonical for cache checks
+    # / UI display.
+    assert backend.current_model() == "t-tech/T-one"
+    # …but load_model() received the lowercase onnx-asr identifier.
+    args, _ = fake_module.load_model.call_args
+    assert args[0] == "t-tech/t-one"
+
+
+def test_load_falls_back_to_model_name_when_load_id_omitted(monkeypatch):
+    """When the registry doesn't override ``load_id`` (the common
+    case), passing model name verbatim to ``load_model`` is correct."""
+    fake_module, _ = _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="onnx-community/whisper-base")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    args, _ = fake_module.load_model.call_args
+    assert args[0] == "onnx-community/whisper-base"
+
+
 def test_load_passes_quantization_kwarg_when_requested(monkeypatch):
     """``quantization='int8'`` must reach onnx_asr.load_model so the
     int8 variant is selected."""

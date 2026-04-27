@@ -37,6 +37,7 @@ def _build_onnx_asr(
     language: Optional[str] = None,
     device: str = "auto",
     quantization: Optional[str] = None,
+    load_id: Optional[str] = None,
     **_ignored,
 ) -> TranscriptionBackend:
     # Late import: keeps onnx-asr off the module-load path of tests
@@ -50,6 +51,7 @@ def _build_onnx_asr(
         language=language,
         device=device,
         quantization=quantization,
+        load_id=load_id,
     )
 
 
@@ -76,9 +78,12 @@ class RoutedBackend:
             Callable[[int, int, str], None]
         ] = None
 
-        canonical, onnx_family = self._resolve_for(model)
+        canonical, onnx_family, load_id = self._resolve_for(model)
         self._inner = _build_onnx_asr(
-            canonical, onnx_family=onnx_family, **self._kwargs
+            canonical,
+            onnx_family=onnx_family,
+            load_id=load_id,
+            **self._kwargs,
         )
 
     # ---- public API ---------------------------------------------------------
@@ -102,7 +107,7 @@ class RoutedBackend:
         model: str,
         compute_type: Optional[str] = None,
     ) -> None:
-        canonical, onnx_family = self._resolve_for(model)
+        canonical, onnx_family, load_id = self._resolve_for(model)
 
         # Same family — let the inner backend swap models without a
         # rebuild.  The onnx-asr session can be re-pointed to a new
@@ -110,7 +115,9 @@ class RoutedBackend:
         # without throwing away the family-specific configuration.
         current_family = getattr(self._inner, "_family", None)
         if current_family == onnx_family:
-            self._inner.change_model(canonical, compute_type=compute_type)
+            self._inner.change_model(
+                canonical, compute_type=compute_type, load_id=load_id,
+            )
             return
 
         # Different model or different family — tear down, rebuild.
@@ -128,7 +135,10 @@ class RoutedBackend:
             self._kwargs["quantization"] = _quantization_for(compute_type)
 
         new_inner = _build_onnx_asr(
-            canonical, onnx_family=onnx_family, **self._kwargs
+            canonical,
+            onnx_family=onnx_family,
+            load_id=load_id,
+            **self._kwargs,
         )
         if self._progress_callback is not None:
             try:
@@ -189,17 +199,22 @@ class RoutedBackend:
 
     # ---- helpers ------------------------------------------------------------
 
-    def _resolve_for(self, model: str) -> tuple[str, str]:
-        """Map an alias / canonical id to ``(canonical, onnx_family)``.
+    def _resolve_for(self, model: str) -> tuple[str, str, Optional[str]]:
+        """Map an alias / canonical id to ``(canonical, onnx_family,
+        onnx_load_id)``.
 
-        Falls back to ``("…", "auto")`` for unknown ids so a bare
-        Hugging Face repo path still loads.
+        ``onnx_load_id`` is what to pass to ``onnx_asr.load_model`` —
+        usually the same as ``canonical`` (the HF repo path), but
+        overridden in the registry when onnx-asr knows the model under
+        a different identifier (T-One, GigaAM e2e variants, NeMo
+        short names).  Falls back to ``("…", "auto", None)`` for
+        unknown ids so a bare Hugging Face repo path still loads.
         """
         try:
             info = get_model(alias_for(model))
         except KeyError:
-            return canonical_for(model), "auto"
-        return info.canonical, info.onnx_family
+            return canonical_for(model), "auto", None
+        return info.canonical, info.onnx_family, info.onnx_load_id
 
 
 def _quantization_for(compute_type: Optional[str]) -> Optional[str]:

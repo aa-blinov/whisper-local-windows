@@ -81,6 +81,7 @@ class OnnxAsrBackend:
         language: Optional[str] = None,
         device: str = "auto",
         quantization: Optional[str] = None,
+        load_id: Optional[str] = None,
     ) -> None:
         if family not in _FAMILIES:
             raise ValueError(
@@ -89,6 +90,11 @@ class OnnxAsrBackend:
 
         self._lock = threading.Lock()
         self._model_name = model
+        # ``load_id`` is what we pass to onnx_asr.load_model; it can
+        # differ from ``model`` (the HF canonical we display + cache
+        # against) when onnx-asr knows the model under a different
+        # name.  Defaults to ``model`` for the common case.
+        self._load_id = load_id or model
         self._family = family
         self._language = language
         self._device = device
@@ -173,8 +179,15 @@ class OnnxAsrBackend:
         self,
         model: str,
         compute_type: Optional[str] = None,  # API parity, ignored
+        load_id: Optional[str] = None,
     ) -> None:
-        """Switch to a different ONNX model. Triggers a background reload."""
+        """Switch to a different ONNX model. Triggers a background reload.
+
+        ``load_id`` mirrors the constructor knob — pass an explicit
+        loader identifier when the new model's onnx-asr id differs
+        from its HF canonical (T-One, GigaAM e2e, NeMo short names).
+        Defaults to ``model``.
+        """
         del compute_type
         with self._lock:
             if self._shutdown:
@@ -182,6 +195,7 @@ class OnnxAsrBackend:
             if model == self._model_name and self._status == "ready":
                 return
             self._model_name = model
+            self._load_id = load_id or model
             self._model = None
             self._status = "stopped"
         self.load()
@@ -309,13 +323,14 @@ class OnnxAsrBackend:
             return
 
         providers = self._resolve_providers()
+        load_id = self._load_id
         log.info(
-            "Loading ONNX model %s (family=%s, providers=%s, quantization=%s)…",
-            model_name, self._family, providers, self._quantization,
+            "Loading ONNX model %s (load_id=%s, family=%s, providers=%s, quantization=%s)…",
+            model_name, load_id, self._family, providers, self._quantization,
         )
         try:
             model = onnx_asr.load_model(
-                model_name, **self._build_load_kwargs(providers)
+                load_id, **self._build_load_kwargs(providers)
             )
         except Exception as exc:
             # Fallback path: user asked for CUDA but the CUDA provider
@@ -333,7 +348,7 @@ class OnnxAsrBackend:
                 )
                 try:
                     model = onnx_asr.load_model(
-                        model_name,
+                        load_id,
                         **self._build_load_kwargs(["CPUExecutionProvider"]),
                     )
                 except Exception as cpu_exc:
