@@ -130,6 +130,82 @@ def test_start_recording_still_plays_sound_when_recorder_fails():
     sm.audio_feedback.play_start_sound.assert_called_once()
 
 
+def test_stop_recording_plays_stop_sound_before_closing_audio_recorder():
+    """Reorder: stop sound first, mic close second.
+
+    Closing the SoundDevice stream blocks 50-200 ms on Windows.  Playing
+    the stop sound AFTER that close means the user perceives a delay
+    between Ctrl+F3 and the acoustic feedback.  Play first so the user
+    gets immediate confirmation that the hotkey was caught."""
+    sm = _build_state_manager(can_start=True)
+    sm.audio_recorder.get_recording_status.return_value = True
+
+    call_order: list[str] = []
+    sm.audio_feedback.play_stop_sound.side_effect = (
+        lambda: call_order.append("sound")
+    )
+    sm.audio_recorder.stop_recording.side_effect = lambda: (
+        call_order.append("close") or MagicMock()
+    )
+    # Stub the pipeline thread target so it doesn't try to drive a real
+    # transcribe; the order we care about is on the caller thread.
+    sm._transcription_pipeline = MagicMock()
+
+    sm.stop_recording()
+
+    assert call_order[:2] == ["sound", "close"], (
+        f"expected stop sound before mic close, got {call_order!r}"
+    )
+
+
+def test_stop_recording_pipeline_does_not_play_stop_sound_again():
+    """The transcription pipeline must NOT replay the stop sound — it's
+    already been played on the hotkey thread.  Otherwise the user hears
+    two beeps for one Ctrl+F3 press."""
+    sm = _build_state_manager(can_start=True)
+    sm.audio_recorder.get_recording_status.return_value = True
+    sm.audio_recorder.stop_recording.return_value = MagicMock()
+
+    # Run the real pipeline (no thread spawn) but stub the parts that
+    # would touch real I/O.
+    sm.backend = MagicMock()
+    sm.backend.health_check.return_value = True
+    sm.backend.transcribe.return_value = "x"
+    sm.clipboard_manager = MagicMock()
+    sm.clipboard_manager.copy_text.return_value = True
+
+    sm.stop_recording()
+
+    # play_stop_sound called exactly once — by stop_recording() itself,
+    # NOT a second time by _transcription_pipeline.
+    assert sm.audio_feedback.play_stop_sound.call_count == 1
+
+
+def test_handle_max_duration_plays_stop_sound_before_pipeline():
+    """Auto-stop on max duration must also play the stop sound on the
+    caller thread (the audio-recorder callback).  Same UX guarantee
+    as Ctrl+F3."""
+    sm = _build_state_manager(can_start=True)
+    call_order: list[str] = []
+
+    sm.audio_feedback.play_stop_sound.side_effect = (
+        lambda: call_order.append("sound")
+    )
+
+    def capture_thread(audio_data, use_auto_enter=False):
+        call_order.append("pipeline")
+
+    sm._transcription_pipeline = capture_thread
+
+    sm.handle_max_recording_duration_reached(MagicMock())
+
+    # Sound fires synchronously on the caller, before the pipeline
+    # thread is given a chance to run.
+    assert call_order[0] == "sound", (
+        f"expected stop sound to fire first, got {call_order!r}"
+    )
+
+
 def test_toggle_does_not_play_start_sound_when_already_recording():
     """When was_recording=True, toggle stops recording — start sound is irrelevant
     here (stop sound fires from inside the transcription pipeline)."""

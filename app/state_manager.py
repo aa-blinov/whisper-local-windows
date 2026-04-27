@@ -55,6 +55,11 @@ class StateManager:
     def handle_max_recording_duration_reached(self, audio_data):
         """Called when audio recorder reaches max duration with audio data."""
         self.logger.info("Max recording duration reached - starting transcription")
+        # Acoustic feedback first, BEFORE the worker thread is given a
+        # chance to run.  Mirrors stop_recording() so the user hears the
+        # stop sound the moment max duration fires, regardless of how
+        # busy the scheduler is.
+        self.audio_feedback.play_stop_sound()
         # Mark busy before the thread starts to close the race window where the
         # hotkey listener could try to start a new recording immediately.
         with self._state_lock:
@@ -75,6 +80,15 @@ class StateManager:
         currently_recording = self.audio_recorder.get_recording_status()
 
         if currently_recording:
+            # Play stop sound BEFORE closing the mic stream — closing
+            # the SoundDevice stream blocks 50-200 ms on Windows, and
+            # then the transcription pipeline runs on a worker thread
+            # whose first scheduling slice can take another 10 ms+.
+            # Stacking that latency on top of winsound's own first-call
+            # delay is what made Ctrl+F3 feel sluggish.  Playing first
+            # gives the user immediate acoustic confirmation that the
+            # hotkey was caught.
+            self.audio_feedback.play_stop_sound()
             audio_data = self.audio_recorder.stop_recording()
             # Set is_processing=True *before* spawning the thread so the
             # hotkey listener sees the busy state synchronously and cannot
@@ -162,7 +176,10 @@ class StateManager:
                 self.is_processing = True
                 self.logger.debug(f"[Pipeline] is_processing set True; model_loading={self.is_model_loading}")
 
-            self.audio_feedback.play_stop_sound()
+            # Stop sound is played by the caller (stop_recording /
+            # handle_max_recording_duration_reached) BEFORE this thread
+            # is even spawned, so there's no acoustic feedback to do
+            # here.  See the comment in stop_recording() for why.
             
             if audio_data is None:
                 self.logger.debug("[Pipeline] audio_data is None -> early return")
