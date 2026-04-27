@@ -81,8 +81,20 @@ def patch_builders(monkeypatch):
         created.append(backend)
         return backend
 
+    def build_nemo(model, **kwargs):
+        backend = _FakeBackend(model, "nemo", **kwargs)
+        created.append(backend)
+        return backend
+
+    def build_onnx_parakeet(model, **kwargs):
+        backend = _FakeBackend(model, "onnx_parakeet", **kwargs)
+        created.append(backend)
+        return backend
+
     monkeypatch.setattr(mod, "_build_faster_whisper", build_fw)
     monkeypatch.setattr(mod, "_build_gigaam", build_gigaam)
+    monkeypatch.setattr(mod, "_build_nemo", build_nemo)
+    monkeypatch.setattr(mod, "_build_onnx_parakeet", build_onnx_parakeet)
     return created
 
 
@@ -116,6 +128,20 @@ def patch_registry(monkeypatch):
             languages="Russian (only)",
             description="x",
             backend_kind="gigaam",
+        ),
+        "onnx-model": ModelInfo(
+            alias="onnx-model",
+            canonical="fake/onnx-weights",
+            display_name="OnnxParakeet",
+            size_mb=100,
+            vram_gb=2.0,
+            speed="fast",
+            quality="excellent",
+            languages="25 langs incl. Russian, Ukrainian",
+            description="x",
+            compute_type="float32",
+            backend_kind="onnx_parakeet",
+            family="Parakeet",
         ),
     }
 
@@ -246,6 +272,35 @@ def test_cancel_load_forwards_to_inner(patch_builders, patch_registry):
 
     backend.cancel_load()
     assert inner.cancel_load_called is True
+
+
+def test_onnx_parakeet_kind_routes_to_onnx_builder(patch_builders, patch_registry):
+    """Selecting a model with ``backend_kind='onnx_parakeet'`` must
+    build an ``OnnxParakeetBackend`` via ``_build_onnx_parakeet``, not
+    fall through to the faster-whisper default."""
+    from app.backends.routed_backend import RoutedBackend
+
+    backend = RoutedBackend(model="onnx-model")
+    assert backend.current_kind() == "onnx_parakeet"
+    assert len(patch_builders) == 1
+    assert patch_builders[0].kind == "onnx_parakeet"
+    assert patch_builders[0].model == "fake/onnx-weights"
+
+
+def test_cross_kind_switch_fw_to_onnx_parakeet(patch_builders, patch_registry):
+    """Changing from faster_whisper to onnx_parakeet must shut down the
+    old backend and build a new one of the correct kind."""
+    from app.backends.routed_backend import RoutedBackend
+
+    backend = RoutedBackend(model="fw-model")
+    fw_inner = patch_builders[0]
+
+    backend.change_model("onnx-model")
+
+    assert fw_inner.shutdown_called
+    assert len(patch_builders) == 2
+    assert patch_builders[1].kind == "onnx_parakeet"
+    assert backend.current_kind() == "onnx_parakeet"
 
 
 def test_cancel_load_silent_when_inner_lacks_method(patch_builders, patch_registry):

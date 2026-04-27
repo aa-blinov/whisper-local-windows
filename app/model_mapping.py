@@ -31,7 +31,7 @@ _COMPUTE_VALUES = ("float32", "float16", "int8_float16", "int8")
 # Which inference backend should drive this model. ``faster_whisper`` is
 # the default CT2 path; ``gigaam`` routes through the Sber Russian-only
 # acoustic model. New engines plug in here.
-BACKEND_KINDS = ("faster_whisper", "gigaam", "nemo")
+BACKEND_KINDS = ("faster_whisper", "gigaam", "nemo", "onnx_parakeet")
 # Visual grouping shown on the card. All faster-whisper-based models
 # stay anchored to "Whisper" so the lineage is honest — the variant
 # is part of the family name, not a parallel family of its own.
@@ -235,6 +235,33 @@ MODELS: Tuple[ModelInfo, ...] = (
         languages="25 langs incl. Russian, Ukrainian",
         description="NVIDIA Parakeet TDT 0.6B v3 — 25 European languages with auto-detect, low-latency. The fastest multilingual ASR on Hugging Face's leaderboard.",
         backend_kind="nemo",
+        family="Parakeet",
+    ),
+    # ---- Parakeet via ONNX Runtime (no NeMo / PyTorch required) -----------
+    # Same Parakeet TDT 0.6B v3 weights exported to ONNX format by
+    # ``istupakov`` on HuggingFace.  Inference goes through
+    # ``onnx-asr`` + ONNX Runtime — no NeMo, no PyTorch, no Lightning.
+    #
+    # Key trade-offs vs NeMo card:
+    #   + Cold import: ~1–2 s  (vs 30–90 s for NeMo)
+    #   + No CUDA JIT warmup on first transcribe()
+    #   + Install size: ~100 MB  (onnxruntime only)
+    #   - Max 25 s per chunk (auto-split for longer recordings)
+    ModelInfo(
+        alias="parakeet-tdt-v3-onnx",
+        canonical="istupakov/parakeet-tdt-0.6b-v3-onnx",
+        display_name="Parakeet TDT v3 — ONNX (fast start)",
+        size_mb=1200,
+        vram_gb=2.0,
+        speed="fast",
+        quality="excellent",
+        languages="25 langs incl. Russian, Ukrainian",
+        description=(
+            "Parakeet TDT 0.6B v3 via ONNX Runtime — identical accuracy, "
+            "no NeMo/PyTorch. Loads in seconds instead of minutes."
+        ),
+        compute_type="float32",
+        backend_kind="onnx_parakeet",
         family="Parakeet",
     ),
 )

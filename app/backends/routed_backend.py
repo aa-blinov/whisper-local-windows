@@ -58,6 +58,15 @@ def _build_nemo(model: str, **kwargs) -> TranscriptionBackend:
     return NemoBackend(model=model, **accepted)
 
 
+def _build_onnx_parakeet(model: str, **kwargs) -> TranscriptionBackend:
+    from app.backends.onnx_backend import OnnxParakeetBackend
+
+    # OnnxParakeetBackend accepts only ``device``; compute_type /
+    # beam_size / language have no meaning for ONNX Runtime inference.
+    accepted = {k: v for k, v in kwargs.items() if k in ("device",)}
+    return OnnxParakeetBackend(model=model, **accepted)
+
+
 class RoutedBackend:
     def __init__(
         self,
@@ -220,4 +229,6 @@ class RoutedBackend:
             return _build_gigaam(canonical, **self._kwargs)
         if kind == "nemo":
             return _build_nemo(canonical, **self._kwargs)
+        if kind == "onnx_parakeet":
+            return _build_onnx_parakeet(canonical, **self._kwargs)
         return _build_faster_whisper(canonical, **self._kwargs)

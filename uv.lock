@@ -1625,6 +1625,7 @@ dependencies = [
     { name = "nvidia-cublas-cu12" },
     { name = "nvidia-cudnn-cu12" },
     { name = "nvidia-ml-py" },
+    { name = "onnx-asr", extra = ["cpu", "hub"] },
     { name = "psutil" },
     { name = "pyautogui", marker = "sys_platform == 'win32'" },
     { name = "pyinstaller" },
@@ -1633,7 +1634,7 @@ dependencies = [
     { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "pyyaml" },
     { name = "requests" },
-    { name = "ruamel-yaml" },
+    { name = "scipy" },
     { name = "sounddevice" },
     { name = "torch" },
     { name = "torchaudio" },
@@ -1655,6 +1656,7 @@ requires-dist = [
     { name = "nvidia-cublas-cu12", specifier = ">=12.8" },
     { name = "nvidia-cudnn-cu12", specifier = ">=9.0" },
     { name = "nvidia-ml-py", specifier = ">=12.0" },
+    { name = "onnx-asr", extras = ["cpu", "hub"], specifier = ">=0.11.0" },
     { name = "psutil", specifier = ">=6.0" },
     { name = "pyautogui", marker = "sys_platform == 'win32'", specifier = ">=0.9.54" },
     { name = "pyinstaller", specifier = ">=6.20.0" },
@@ -1663,7 +1665,7 @@ requires-dist = [
     { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=311" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "requests", specifier = ">=2.33.1" },
-    { name = "ruamel-yaml", specifier = ">=0.19.1" },
+    { name = "scipy", specifier = ">=1.11" },
     { name = "sounddevice", specifier = ">=0.5.5" },
     { name = "torch", specifier = ">=2.0" },
     { name = "torchaudio", specifier = ">=2.0" },
@@ -2709,6 +2711,26 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/a4/8f3d51e3a095d42cdf2039a590cff06d024f2a10efbd0b1a2a6b3825f019/onnx-1.19.1-cp313-cp313t-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1975860c3e720db25d37f1619976582828264bdcc64fa7511c321ac4fc01add3", size = 18221126, upload-time = "2025-10-10T04:01:09.77Z" },
     { url = "https://files.pythonhosted.org/packages/4f/0d/f9d6c2237083f1aac14b37f0b03b0d81f1147a8e2af0c3828165e0a6a67b/onnx-1.19.1-cp313-cp313t-win_amd64.whl", hash = "sha256:9807d0e181f6070ee3a6276166acdc571575d1bd522fc7e89dba16fd6e7ffed9", size = 16465560, upload-time = "2025-10-10T04:01:13.212Z" },
     { url = "https://files.pythonhosted.org/packages/36/70/8418a58faa7d606d6a92cab69ae8d361b3b3969bf7e7e9a65a86d5d1b674/onnx-1.19.1-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:b6ee83e6929d75005482d9f304c502ac7c9b8d6db153aa6b484dae74d0f28570", size = 18042812, upload-time = "2025-10-10T04:01:15.919Z" },
+]
+
+[[package]]
+name = "onnx-asr"
+version = "0.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/f6/b154881761a593312f509522f99542acffa2516f7a1df6ddf5660ad4a162/onnx_asr-0.11.0.tar.gz", hash = "sha256:57ad8d9571dc17db95f0daf9ba432b9472383de320c610735850e56b5375a37d", size = 43665, upload-time = "2026-03-23T02:30:57.349Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/04/bdffd682cc38b43144b6528186c80451f219a05e3fd0eb331a548f455b9a/onnx_asr-0.11.0-py3-none-any.whl", hash = "sha256:142d8b3ce7716684992826a269304f5ce9cf1c0fe704b751358e223f45d2a5cf", size = 138349, upload-time = "2026-03-23T02:30:58.566Z" },
+]
+
+[package.optional-dependencies]
+cpu = [
+    { name = "onnxruntime" },
+]
+hub = [
+    { name = "huggingface-hub" },
 ]
 
 [[package]]

@@ -47,6 +47,13 @@ dependencies = [
     # but everything torch-y already came in via faster-whisper /
     # gigaam, so the marginal install size is ~600-800 MB.
     "nemo_toolkit[asr]>=2.0",
+    # ONNX-based Parakeet inference — much lighter alternative to
+    # NeMo for the ``parakeet-tdt-v3-onnx`` model card. Requires
+    # only NumPy + ONNX Runtime; no PyTorch or Lightning.
+    # ``[cpu,hub]`` extra pulls in ``onnxruntime`` (CPU) and
+    # ``huggingface-hub`` for automatic model downloads. Switch to
+    # ``[gpu,hub]`` for CUDA-accelerated ONNX Runtime instead.
+    "onnx-asr[cpu,hub]>=0.11.0",
 ]
 
 [project.scripts]
