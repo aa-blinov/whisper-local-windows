@@ -24,11 +24,18 @@ dependencies = [
     "pyinstaller>=6.20.0",
     "pyside6>=6.11.0",
     "scipy>=1.11",
-    # libsndfile bindings — used by the file-transcribe view to
-    # decode .wav / .flac / .ogg / .opus / .aiff into numpy arrays.
-    # libsndfile doesn't ship MP3/M4A codecs (licensing); those
-    # formats currently aren't supported.
+    # libsndfile bindings — fast in-process decoder for the
+    # WAV / FLAC / OGG / OPUS / AIFF family used by the file-
+    # transcribe view (and as a fast path before falling back to
+    # ffmpeg).
     "soundfile>=0.12",
+    # Static ffmpeg binary (~70 MB on Windows) bundled as a Python
+    # wheel.  Used as the fallback decoder for everything libsndfile
+    # can't handle: MP3 / M4A / AAC / WMA / WebM / MOV / MKV / AVI /
+    # FLV / 3GP, etc.  Means the file-transcribe view accepts any
+    # common audio or video container without making the user
+    # install ffmpeg system-wide.
+    "imageio-ffmpeg>=0.5",
     "psutil>=6.0",
     # GPU monitoring in the topbar (NVML).  Falls back gracefully on
     # machines without an NVIDIA driver.

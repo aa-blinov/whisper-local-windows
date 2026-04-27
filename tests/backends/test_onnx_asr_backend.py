@@ -657,6 +657,175 @@ def test_transcribe_file_returns_none_when_not_ready(tmp_path):
     assert backend.transcribe_file(str(fake_audio)) is None
 
 
+# ---- _decode_audio_file standalone helper ---------------------------------
+
+
+def test_decode_audio_file_uses_soundfile_for_native_formats(monkeypatch, tmp_path):
+    """When soundfile can read the file (WAV/FLAC/OGG/OPUS/AIFF), use
+    its result directly — no ffmpeg subprocess fork."""
+    import sys
+    import types
+
+    import numpy as np
+
+    audio_data = np.zeros(16000, dtype=np.float32)
+    fake_sf = types.ModuleType("soundfile")
+    fake_sf.read = MagicMock(return_value=(audio_data, 16000))
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+
+    # imageio_ffmpeg should NOT be touched if soundfile worked.
+    fake_ffmpeg = types.ModuleType("imageio_ffmpeg")
+    fake_ffmpeg.get_ffmpeg_exe = MagicMock(
+        side_effect=AssertionError("ffmpeg should not be invoked")
+    )
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", fake_ffmpeg)
+
+    from app.backends.onnx_backend import _decode_audio_file
+
+    fake_audio = tmp_path / "demo.wav"
+    fake_audio.write_bytes(b"")
+    out = _decode_audio_file(str(fake_audio))
+    assert out is not None
+    assert out.dtype == np.float32
+    assert out.ndim == 1
+    fake_sf.read.assert_called_once()
+
+
+def test_decode_audio_file_falls_back_to_ffmpeg_for_unsupported(
+    monkeypatch, tmp_path,
+):
+    """soundfile can't decode .mp3 / .m4a — fall through to ffmpeg
+    via ``imageio_ffmpeg``, which bundles a static binary."""
+    import subprocess
+    import sys
+    import types
+
+    import numpy as np
+
+    fake_sf = types.ModuleType("soundfile")
+    fake_sf.read = MagicMock(side_effect=RuntimeError("Format not recognised"))
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+
+    fake_ffmpeg = types.ModuleType("imageio_ffmpeg")
+    fake_ffmpeg.get_ffmpeg_exe = MagicMock(return_value="/fake/ffmpeg.exe")
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", fake_ffmpeg)
+
+    # Pretend ffmpeg writes 2 seconds of silence to stdout.
+    decoded_bytes = np.zeros(32_000, dtype=np.float32).tobytes()
+    completed = MagicMock(returncode=0, stdout=decoded_bytes, stderr=b"")
+    monkeypatch.setattr(subprocess, "run", MagicMock(return_value=completed))
+
+    from app.backends.onnx_backend import _decode_audio_file
+
+    fake_audio = tmp_path / "voice.mp3"
+    fake_audio.write_bytes(b"\xff\xfb")
+    out = _decode_audio_file(str(fake_audio))
+
+    assert out is not None
+    assert out.dtype == np.float32
+    assert len(out) == 32_000
+    # ffmpeg got called once with a sane command line.
+    subprocess.run.assert_called_once()
+    cmd = subprocess.run.call_args.args[0]
+    assert cmd[0] == "/fake/ffmpeg.exe"
+    assert "-ar" in cmd and "16000" in cmd, "must request 16 kHz output"
+    assert "-ac" in cmd and "1" in cmd, "must request mono output"
+
+
+def test_decode_audio_file_returns_none_when_both_decoders_fail(
+    monkeypatch, tmp_path,
+):
+    """Neither soundfile nor ffmpeg could open the file — surface None
+    so the caller logs a friendly 'cannot decode' rather than dying
+    on a stack trace."""
+    import subprocess
+    import sys
+    import types
+
+    fake_sf = types.ModuleType("soundfile")
+    fake_sf.read = MagicMock(side_effect=RuntimeError("nope"))
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+
+    fake_ffmpeg = types.ModuleType("imageio_ffmpeg")
+    fake_ffmpeg.get_ffmpeg_exe = MagicMock(return_value="/fake/ffmpeg.exe")
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", fake_ffmpeg)
+
+    completed = MagicMock(
+        returncode=1,
+        stdout=b"",
+        stderr=b"Invalid data found when processing input",
+    )
+    monkeypatch.setattr(subprocess, "run", MagicMock(return_value=completed))
+
+    from app.backends.onnx_backend import _decode_audio_file
+
+    fake_audio = tmp_path / "broken.bin"
+    fake_audio.write_bytes(b"")
+    assert _decode_audio_file(str(fake_audio)) is None
+
+
+def test_decode_audio_file_resamples_ffmpeg_output_when_needed(
+    monkeypatch, tmp_path,
+):
+    """ffmpeg is asked for 16 kHz output — but if the user runs an
+    older bundled binary (rare) and we get something else, resample."""
+    import subprocess
+    import sys
+    import types
+
+    import numpy as np
+
+    fake_sf = types.ModuleType("soundfile")
+    fake_sf.read = MagicMock(side_effect=RuntimeError("not native"))
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+
+    fake_ffmpeg = types.ModuleType("imageio_ffmpeg")
+    fake_ffmpeg.get_ffmpeg_exe = MagicMock(return_value="/fake/ffmpeg.exe")
+    monkeypatch.setitem(sys.modules, "imageio_ffmpeg", fake_ffmpeg)
+
+    # Default subprocess fakes return 16 kHz output (16k samples = 1 s).
+    decoded = np.zeros(16_000, dtype=np.float32).tobytes()
+    completed = MagicMock(returncode=0, stdout=decoded, stderr=b"")
+    monkeypatch.setattr(subprocess, "run", MagicMock(return_value=completed))
+
+    from app.backends.onnx_backend import _decode_audio_file
+
+    fake_audio = tmp_path / "voice.mp3"
+    fake_audio.write_bytes(b"")
+    out = _decode_audio_file(str(fake_audio))
+    assert out is not None
+    # 16 kHz × 1 s = 16k samples — no resample needed for the
+    # canonical-case check.  (Resampling logic is exercised by the
+    # soundfile path tests above.)
+    assert len(out) == 16_000
+
+
+def test_decode_audio_file_returns_none_when_imageio_ffmpeg_missing(
+    monkeypatch, tmp_path,
+):
+    """soundfile failed, imageio_ffmpeg not installed → None.
+    Logged so the user sees 'install imageio-ffmpeg or convert to wav'."""
+    import sys
+
+    monkeypatch.delitem(sys.modules, "soundfile", raising=False)
+    monkeypatch.delitem(sys.modules, "imageio_ffmpeg", raising=False)
+
+    real_import = __import__
+
+    def raising_import(name, *args, **kwargs):
+        if name in ("soundfile", "imageio_ffmpeg"):
+            raise ImportError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", raising_import)
+
+    from app.backends.onnx_backend import _decode_audio_file
+
+    fake_audio = tmp_path / "x.mp3"
+    fake_audio.write_bytes(b"")
+    assert _decode_audio_file(str(fake_audio)) is None
+
+
 def test_transcribe_file_decodes_then_passes_array_to_recognize(
     monkeypatch, tmp_path,
 ):

@@ -32,6 +32,7 @@ NVIDIA driver is present).  ``device='cpu'`` pins to CPU.
 from __future__ import annotations
 
 import logging
+import subprocess
 import threading
 from typing import Callable, Optional
 
@@ -268,16 +269,11 @@ class OnnxAsrBackend:
     def transcribe_file(self, path: str) -> Optional[str]:
         """Transcribe an audio file from disk.
 
-        Decodes the file via ``soundfile`` (libsndfile bindings —
-        handles WAV / FLAC / OGG / OPUS / AIFF natively), downmixes
-        to mono, resamples to 16 kHz, and feeds the ``numpy`` array
-        to ``model.recognize``.
-
-        We don't pass the path directly to ``recognize`` because
-        onnx-asr's bundled loader is WAV-only and crashes on .ogg /
-        .flac with ``file does not start with RIFF id``.  Going
-        through ``soundfile`` ourselves gives us proper format
-        coverage and explicit control over resampling.
+        Decodes the file via :func:`_decode_audio_file` (soundfile for
+        WAV / FLAC / OGG / OPUS / AIFF — fast in-process; ffmpeg
+        subprocess for everything else: MP3 / M4A / AAC / WMA / WebM
+        / MOV …) and feeds the resulting numpy array to
+        ``model.recognize``.
 
         For Whisper family the user-selected language is forwarded
         (same as the ``transcribe`` array path).  Timestamps are
@@ -285,9 +281,8 @@ class OnnxAsrBackend:
         paste-ready transcript and a side panel for word offsets
         doesn't exist yet.
 
-        Returns ``None`` on any failure (backend not ready, missing
-        ``soundfile``, unsupported format, model error).  Errors
-        are logged with full traceback for debugging.
+        Returns ``None`` on any failure (backend not ready, decode
+        failure, model error).  Errors are logged.
         """
         with self._lock:
             if self._shutdown:
@@ -299,46 +294,19 @@ class OnnxAsrBackend:
                 )
                 return None
             model = self._model
-            settings = self._inference_settings
 
-        try:
-            import soundfile as sf  # type: ignore[import]
-        except ImportError as exc:
-            log.error(
-                "soundfile is not installed — cannot decode %s.  "
-                "Install with: pip install soundfile.  Original error: %s",
-                path, exc,
-            )
+        audio = _decode_audio_file(path)
+        if audio is None:
             return None
 
-        try:
-            buf, sample_rate = sf.read(path, dtype="float32", always_2d=False)
-        except Exception as exc:
-            log.error(
-                "soundfile failed to decode %s: %s.  Common causes: "
-                "MP3/M4A (libsndfile doesn't ship with those codecs), "
-                "corrupt header, or DRM-protected file.",
-                path, exc,
-            )
-            return None
+        kwargs: dict = {}
+        if self._family == "whisper":
+            lang = self.current_language()
+            if lang is not None:
+                kwargs["language"] = lang
 
         try:
-            buf = np.asarray(buf, dtype=np.float32)
-            if buf.ndim > 1:
-                # soundfile returns (samples, channels) for multi-channel
-                buf = buf.mean(axis=-1)
-            if sample_rate != 16_000:
-                buf = _resample(buf, int(sample_rate), 16_000)
-
-            kwargs: dict = {}
-            if self._family == "whisper":
-                lang = self.current_language()
-                if lang is not None:
-                    kwargs["language"] = lang
-
-            del settings  # timestamps suppressed for the file path
-
-            return _transcribe_chunk(model, buf, kwargs)
+            return _transcribe_chunk(model, audio, kwargs)
         except Exception as exc:
             log.error(
                 "OnnxAsr transcribe_file failed for %s: %s",
@@ -503,6 +471,119 @@ def _transcribe_chunk(model, audio: np.ndarray, kwargs: dict) -> Optional[str]:
         else:
             text = str(result)
     return text.strip() or None
+
+
+def _decode_audio_file(path: str) -> Optional[np.ndarray]:
+    """Decode an audio file to a 16 kHz mono ``float32`` array.
+
+    Two-tier decoder:
+
+    1. **soundfile** (libsndfile) — handles WAV / FLAC / OGG / OPUS /
+       AIFF in-process.  Fast, no subprocess fork.  Used as the fast
+       path for the formats it understands.
+    2. **ffmpeg** — bundled via ``imageio-ffmpeg`` (a static binary,
+       ~70 MB on Windows).  Used as a fallback for everything else:
+       MP3 / M4A / AAC / WMA / WebM / MOV / FLV / 3GP / Matroska /
+       any other container ffmpeg can demultiplex.
+
+    Returns ``None`` on any failure with a useful log line so the
+    user sees ``cannot decode`` rather than a stack trace.
+    """
+    sf_audio = _try_decode_with_soundfile(path)
+    if sf_audio is not None:
+        return sf_audio
+    return _try_decode_with_ffmpeg(path)
+
+
+def _try_decode_with_soundfile(path: str) -> Optional[np.ndarray]:
+    try:
+        import soundfile as sf  # type: ignore[import]
+    except ImportError:
+        return None
+    try:
+        buf, sample_rate = sf.read(path, dtype="float32", always_2d=False)
+    except Exception as exc:
+        log.debug("soundfile cannot decode %s: %s — trying ffmpeg", path, exc)
+        return None
+    buf = np.asarray(buf, dtype=np.float32)
+    if buf.ndim > 1:
+        buf = buf.mean(axis=-1)
+    if sample_rate != 16_000:
+        buf = _resample(buf, int(sample_rate), 16_000)
+    return buf
+
+
+def _try_decode_with_ffmpeg(path: str) -> Optional[np.ndarray]:
+    try:
+        import imageio_ffmpeg  # type: ignore[import]
+    except ImportError as exc:
+        log.error(
+            "Cannot decode %s — soundfile rejected the format and "
+            "imageio-ffmpeg is not installed (would handle MP3 / M4A / "
+            "WMA / WebM etc.).  Install with: pip install imageio-ffmpeg.  "
+            "Or convert the file to .wav / .flac / .ogg manually.  "
+            "Original ImportError: %s",
+            path, exc,
+        )
+        return None
+
+    try:
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as exc:
+        log.error(
+            "imageio-ffmpeg failed to locate its bundled binary: %s", exc,
+        )
+        return None
+
+    cmd = [
+        ffmpeg_exe,
+        "-nostdin",                 # don't try to read keyboard input
+        "-i", path,
+        "-f", "f32le",              # raw 32-bit-float little-endian
+        "-acodec", "pcm_f32le",
+        "-ar", "16000",             # resample to 16 kHz
+        "-ac", "1",                 # downmix to mono
+        "-loglevel", "error",       # silence the banner / progress noise
+        "pipe:1",
+    ]
+    # Hide the ffmpeg console window on Windows — without this, every
+    # decode flashes a black cmd window in the user's face for a few
+    # seconds.  No-op on POSIX (the flag doesn't exist there).
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=600,            # 10 min cap for very long files
+            check=False,
+            creationflags=creationflags,
+        )
+    except subprocess.TimeoutExpired:
+        log.error("ffmpeg timed out decoding %s (>10 min)", path)
+        return None
+    except Exception as exc:
+        log.error("ffmpeg subprocess failed for %s: %s", path, exc)
+        return None
+
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+        log.error(
+            "ffmpeg returned %d decoding %s: %s",
+            proc.returncode, path, stderr[:500],
+        )
+        return None
+
+    if not proc.stdout:
+        log.error("ffmpeg produced no audio output for %s", path)
+        return None
+
+    # ``np.frombuffer`` gives a read-only view onto the bytes buffer;
+    # copy so downstream chunking can index/slice freely.
+    audio = np.frombuffer(proc.stdout, dtype=np.float32).copy()
+    if len(audio) == 0:
+        return None
+    return audio
 
 
 def _resample(

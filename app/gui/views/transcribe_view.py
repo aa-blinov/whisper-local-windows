@@ -26,13 +26,19 @@ from PySide6.QtWidgets import (
 )
 
 
-# Audio extensions ``soundfile`` (libsndfile) can decode out of the
-# box.  MP3 / M4A / AAC are deliberately NOT in this list — libsndfile
-# doesn't ship with those codecs (patent / licensing).  Adding them
-# would mean either pulling in ffmpeg (~80 MB on Windows) or moving
-# to a heavier loader like librosa+audioread.
+# Audio / video extensions our two-tier decoder can handle.
+# ``soundfile`` covers the lossless / OGG family; ``imageio-ffmpeg``
+# (the bundled static ffmpeg) covers everything else.  We accept
+# common video container extensions too — the audio track is what
+# the model cares about, not the codec.
 _AUDIO_EXTS: tuple[str, ...] = (
+    # libsndfile native
     ".wav", ".flac", ".ogg", ".oga", ".opus", ".aiff", ".aif",
+    # ffmpeg fallback — audio
+    ".mp3", ".m4a", ".aac", ".wma", ".amr", ".ac3", ".alac",
+    # ffmpeg fallback — video containers (we extract the audio track)
+    ".mp4", ".mov", ".webm", ".mkv", ".avi", ".flv", ".3gp", ".m4v",
+    ".wmv", ".ts",
 )
 
 
