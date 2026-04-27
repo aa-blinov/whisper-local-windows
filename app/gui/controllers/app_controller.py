@@ -110,6 +110,7 @@ class AppController(QObject):
     # Qt thread (auto-queued thanks to the cross-thread connection).
     _mic_test_completed = Signal(float, float)
     _mic_test_failed = Signal(str)
+    _storage_size_ready = Signal(str)
 
     def __init__(
         self,
@@ -136,6 +137,7 @@ class AppController(QObject):
         self._mic_test_in_progress = False
         self._mic_test_completed.connect(self._on_mic_test_completed)
         self._mic_test_failed.connect(self._on_mic_test_failed)
+        self._storage_size_ready.connect(self._on_storage_size_ready)
         # Polls the live audio level for the topbar VU meter while the
         # recording pipeline is in the ``recording`` state. ~30 Hz feels
         # alive without burning CPU.
@@ -358,6 +360,9 @@ class AppController(QObject):
                 alias,
             )
         self._window.models_view.refresh_cache_state()
+        # Recompute the Storage card size — the just-deleted weights
+        # were typically the largest single chunk.
+        self._refresh_storage_size()
 
     def _wire_shortcuts(self) -> None:
         view = self._window.shortcuts_view
@@ -391,7 +396,9 @@ class AppController(QObject):
         # haven't picked a custom path yet.
         view.storage_path_change_requested.connect(self._on_storage_path_change)
         view.storage_reset_requested.connect(self._on_storage_reset)
+        view.storage_open_requested.connect(self._on_storage_open)
         self._refresh_storage_path()
+        self._refresh_storage_size()
 
         # Hugging Face card — paint the persisted token + apply to
         # env (in case ``app.py``'s startup hook missed something).
@@ -411,6 +418,70 @@ class AppController(QObject):
         self._window.shortcuts_view.set_storage_path(
             resolved, is_default=is_default,
         )
+
+    def _refresh_storage_size(self) -> None:
+        """Compute the on-disk size of the cache and push it into the
+        Settings card.
+
+        Walks ``<root>/hub`` recursively which can take 100-300 ms for
+        a multi-GB cache; runs in a ``QThreadPool`` worker so the UI
+        thread stays responsive.  The result lands back via a Qt
+        signal that this method connects to ``set_storage_size``.
+        """
+        view = self._window.shortcuts_view
+        view.set_storage_size("computing…")
+
+        configured = self._config.get_setting("storage", "models_dir")
+        resolved = get_models_root(configured)
+
+        from PySide6.QtCore import QRunnable, QThreadPool
+
+        signal = self._storage_size_ready
+
+        class _Worker(QRunnable):
+            def run(self_inner) -> None:  # noqa: N805 (Qt-style)
+                try:
+                    nbytes = cached_models_size(resolved)
+                except Exception:  # pragma: no cover — defensive
+                    nbytes = 0
+                try:
+                    signal.emit(_human_size(nbytes))
+                except RuntimeError:
+                    # The controller was destroyed before the worker
+                    # finished — common at app shutdown / test teardown.
+                    # Drop the result silently; the next AppController
+                    # will recompute on init.
+                    pass
+
+        QThreadPool.globalInstance().start(_Worker())
+
+    def _on_storage_size_ready(self, text: str) -> None:
+        self._window.shortcuts_view.set_storage_size(text)
+
+    def _on_storage_open(self) -> None:
+        """Open the resolved models directory in the OS file manager.
+
+        On Windows uses ``os.startfile`` which honours the user's
+        default explorer.  Creates the directory first if it doesn't
+        exist (might happen on a brand-new install before any model
+        has been downloaded) so the user doesn't get a 'path not
+        found' error popup.
+        """
+        configured = self._config.get_setting("storage", "models_dir")
+        resolved = get_models_root(configured)
+        try:
+            Path(resolved).mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            log.warning("Failed to create storage dir for open: %s", exc)
+        try:
+            os.startfile(resolved)  # type: ignore[attr-defined]
+        except Exception as exc:
+            log.warning("Failed to open storage dir %s: %s", resolved, exc)
+            QMessageBox.warning(
+                self._window,
+                "Open folder",
+                f"Could not open the folder:\n{resolved}\n\n{exc}",
+            )
 
     def _on_storage_path_change(self) -> None:
         """User clicked Change….
@@ -492,6 +563,7 @@ class AppController(QObject):
         # ``Download`` click without a restart.
         _apply_env_for_models_root(chosen)
         self._refresh_storage_path()
+        self._refresh_storage_size()
         # Refresh every model card's cache state so the Download ↔ Select
         # button reflects the new directory immediately — without this the
         # cards keep showing "Download" even when the chosen folder already
@@ -537,6 +609,7 @@ class AppController(QObject):
         self._config.update_user_setting("storage", "models_dir", "")
         resolved = _apply_env_for_models_root("")
         self._refresh_storage_path()
+        self._refresh_storage_size()
         self._window.models_view.refresh_cache_state()
         QMessageBox.information(
             self._window,

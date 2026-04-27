@@ -73,6 +73,9 @@ class ShortcutsView(QWidget):
     # QFileDialog stays out of the widget code (cleaner tests).
     storage_path_change_requested = Signal()
     storage_reset_requested = Signal()
+    # 'Open folder' shortcut — the controller spawns Explorer
+    # (subprocess + path stays out of the view).
+    storage_open_requested = Signal()
     # Hugging Face card — fired on focus loss after the user edits
     # the token field. Controller persists + applies to env.
     hf_token_changed = Signal(str)
@@ -285,6 +288,23 @@ class ShortcutsView(QWidget):
         storage_path_row.addWidget(self._storage_path_label, 1)
         storage_v.addLayout(storage_path_row)
 
+        # Used-space row: tells the user how much disk the cache eats
+        # so they can decide whether to move it to a bigger drive.
+        # The controller computes this asynchronously (cached_models_size
+        # walks the entire HF hub subtree).
+        storage_size_row = QHBoxLayout()
+        storage_size_row.setSpacing(16)
+        storage_size_caption = QLabel("Used", storage_card)
+        storage_size_row.addWidget(storage_size_caption)
+        self._storage_size_label = QLabel("…", storage_card)
+        self._storage_size_label.setObjectName("StorageSizeLabel")
+        self._storage_size_label.setProperty("role", "muted")
+        self._storage_size_label.setTextInteractionFlags(
+            Qt.TextSelectableByMouse
+        )
+        storage_size_row.addWidget(self._storage_size_label, 1)
+        storage_v.addLayout(storage_size_row)
+
         # Button row — flush left, stretch on the right. Wrapped in a
         # QWidget rather than added as a bare QHBoxLayout because the
         # outer VBox doesn't reliably pick up the layout's sizeHint
@@ -320,6 +340,20 @@ class ShortcutsView(QWidget):
             self.storage_reset_requested.emit
         )
         storage_btn_row.addWidget(self._reset_storage_btn)
+
+        # Open-folder shortcut — once the user knows the size, the
+        # natural next step is "show me what's inside" (delete stale
+        # downloads, free up space, copy weights to a backup, …).
+        # Cheaper than implementing a built-in cache browser.
+        self._open_storage_btn = QPushButton(
+            "Open folder", storage_btn_widget,
+        )
+        self._open_storage_btn.setObjectName("OpenStorageButton")
+        self._open_storage_btn.setFocusPolicy(Qt.NoFocus)
+        self._open_storage_btn.clicked.connect(
+            self.storage_open_requested.emit
+        )
+        storage_btn_row.addWidget(self._open_storage_btn)
         storage_btn_row.addStretch(1)
         # Match the wrapper's height to the buttons' sizeHint so the
         # outer VBox can't squish it below the button height.
@@ -501,6 +535,15 @@ class ShortcutsView(QWidget):
         else:
             self._storage_path_label.setText(path)
             self._reset_storage_btn.setEnabled(True)
+
+    def set_storage_size(self, text: str) -> None:
+        """Render the human-readable used-space string in the Storage card.
+
+        The controller does the formatting (bytes → ``"3.4 GB"``) so
+        this view stays free of locale rules and unit thresholds.
+        ``""`` blanks the label (used while the worker is computing).
+        """
+        self._storage_size_label.setText(text or "…")
 
     def values(self) -> Dict[str, Any]:
         return {
