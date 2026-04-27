@@ -147,6 +147,10 @@ class TranscribeView(QWidget):
         self._transcript.setPlaceholderText(
             "The transcript will appear here…"
         )
+        # Same cosine-eased wheel animation the other scrollable views
+        # use, refresh-aware (60 / 144 / 240 Hz).
+        from app.gui.smooth_scroll import apply_smooth_scroll
+        apply_smooth_scroll(self._transcript)
 
         root.addWidget(self._drop_zone)
         root.addLayout(actions)

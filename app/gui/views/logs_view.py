@@ -162,6 +162,11 @@ class LogsView(QWidget):
         # Smooth wheel scrolling — default jumps a couple of lines per
         # notch which feels stuttery in a tall log.
         self._text.verticalScrollBar().setSingleStep(20)
+        # Cosine-eased wheel animation matching the rest of the app.
+        # ``QPlainTextEdit`` is a ``QAbstractScrollArea`` so the helper
+        # binds to its viewport directly.
+        from app.gui.smooth_scroll import apply_smooth_scroll
+        apply_smooth_scroll(self._text)
         root.addWidget(self._text, 1)
 
     # ---- public API ---------------------------------------------------------
