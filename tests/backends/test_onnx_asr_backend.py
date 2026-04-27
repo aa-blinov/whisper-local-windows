@@ -657,10 +657,25 @@ def test_transcribe_file_returns_none_when_not_ready(tmp_path):
     assert backend.transcribe_file(str(fake_audio)) is None
 
 
-def test_transcribe_file_passes_path_to_recognize(monkeypatch, tmp_path):
-    """``transcribe_file`` delegates audio decoding to onnx-asr:
-    pass the path verbatim to ``model.recognize`` and let the library
-    handle WAV/FLAC/OGG/MP3 decoding through its bundled audio loader."""
+def test_transcribe_file_decodes_then_passes_array_to_recognize(
+    monkeypatch, tmp_path,
+):
+    """``transcribe_file`` decodes the file with ``soundfile`` (which
+    handles WAV/FLAC/OGG/OPUS/AIFF) and passes the numpy array to
+    ``recognize()``.  Going through ``soundfile`` instead of the
+    raw path lets us handle .ogg etc. — onnx-asr's bundled loader
+    is WAV-only and crashes on anything else with 'file does not
+    start with RIFF id'."""
+    import sys
+    import types
+
+    import numpy as np
+
+    fake_audio_data = np.zeros(16000, dtype=np.float32)
+    fake_sf = types.ModuleType("soundfile")
+    fake_sf.read = MagicMock(return_value=(fake_audio_data, 16000))
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+
     _, fake_model = _install_fake_onnx_asr(
         monkeypatch, recognize_return="from-file"
     )
@@ -671,21 +686,128 @@ def test_transcribe_file_passes_path_to_recognize(monkeypatch, tmp_path):
     backend.load()
     assert _wait(lambda: backend.status() == "ready")
 
-    fake_audio = tmp_path / "demo.wav"
-    fake_audio.write_bytes(b"riffdata")
+    fake_audio = tmp_path / "demo.ogg"
+    fake_audio.write_bytes(b"OggS\x00\x02")
 
     text = backend.transcribe_file(str(fake_audio))
     assert text == "from-file"
+    # soundfile.read was called with the path
+    fake_sf.read.assert_called_once()
+    args, _kw = fake_sf.read.call_args
+    assert args[0] == str(fake_audio)
+    # model.recognize received the decoded ndarray (NOT the path string)
     fake_model.recognize.assert_called_once()
-    args, _kw = fake_model.recognize.call_args
-    assert args[0] == str(fake_audio), (
-        "expected the path itself to be passed to recognize()"
+    rec_args, _ = fake_model.recognize.call_args
+    assert isinstance(rec_args[0], np.ndarray), (
+        "recognize() must receive a decoded ndarray, not the file path"
     )
+
+
+def test_transcribe_file_resamples_if_not_16khz(monkeypatch, tmp_path):
+    """Audio at 44.1 kHz must be resampled to 16 kHz before recognise."""
+    import sys
+    import types
+
+    import numpy as np
+
+    # 44.1 kHz, 1 second mono = 44100 samples
+    fake_audio_data = np.zeros(44100, dtype=np.float32)
+    fake_sf = types.ModuleType("soundfile")
+    fake_sf.read = MagicMock(return_value=(fake_audio_data, 44100))
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+
+    _, fake_model = _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    fake_audio = tmp_path / "high-rate.wav"
+    fake_audio.write_bytes(b"")
+    backend.transcribe_file(str(fake_audio))
+
+    rec_args, _ = fake_model.recognize.call_args
+    decoded = rec_args[0]
+    # Resampled length should be ~16k samples (give or take rounding)
+    assert 15500 <= len(decoded) <= 16500, (
+        f"expected resample to ~16k samples, got {len(decoded)}"
+    )
+
+
+def test_transcribe_file_downmixes_stereo_to_mono(monkeypatch, tmp_path):
+    """Stereo files must be averaged down to mono before recognise."""
+    import sys
+    import types
+
+    import numpy as np
+
+    # (samples, channels) — soundfile's default shape for stereo
+    stereo = np.zeros((16000, 2), dtype=np.float32)
+    fake_sf = types.ModuleType("soundfile")
+    fake_sf.read = MagicMock(return_value=(stereo, 16000))
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+
+    _, fake_model = _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    fake_audio = tmp_path / "stereo.wav"
+    fake_audio.write_bytes(b"")
+    backend.transcribe_file(str(fake_audio))
+
+    rec_args, _ = fake_model.recognize.call_args
+    assert rec_args[0].ndim == 1, (
+        "recognize() must receive a 1-D mono array"
+    )
+
+
+def test_transcribe_file_returns_friendly_error_on_unsupported_format(
+    monkeypatch, tmp_path,
+):
+    """If soundfile can't decode the file (e.g. MP3 — libsndfile
+    licensing skip), surface a None result so the controller can
+    show a clean error instead of a stack trace."""
+    import sys
+    import types
+
+    fake_sf = types.ModuleType("soundfile")
+    fake_sf.read = MagicMock(side_effect=RuntimeError(
+        "Format not recognised."
+    ))
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+
+    _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    fake_audio = tmp_path / "broken.mp3"
+    fake_audio.write_bytes(b"\xff\xfb")
+    assert backend.transcribe_file(str(fake_audio)) is None
 
 
 def test_transcribe_file_passes_language_for_whisper(monkeypatch, tmp_path):
     """Same as the array path: Whisper's recognize() takes a language
     kwarg and we forward the user-selected one."""
+    import sys
+    import types
+
+    import numpy as np
+
+    fake_sf = types.ModuleType("soundfile")
+    fake_sf.read = MagicMock(
+        return_value=(np.zeros(16000, dtype=np.float32), 16000)
+    )
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
     _, fake_model = _install_fake_onnx_asr(monkeypatch)
 
     from app.backends.onnx_backend import OnnxAsrBackend
@@ -706,7 +828,23 @@ def test_transcribe_file_passes_language_for_whisper(monkeypatch, tmp_path):
     assert kwargs.get("language") == "ru"
 
 
+def _install_fake_soundfile(monkeypatch):
+    """Helper: register a no-op soundfile stub returning silent 1-s mono."""
+    import sys
+    import types
+
+    import numpy as np
+
+    fake_sf = types.ModuleType("soundfile")
+    fake_sf.read = MagicMock(
+        return_value=(np.zeros(16000, dtype=np.float32), 16000)
+    )
+    monkeypatch.setitem(sys.modules, "soundfile", fake_sf)
+    return fake_sf
+
+
 def test_transcribe_file_returns_none_after_shutdown(monkeypatch, tmp_path):
+    _install_fake_soundfile(monkeypatch)
     _install_fake_onnx_asr(monkeypatch)
 
     from app.backends.onnx_backend import OnnxAsrBackend
@@ -722,12 +860,10 @@ def test_transcribe_file_returns_none_after_shutdown(monkeypatch, tmp_path):
 
 
 def test_transcribe_file_returns_none_on_exception(monkeypatch, tmp_path):
-    """If the audio loader inside onnx-asr can't read the file (corrupt,
-    unsupported format), ``transcribe_file`` swallows the exception and
-    returns None — UI surfaces a friendly 'failed to transcribe' rather
-    than a stack trace."""
+    """If the model.recognize() raises during inference, return None."""
+    _install_fake_soundfile(monkeypatch)
     fake_module, fake_model = _install_fake_onnx_asr(monkeypatch)
-    fake_model.recognize.side_effect = RuntimeError("unsupported format")
+    fake_model.recognize.side_effect = RuntimeError("inference failed")
 
     from app.backends.onnx_backend import OnnxAsrBackend
 
@@ -741,6 +877,7 @@ def test_transcribe_file_returns_none_on_exception(monkeypatch, tmp_path):
 
 
 def test_transcribe_file_extracts_text_from_object_result(monkeypatch, tmp_path):
+    _install_fake_soundfile(monkeypatch)
     result_obj = MagicMock()
     result_obj.text = "from-object"
     _install_fake_onnx_asr(monkeypatch, recognize_return=result_obj)
@@ -757,7 +894,40 @@ def test_transcribe_file_extracts_text_from_object_result(monkeypatch, tmp_path)
 
 
 def test_transcribe_file_returns_none_on_empty_string(monkeypatch, tmp_path):
+    _install_fake_soundfile(monkeypatch)
     _install_fake_onnx_asr(monkeypatch, recognize_return="   ")
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    fake_audio = tmp_path / "x.wav"
+    fake_audio.write_bytes(b"")
+    assert backend.transcribe_file(str(fake_audio)) is None
+
+
+def test_transcribe_file_returns_none_when_soundfile_missing(
+    monkeypatch, tmp_path,
+):
+    """If soundfile isn't installed, surface a clean None — let the
+    controller render a friendly 'install soundfile' message rather
+    than crashing on ImportError."""
+    import sys
+
+    monkeypatch.delitem(sys.modules, "soundfile", raising=False)
+
+    real_import = __import__
+
+    def raising_import(name, *args, **kwargs):
+        if name == "soundfile":
+            raise ImportError("No module named 'soundfile'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", raising_import)
+
+    _install_fake_onnx_asr(monkeypatch)
 
     from app.backends.onnx_backend import OnnxAsrBackend
 
@@ -779,6 +949,7 @@ def test_transcribe_file_disables_with_timestamps_for_simplicity(
     ``with_timestamps`` even if the user has it enabled in the
     inference panel — keeps the ``recognize()`` return as a plain
     string."""
+    _install_fake_soundfile(monkeypatch)
     _, fake_model = _install_fake_onnx_asr(monkeypatch)
     fake_model.with_timestamps = MagicMock(return_value=fake_model)
 

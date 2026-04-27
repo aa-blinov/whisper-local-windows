@@ -26,12 +26,13 @@ from PySide6.QtWidgets import (
 )
 
 
-# Audio extensions onnx-asr's bundled loader can decode reliably.
-# We recognise more on drag-drop and let the backend reject if it
-# can't handle them — the worst case is a polite "Failed to read".
+# Audio extensions ``soundfile`` (libsndfile) can decode out of the
+# box.  MP3 / M4A / AAC are deliberately NOT in this list — libsndfile
+# doesn't ship with those codecs (patent / licensing).  Adding them
+# would mean either pulling in ffmpeg (~80 MB on Windows) or moving
+# to a heavier loader like librosa+audioread.
 _AUDIO_EXTS: tuple[str, ...] = (
-    ".wav", ".flac", ".ogg", ".oga", ".opus", ".mp3", ".m4a", ".aac",
-    ".wma", ".aiff", ".aif",
+    ".wav", ".flac", ".ogg", ".oga", ".opus", ".aiff", ".aif",
 )
 
 

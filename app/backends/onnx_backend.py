@@ -268,17 +268,26 @@ class OnnxAsrBackend:
     def transcribe_file(self, path: str) -> Optional[str]:
         """Transcribe an audio file from disk.
 
-        Delegates audio decoding to onnx-asr's bundled loader (handles
-        WAV / FLAC / OGG / MP3 depending on what's installed in
-        ``soundfile`` / ``librosa``).  No chunking — the underlying
-        loader resamples to 16 kHz mono internally and the model
-        handles whatever length onnx-asr supports per call.
+        Decodes the file via ``soundfile`` (libsndfile bindings —
+        handles WAV / FLAC / OGG / OPUS / AIFF natively), downmixes
+        to mono, resamples to 16 kHz, and feeds the ``numpy`` array
+        to ``model.recognize``.
+
+        We don't pass the path directly to ``recognize`` because
+        onnx-asr's bundled loader is WAV-only and crashes on .ogg /
+        .flac with ``file does not start with RIFF id``.  Going
+        through ``soundfile`` ourselves gives us proper format
+        coverage and explicit control over resampling.
 
         For Whisper family the user-selected language is forwarded
         (same as the ``transcribe`` array path).  Timestamps are
         intentionally not applied here — the file path produces a
         paste-ready transcript and a side panel for word offsets
         doesn't exist yet.
+
+        Returns ``None`` on any failure (backend not ready, missing
+        ``soundfile``, unsupported format, model error).  Errors
+        are logged with full traceback for debugging.
         """
         with self._lock:
             if self._shutdown:
@@ -290,15 +299,46 @@ class OnnxAsrBackend:
                 )
                 return None
             model = self._model
-
-        kwargs: dict = {}
-        if self._family == "whisper":
-            lang = self.current_language()
-            if lang is not None:
-                kwargs["language"] = lang
+            settings = self._inference_settings
 
         try:
-            return _transcribe_chunk(model, path, kwargs)
+            import soundfile as sf  # type: ignore[import]
+        except ImportError as exc:
+            log.error(
+                "soundfile is not installed — cannot decode %s.  "
+                "Install with: pip install soundfile.  Original error: %s",
+                path, exc,
+            )
+            return None
+
+        try:
+            buf, sample_rate = sf.read(path, dtype="float32", always_2d=False)
+        except Exception as exc:
+            log.error(
+                "soundfile failed to decode %s: %s.  Common causes: "
+                "MP3/M4A (libsndfile doesn't ship with those codecs), "
+                "corrupt header, or DRM-protected file.",
+                path, exc,
+            )
+            return None
+
+        try:
+            buf = np.asarray(buf, dtype=np.float32)
+            if buf.ndim > 1:
+                # soundfile returns (samples, channels) for multi-channel
+                buf = buf.mean(axis=-1)
+            if sample_rate != 16_000:
+                buf = _resample(buf, int(sample_rate), 16_000)
+
+            kwargs: dict = {}
+            if self._family == "whisper":
+                lang = self.current_language()
+                if lang is not None:
+                    kwargs["language"] = lang
+
+            del settings  # timestamps suppressed for the file path
+
+            return _transcribe_chunk(model, buf, kwargs)
         except Exception as exc:
             log.error(
                 "OnnxAsr transcribe_file failed for %s: %s",
