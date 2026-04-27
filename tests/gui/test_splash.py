@@ -84,6 +84,57 @@ def test_make_splash_returns_widget(qtbot):
     assert splash.isVisible()
 
 
+def test_splash_click_does_not_hide(qtbot):
+    """Clicking the splash must NOT hide it.
+
+    QSplashScreen.mousePressEvent() hides the window on any click by
+    default — during a long model load this makes the progress
+    disappear the moment the user accidentally clicks anywhere on it.
+    """
+    from PySide6.QtCore import Qt
+
+    from app.gui.splash import make_splash
+
+    splash = make_splash("Test App")
+    qtbot.addWidget(splash)
+    splash.show()
+
+    assert splash.isVisible()
+    qtbot.mouseClick(splash, Qt.LeftButton)
+    assert splash.isVisible(), "Splash must stay visible after a click"
+
+
+def test_splash_has_minimize_button_hint(qtbot):
+    """The splash must advertise WindowMinimizeButtonHint so the OS
+    renders a real minimize button in the title bar.  Without it the
+    user can't send the splash to the taskbar while the model loads."""
+    from PySide6.QtCore import Qt
+
+    from app.gui.splash import make_splash
+
+    splash = make_splash("Test App")
+    qtbot.addWidget(splash)
+
+    assert bool(splash.windowFlags() & Qt.WindowMinimizeButtonHint), (
+        "Splash must have WindowMinimizeButtonHint"
+    )
+
+
+def test_splash_is_not_frameless(qtbot):
+    """The splash must NOT be frameless — a frameless window has no
+    title bar, so there is no OS minimize button regardless of hints."""
+    from PySide6.QtCore import Qt
+
+    from app.gui.splash import make_splash
+
+    splash = make_splash("Test App")
+    qtbot.addWidget(splash)
+
+    assert not bool(splash.windowFlags() & Qt.FramelessWindowHint), (
+        "Splash must not be frameless — it needs an OS title bar"
+    )
+
+
 def test_wait_for_backend_returns_ready_when_status_ready(qtbot):
     from PySide6.QtWidgets import QApplication
 
