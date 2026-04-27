@@ -395,6 +395,7 @@ class FakeHistoryEntry:
 class FakeHistory:
     def __init__(self, entries=None):
         self._entries = list(entries or [])
+        self.max_entries = 1000
         self.cleared = False
         self.exported_to: list[str] = []
         self.export_returns: bool = True
@@ -1727,11 +1728,14 @@ def test_controller_refreshes_history_on_history_updated(qtbot):
 
     AppController(config=config, window=window, history=history, recording=rec)
 
-    # New entry appears in the manager outside our control.
-    history._entries.append(FakeHistoryEntry("second"))
+    # Simulate the history manager prepending a new entry (newest-first).
+    history._entries.insert(0, FakeHistoryEntry("second"))
     rec.history_updated.emit()
 
-    assert window.history_view._source_model.rowCount() == 2
+    from PySide6.QtCore import Qt
+    model = window.history_view._source_model
+    assert model.rowCount() == 2
+    assert model.data(model.index(0, 1), Qt.DisplayRole) == "second"
 
 
 def test_controller_shows_toast_on_history_updated(qtbot):
@@ -1753,7 +1757,7 @@ def test_controller_shows_toast_on_history_updated(qtbot):
 
     AppController(config=config, window=window, history=history, recording=rec)
 
-    history._entries.append(FakeHistoryEntry("transcribed phrase"))
+    history._entries.insert(0, FakeHistoryEntry("transcribed phrase"))
     rec.history_updated.emit()
 
     assert window.toast.isVisible()

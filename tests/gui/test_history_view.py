@@ -386,3 +386,71 @@ def test_history_model_column_passes_unknown_canonical_through(qtbot):
     model = HistoryTableModel([entry])
     cell = model.data(model.index(0, 2), Qt.DisplayRole)
     assert cell == "some-org/custom-model"
+
+
+# ---- prepend_entry ----------------------------------------------------------
+
+
+def test_history_model_prepend_entry_inserts_at_top(qtbot):
+    """prepend_entry must place the new entry at row 0, not the bottom."""
+    from app.gui.views.history_view import HistoryTableModel
+
+    model = HistoryTableModel(_make_entries(2))
+    new_entry = FakeEntry(99.0, "newest", 1.0, "m", "en")
+    model.prepend_entry(new_entry)
+
+    assert model.rowCount() == 3
+    assert model.data(model.index(0, 1), Qt.DisplayRole) == "newest"
+
+
+def test_history_model_prepend_entry_emits_rows_inserted_not_model_reset(qtbot):
+    """prepend_entry must emit rowsInserted, NOT modelReset.
+
+    A full reset discards the view's scroll position and selection on
+    every transcription — catastrophic UX when history is long.
+    """
+    from app.gui.views.history_view import HistoryTableModel
+
+    model = HistoryTableModel(_make_entries(2))
+
+    reset_fired: list = []
+    inserted_fired: list = []
+    model.modelReset.connect(lambda: reset_fired.append(True))
+    model.rowsInserted.connect(lambda *_: inserted_fired.append(True))
+
+    model.prepend_entry(FakeEntry(99.0, "newest", 1.0, "m", "en"))
+
+    assert reset_fired == [], "modelReset must NOT fire on prepend_entry"
+    assert inserted_fired != [], "rowsInserted must fire on prepend_entry"
+
+
+def test_history_model_prepend_trims_oldest_when_over_cap(qtbot):
+    """When max_entries is exceeded after a prepend, the oldest row is dropped."""
+    from app.gui.views.history_view import HistoryTableModel
+
+    model = HistoryTableModel(_make_entries(3))  # [text 0, text 1, text 2]
+    model.prepend_entry(FakeEntry(99.0, "newest", 1.0, "m", "en"), max_entries=3)
+
+    assert model.rowCount() == 3
+    texts = [model.data(model.index(r, 1), Qt.DisplayRole) for r in range(3)]
+    assert texts[0] == "newest"
+    assert "entry text 2" not in texts  # oldest dropped
+
+
+def test_history_view_prepend_entry_adds_row_at_top(qtbot):
+    """HistoryView.prepend_entry delegates to the model and updates the count."""
+    from app.gui.views.history_view import HistoryView
+
+    view = HistoryView()
+    qtbot.addWidget(view)
+    view.set_entries(_make_entries(2))
+
+    view.prepend_entry(FakeEntry(99.0, "newest", 1.0, "m", "en"))
+
+    proxy = _table(view).model()
+    assert proxy.rowCount() == 3
+    assert proxy.data(proxy.index(0, 1), Qt.DisplayRole) == "newest"
+
+    label = view.findChild(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel,
+                           "HistoryCountLabel")
+    assert "3" in label.text()

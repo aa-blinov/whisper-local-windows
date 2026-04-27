@@ -104,6 +104,29 @@ class HistoryTableModel(QAbstractTableModel):
         self._entries = list(entries)
         self.endResetModel()
 
+    def prepend_entry(self, entry: Any, max_entries: int = 0) -> None:
+        """Insert *entry* at row 0 (newest) without a full model reset.
+
+        Using ``beginInsertRows / endInsertRows`` instead of
+        ``beginResetModel / endResetModel`` preserves the view's scroll
+        position and selection — critical when history is long and the user
+        is reading while new transcriptions keep arriving.
+
+        If *max_entries* > 0 and the list would exceed it after the insert,
+        the oldest entry (last row) is removed via a separate
+        ``beginRemoveRows / endRemoveRows`` pair so the view updates
+        incrementally rather than repainting everything.
+        """
+        self.beginInsertRows(QModelIndex(), 0, 0)
+        self._entries.insert(0, entry)
+        self.endInsertRows()
+
+        if max_entries > 0 and len(self._entries) > max_entries:
+            last = len(self._entries) - 1
+            self.beginRemoveRows(QModelIndex(), last, last)
+            self._entries.pop(last)
+            self.endRemoveRows()
+
     def entry_at(self, row: int) -> Any:
         if row < 0 or row >= len(self._entries):
             raise IndexError(row)
@@ -293,6 +316,12 @@ class HistoryView(QWidget):
 
     def set_entries(self, entries: Sequence[Any]) -> None:
         self._source_model.set_entries(entries)
+        self._refresh_count()
+        self._update_empty_state()
+
+    def prepend_entry(self, entry: Any, max_entries: int = 0) -> None:
+        """Insert one entry at the top without resetting the whole model."""
+        self._source_model.prepend_entry(entry, max_entries)
         self._refresh_count()
         self._update_empty_state()
 
