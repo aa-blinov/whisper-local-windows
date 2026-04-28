@@ -352,3 +352,156 @@ def test_compute_type_int8_float16_maps_to_int8_quantization(
 
     RegistryBackend(model="whisper-model", compute_type="int8_float16")
     assert patch_builder[0].kwargs.get("quantization") == "int8"
+
+
+# ---- Cross-family async shutdown -------------------------------------------
+
+
+def test_change_model_cross_family_does_not_block_caller_on_shutdown(
+    patch_builder, patch_registry,
+):
+    """``change_model`` across families must not wait for the old
+    backend's ``shutdown()`` to finish before returning.
+
+    Why: ONNX session destruction is bounded by GIL + DLL
+    contention and on Windows can stall the calling thread for
+    several hundred milliseconds.  When the caller is the Qt
+    main thread (model card "Switch" click), that stall paints
+    the window as "(Not responding)".  We defer the shutdown to
+    a worker thread and return immediately.
+    """
+    import threading
+    import time
+
+    from app.backends.registry_backend import RegistryBackend
+
+    backend = RegistryBackend(model="whisper-model")
+    whisper_inner = patch_builder[0]
+
+    # Make the old backend's shutdown intentionally slow.
+    shutdown_started = threading.Event()
+    release = threading.Event()
+
+    def slow_shutdown() -> None:
+        shutdown_started.set()
+        release.wait(5)
+        whisper_inner._status = "stopped"
+
+    whisper_inner.shutdown = slow_shutdown  # type: ignore[assignment]
+
+    t0 = time.monotonic()
+    backend.change_model("gigaam-model")
+    elapsed = time.monotonic() - t0
+    try:
+        assert elapsed < 0.5, (
+            f"change_model blocked for {elapsed:.2f}s — old-backend "
+            f"shutdown must run on a worker thread"
+        )
+        # Sanity: the shutdown was actually started in the background
+        # (just not waited on).
+        assert shutdown_started.wait(2.0), (
+            "shutdown worker did not start"
+        )
+        # New backend was already built and the swap is complete.
+        assert len(patch_builder) == 2
+        assert backend.current_model() == "istupakov/gigaam-v3-onnx"
+    finally:
+        release.set()
+
+
+def test_change_model_cross_family_eventually_calls_old_shutdown(
+    patch_builder, patch_registry,
+):
+    """The shutdown must still happen — just on a worker thread.
+    Otherwise the old ONNX session leaks GPU memory + file handles."""
+    import time
+
+    from app.backends.registry_backend import RegistryBackend
+
+    backend = RegistryBackend(model="whisper-model")
+    whisper_inner = patch_builder[0]
+
+    backend.change_model("gigaam-model")
+
+    # Give the worker up to 3 s to finish.  In practice it returns in
+    # a few ms because _FakeBackend.shutdown is trivial; the cap is
+    # only a CI safety net.
+    deadline = time.monotonic() + 3.0
+    while not whisper_inner.shutdown_called and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert whisper_inner.shutdown_called, (
+        "old backend's shutdown was never called — leak"
+    )
+
+
+def test_change_model_cross_family_swallows_old_shutdown_error(
+    patch_builder, patch_registry,
+):
+    """If the old backend's shutdown raises (corrupted ONNX session,
+    flaky DLL), the worker thread must catch and log it — never
+    propagate to the caller (who has already moved on)."""
+    import time
+
+    from app.backends.registry_backend import RegistryBackend
+
+    backend = RegistryBackend(model="whisper-model")
+    whisper_inner = patch_builder[0]
+
+    def boom() -> None:
+        raise RuntimeError("simulated ONNX session destructor crash")
+
+    whisper_inner.shutdown = boom  # type: ignore[assignment]
+
+    # Must not raise on the caller thread.
+    backend.change_model("gigaam-model")
+
+    # Give the worker a moment to run the failing shutdown so any
+    # uncaught exception would surface in the test runner's thread
+    # exception handler.
+    time.sleep(0.1)
+
+    assert backend.current_model() == "istupakov/gigaam-v3-onnx"
+
+
+def test_change_model_cross_family_uses_named_worker_thread(
+    patch_builder, patch_registry,
+):
+    """The shutdown thread must have a recognisable name so it shows
+    up in psutil / Logs view as a known background task — not as
+    ``Thread-N`` that nobody can attribute when debugging hangs."""
+    import threading
+    import time
+
+    from app.backends.registry_backend import RegistryBackend
+
+    backend = RegistryBackend(model="whisper-model")
+    whisper_inner = patch_builder[0]
+
+    captured_name: dict[str, str] = {}
+    barrier = threading.Event()
+
+    def capture_shutdown() -> None:
+        captured_name["name"] = threading.current_thread().name
+        captured_name["daemon"] = (
+            "yes" if threading.current_thread().daemon else "no"
+        )
+        barrier.set()
+
+    whisper_inner.shutdown = capture_shutdown  # type: ignore[assignment]
+
+    backend.change_model("gigaam-model")
+
+    assert barrier.wait(3.0), "shutdown worker did not start"
+    # Wait a beat for current_thread().name to be readable (it's set
+    # in the worker before we capture it, so this is always already
+    # done at this point — but be explicit).
+    time.sleep(0.01)
+
+    assert "shutdown" in captured_name["name"].lower(), (
+        f"expected 'shutdown' in worker thread name, "
+        f"got {captured_name['name']!r}"
+    )
+    assert captured_name["daemon"] == "yes", (
+        "shutdown worker must be a daemon — interpreter must be allowed "
+        "to exit even if the worker is mid-tear-down"
+    )
