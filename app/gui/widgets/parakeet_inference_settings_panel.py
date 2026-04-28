@@ -20,15 +20,15 @@ from typing import Optional
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QCheckBox, QFrame, QLabel, QVBoxLayout, QWidget
 
-from app.inference_settings import NemoInferenceSettings
+from app.inference_settings import ParakeetInferenceSettings
 
 
-class NemoInferenceSettingsPanel(QFrame):
-    settings_changed = Signal(NemoInferenceSettings)
+class ParakeetInferenceSettingsPanel(QFrame):
+    settings_changed = Signal(ParakeetInferenceSettings)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setObjectName("NemoInferenceSettingsPanel")
+        self.setObjectName("ParakeetInferenceSettingsPanel")
         # Reuse the same QSS role as the Whisper panel — same outer
         # treatment (subtle bg, padding) so both panels look like
         # they belong on the active card.
@@ -70,7 +70,7 @@ class NemoInferenceSettingsPanel(QFrame):
 
     # ---- public API ---------------------------------------------------------
 
-    def set_settings(self, settings: NemoInferenceSettings) -> None:
+    def set_settings(self, settings: ParakeetInferenceSettings) -> None:
         """Mirror ``settings`` onto the controls without firing the
         ``settings_changed`` signal — used by the controller when it
         pre-fills the panel from config."""
@@ -80,8 +80,8 @@ class NemoInferenceSettingsPanel(QFrame):
         finally:
             self._suspend_emit = False
 
-    def values(self) -> NemoInferenceSettings:
-        return NemoInferenceSettings(
+    def values(self) -> ParakeetInferenceSettings:
+        return ParakeetInferenceSettings(
             timestamps=self._timestamps.isChecked(),
         )
 

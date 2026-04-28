@@ -2,44 +2,6 @@
 
 from __future__ import annotations
 
-
-# DLL-ordering workaround for a pyarrow ↔ Qt segfault on Windows.
-#
-# pyarrow's ``arrow.dll`` and Qt's runtime end up sharing some Windows-
-# global state (CRT / OpenSSL / something else — the EventLog points at
-# arrow.dll offset 0xbc5431 with exception 0xC0000005 every time). If
-# Qt loads first and pyarrow comes later — through the NeMo backend
-# pulling in lhotse → pyarrow on a worker thread — pyarrow segfaults
-# the entire process during ``import pyarrow.arrow.dll``. Importing
-# pyarrow FIRST puts arrow.dll into the loader's address space before
-# Qt has a chance to claim conflicting slots, and the rest of the day
-# is fine.
-#
-# Reproduced cleanly with ``scripts/diag_parakeet_with_qt.py`` (segfault
-# inside ``import nemo.collections.asr``) vs ``diag_parakeet_qt_preimport``
-# (ALL DONE). Wrapped in try/except so machines without pyarrow installed
-# (a Whisper-only setup) still boot.
-try:  # noqa: SIM105 — keep the explicit comment + import-time placement
-    import pyarrow  # noqa: F401  (warmup-only, value unused)
-except Exception as _pyarrow_exc:  # noqa: BLE001 — boot-time resilience
-    # ImportError is the obvious case (pyarrow not installed in a
-    # Whisper-only setup), but binary wheels can also raise
-    # OSError / RuntimeError at import time when their DLL
-    # dependencies are missing or shadowed by a conflicting load.
-    # Letting any of those escape would crash the whole app at
-    # import time, which is exactly the failure mode this pre-
-    # import is supposed to prevent — fall through to stderr and
-    # let the rest of the app boot, NeMo will surface a real error
-    # later if it actually needed pyarrow.
-    import sys as _sys
-    print(
-        f"[lazy-to-text] pyarrow pre-import skipped: "
-        f"{type(_pyarrow_exc).__name__}: {_pyarrow_exc}",
-        file=_sys.stderr,
-    )
-    del _pyarrow_exc, _sys
-
-
 import os
 import sys
 from pathlib import Path

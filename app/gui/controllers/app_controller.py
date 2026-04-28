@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 # explicit ``quit()`` calls from tray actions.
 
 from app.gui.main_window import MainWindow
-from app.inference_settings import InferenceSettings, NemoInferenceSettings
+from app.inference_settings import InferenceSettings, ParakeetInferenceSettings
 from app.model_mapping import MODELS, alias_for, canonical_for, get_model
 from app.utils import (
     cached_models_size,
@@ -759,7 +759,7 @@ class AppController(QObject):
     def _settings_class_for(self, alias: str):
         """Pick the inference-settings dataclass that matches the
         model's backend kind. Whisper → ``InferenceSettings`` (5
-        knobs); Parakeet/NeMo-style → ``NemoInferenceSettings`` (just
+        knobs); Parakeet/NeMo-style → ``ParakeetInferenceSettings`` (just
         ``timestamps``); unknown alias defaults to Whisper since that's
         the most common case for raw HF ids."""
         try:
@@ -767,7 +767,7 @@ class AppController(QObject):
         except KeyError:
             return InferenceSettings
         if getattr(info, "onnx_family", "") == "parakeet":
-            return NemoInferenceSettings
+            return ParakeetInferenceSettings
         return InferenceSettings
 
     def _load_inference_settings(self, alias: str):

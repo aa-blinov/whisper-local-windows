@@ -123,3 +123,12 @@ user-testing/
 
 # Build configuration (user-specific paths)
 py-build/build-config.json
+# Debug output captured by Start-Process during development
+app_err.txt
+app_out.txt
+app_stderr.txt
+app_stdout.txt
+build_log.txt
+
+# Claude Code session metadata
+.claude/
