@@ -326,28 +326,86 @@ def test_preload_onnx_asr_swallows_import_error(monkeypatch):
     # Reaching this line means the exception didn't escape the thread.
 
 
-def test_main_kicks_off_onnx_asr_preimport_before_window_show():
-    """Static check: ``main()`` must call the preimport helper BEFORE
-    it tries to ``window.show()`` — otherwise we lose the overlap with
-    Qt window construction and the user can still see (Not responding).
+def test_main_spawns_subprocess_backend_before_recording_stack_build():
+    """Static check: ``main()`` must spawn the SubprocessBackend BEFORE
+    ``build_recording_stack`` so the worker process's Python re-exec
+    + onnx_asr re-import (3-7 s on a cold start) overlaps with logging
+    + recording-stack + MainWindow construction.  Otherwise the user
+    sees a 5-10 s blank screen on app launch waiting for the worker
+    to be ready.
 
-    Inspecting the source rather than driving main() end-to-end is a
-    deliberate trade-off — main() pulls in the entire recording stack,
-    QApplication, single-instance mutex, and tray icon, none of which
-    we want to spin up in a unit test.
+    Inspecting the source rather than driving main() end-to-end —
+    main() pulls in the entire QApplication, single-instance mutex,
+    and tray icon, none of which we want to spin up in a unit test.
     """
     import inspect
 
     import app.gui.app as app_module
 
     src = inspect.getsource(app_module.main)
-    preimport_idx = src.find("_preload_onnx_asr_async")
-    show_idx = src.find("window.show()")
-    assert preimport_idx != -1, "main() should call _preload_onnx_asr_async"
+    # Match real call sites only — anchor on the assignment / call shape
+    # so docstrings and comments mentioning the same names don't trip
+    # the order check.
+    spawn_idx = src.find("= SubprocessBackend(")
+    build_idx = src.find("= build_recording_stack(")
+    # ``= build_recording_stack(`` won't match because the call uses
+    # tuple-unpacking; fall back to the bare call form.
+    if build_idx == -1:
+        build_idx = src.find("build_recording_stack(\n")
+    show_idx = src.find("    window.show()")  # 4-space indent → real call
+    assert spawn_idx != -1, (
+        "main() should construct SubprocessBackend (early-spawn pattern)"
+    )
+    assert build_idx != -1, "sanity: main() should call build_recording_stack"
     assert show_idx != -1, "sanity: main() should call window.show()"
-    assert preimport_idx < show_idx, (
-        "preimport must be kicked off BEFORE window.show() so the heavy "
-        "import overlaps with Qt window construction"
+    assert spawn_idx < build_idx < show_idx, (
+        "order must be: spawn SubprocessBackend → build_recording_stack → "
+        "window.show() — that way Windows ``spawn`` overlaps with the "
+        "rest of startup instead of stalling the UI"
+    )
+
+
+def test_preload_onnx_asr_warms_up_ort_providers():
+    """``_do_onnx_asr_preimport`` must create a dummy InferenceSession
+    so OnnxRuntime loads its execution-provider DLLs (DirectML, CUDA,
+    CPU) on this daemon thread.  The real symptom if this is skipped:
+    the first model load acquires the Win32 DLL loader-lock while the
+    Qt main thread also needs it — window cannot be moved / is marked
+    (Not responding).
+
+    We verify the side-effect: ``onnxruntime.InferenceSession`` must
+    have been called at least once after ``_do_onnx_asr_preimport``
+    runs.
+    """
+    import sys
+    from unittest.mock import MagicMock, patch
+
+    # Stub onnx_asr so we don't need the heavy install.
+    sys.modules.setdefault("onnx_asr", MagicMock())
+
+    import app.gui.app as app_module
+
+    session_calls: list = []
+
+    class _FakeSession:
+        def __init__(self, *_a, **_kw):
+            session_calls.append(True)
+
+        def run(self, *_a, **_kw):
+            return [None]
+
+    fake_ort = MagicMock()
+    fake_ort.InferenceSession = _FakeSession
+    fake_ort.SessionOptions.return_value = MagicMock()
+    # get_available_providers must return an iterable so the warmup loop runs.
+    fake_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+
+    with patch.dict(sys.modules, {"onnxruntime": fake_ort}):
+        app_module._do_onnx_asr_preimport()
+
+    assert session_calls, (
+        "_do_onnx_asr_preimport must create an InferenceSession "
+        "to force provider DLL loading"
     )
 
 

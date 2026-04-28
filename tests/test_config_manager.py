@@ -184,6 +184,10 @@ def test_subsequent_writes_go_to_user_config(fresh_appdata, monkeypatch):
 
     cm = ConfigManager()
     cm.update_user_setting("hotkey", "start_recording_hotkey", "ctrl+f5")
+    # ``update_user_setting`` is async — the daemon writer hasn't
+    # necessarily landed the YAML by the time we return.  Block here
+    # so the file-on-disk read below sees the new value.
+    cm.flush_pending_writes()
 
     # Read the file back to verify it landed at user config path.
     text = cm.config_path.read_text(encoding="utf-8")
@@ -205,6 +209,7 @@ def test_write_leaves_no_tmp_file(fresh_appdata, monkeypatch):
 
     cm = ConfigManager()
     cm.update_user_setting("audio", "channels", 2)
+    cm.flush_pending_writes()
 
     tmp = cm.config_path.with_suffix(".tmp")
     assert not tmp.exists(), ".tmp staging file must be removed after a successful write"
@@ -222,6 +227,7 @@ def test_config_round_trips_through_yaml(fresh_appdata, monkeypatch):
     cm = ConfigManager()
     cm.update_user_setting("clipboard", "key_simulation_delay", 0.07)
     cm.update_user_setting("whisper", "language", "ru")
+    cm.flush_pending_writes()
 
     on_disk = yaml.safe_load(cm.config_path.read_text(encoding="utf-8"))
     assert on_disk["clipboard"]["key_simulation_delay"] == pytest.approx(0.07)

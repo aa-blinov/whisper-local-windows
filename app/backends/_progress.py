@@ -29,6 +29,19 @@ _tqdm_patched = False
 #   callback(current_bytes: int, total_bytes: int, desc: str) -> None
 _progress_callback: Optional[Callable[[int, int, str], None]] = None
 
+# Minimum gap between two callback invocations from the same tqdm
+# instance, in seconds.  HuggingFace download tqdm fires ``update()``
+# for every chunk it pulls off the socket — easily 200+ times per
+# second for a multi-GB file.  Each of those becomes a Qt signal
+# emitted into the main thread's event queue, and at that rate the
+# main thread can't drain the queue fast enough — the smooth-scroll
+# QTimer (running at 144 Hz to match the display) gets starved out,
+# the wheel events queue up, and the user feels the scroll "stick"
+# while a download is in flight.  200 ms (5 Hz) is still smooth
+# visually for a percentage display and leaves three full smooth-
+# scroll frames between every signal emit.
+_FIRE_THROTTLE_S: float = 0.2
+
 
 def set_progress_callback(
     callback: Optional[Callable[[int, int, str], None]],
@@ -57,7 +70,14 @@ def install_tqdm_progress() -> None:
 
     base_cls = _tqdm.tqdm
 
+    import time as _time
+
     class _ProgressTqdm(base_cls):  # type: ignore[misc, valid-type]
+        # Last-fire timestamp (monotonic) per instance — throttles
+        # callback emission so the Qt main thread isn't drowned in
+        # signals during a fast download.
+        _last_fire_ts: float = 0.0
+
         def update(self, n=1):
             ret = super().update(n)
             # PyQt apps usually run without a TTY, so huggingface_hub's
@@ -94,16 +114,25 @@ def install_tqdm_progress() -> None:
             return ret
 
         def close(self):
-            self._fire()
+            # ``close()`` is the final state — bypass the throttle so
+            # the UI gets a guaranteed final update at the real total
+            # (otherwise a download that finishes in <100 ms after the
+            # last throttled fire would be stuck at e.g. 87 % forever).
+            self._fire(force=True)
             try:
                 return super().close()
             except Exception:
                 pass
 
-        def _fire(self):
+        def _fire(self, force: bool = False):
             cb = _progress_callback
             if cb is None:
                 return
+            if not force:
+                now = _time.monotonic()
+                if now - self._last_fire_ts < _FIRE_THROTTLE_S:
+                    return
+                self._last_fire_ts = now
             # ``disable=True`` makes tqdm.__init__ return early before
             # ``self.desc`` is assigned — and PyQt apps run without a TTY,
             # which auto-disables every bar huggingface_hub creates. Use

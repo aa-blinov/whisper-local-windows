@@ -1,8 +1,8 @@
 whisper:
-  model: whisper-large-v3-turbo
+  model: parakeet-tdt-v3
   language: auto
   beam_size: 5
-  compute_type: float16
+  compute_type: float32
 hotkey:
   start_recording_hotkey: ctrl+f2
   stop_recording_hotkey: ctrl+f3

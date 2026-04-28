@@ -158,9 +158,14 @@ def test_set_locked_disables_all_select_buttons(qtbot):
         assert not select_btn.isEnabled()
 
 
-def test_models_view_set_loading_elapsed_propagates_to_active_card(qtbot):
-    """Elapsed-seconds ticks should reach the active card so the user
-    sees the wait advancing during cached model loads."""
+def test_models_view_set_loading_elapsed_records_value_on_active_card(qtbot):
+    """Elapsed-seconds ticks reach the active card and update its
+    internal counter, but the card's pill text intentionally doesn't
+    render the number — the topbar pill owns that display.  So the
+    behaviour is: ``set_loading_elapsed(N)`` propagates to the active
+    card's ``_loading_elapsed_s`` attribute, but the pill text stays
+    the same.
+    """
     from app.gui.views.models_view import ModelsView
     from app.gui.widgets.model_card import ModelCard
 
@@ -172,7 +177,10 @@ def test_models_view_set_loading_elapsed_propagates_to_active_card(qtbot):
     view.set_loading_elapsed(5)
 
     cards = {c.alias(): c for c in view.findChildren(ModelCard)}
-    assert "5" in cards["whisper-large-v3-turbo"]._active_pill.text()
+    active = cards["whisper-large-v3-turbo"]
+    assert active._loading_elapsed_s == 5
+    # Pill text is unchanged — no "5" anywhere in it.
+    assert "5" not in active._active_pill.text()
 
 
 def test_models_view_set_loading_progress_propagates_to_active_card(qtbot):

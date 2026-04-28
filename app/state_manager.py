@@ -451,6 +451,36 @@ class StateManager:
         self.logger.info(
             f"Switching to {new_model_size} model...", extra={'user_message': True}
         )
+
+        # Run ``backend.change_model`` AND the status-poll watcher on the
+        # same daemon thread.  Why both off the caller (= Qt main thread):
+        # ``OnnxAsrBackend.change_model`` synchronously drops the old
+        # ``self._model`` reference, which fires the ONNX session
+        # destructor and the CUDA-memory release on the calling thread.
+        # On a real model that destructor stalls the caller for
+        # 300-800 ms — long enough for Windows to mark the window
+        # "(Not responding)" and refuse to drag it.  Pushing the whole
+        # change_model + watcher pair onto a worker thread means the
+        # main thread returns immediately after just flipping the
+        # ``is_model_loading`` flag, which the Qt UI uses to repaint
+        # the Loading pill.
+        threading.Thread(
+            target=self._do_model_change_and_watch,
+            args=(new_model_size, compute_type),
+            daemon=True,
+            name=f"model-change-{new_model_size}",
+        ).start()
+
+    def _do_model_change_and_watch(
+        self,
+        new_model_size: str,
+        compute_type: Optional[str] = None,
+    ) -> None:
+        """Worker-thread body: actually run ``backend.change_model`` and
+        then poll ``backend.status()`` until the new model settles on
+        ``ready`` / ``error``.  Spawned by ``_execute_model_change`` so
+        the Qt main thread doesn't block on the synchronous ONNX
+        session destructor inside ``change_model``."""
         try:
             self.backend.change_model(new_model_size, compute_type=compute_type)
         except Exception as e:
@@ -460,15 +490,11 @@ class StateManager:
             )
             self.set_model_loading(False)
             return
-
-        # Backend.change_model returns immediately and triggers a background
-        # load; watch its status() and clear the flag once it settles.
-        threading.Thread(
-            target=self._watch_model_change,
-            args=(new_model_size,),
-            daemon=True,
-            name=f"model-change-{new_model_size}",
-        ).start()
+        # Backend.change_model returns once the new inner backend is built
+        # and its load() call has spawned its own thread.  Poll status()
+        # to learn when the load finishes (or errors out) and clear the
+        # ``is_model_loading`` flag accordingly.
+        self._watch_model_change(new_model_size)
 
     def _watch_model_change(
         self, model_size: str, timeout: float = 1800.0

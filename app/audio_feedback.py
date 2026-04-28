@@ -101,14 +101,36 @@ class AudioFeedback:
             self.logger.warning(f"Cancel sound file not found: {self.cancel_sound_path}")
     
     def _play_sound_file_async(self, file_path: str):
+        """Play ``file_path`` on a daemon thread.
+
+        We deliberately do NOT pass ``winsound.SND_ASYNC``.  With
+        ``SND_ASYNC``, ``PlaySound`` returns immediately and Windows
+        plays the buffer from a system worker — but if the calling
+        thread exits before Windows finishes setting up that play,
+        the sound is dropped silently.  We've seen this happen
+        intermittently when the start sound fires right before the
+        microphone stream opens (the recorder grabbing the audio
+        device disrupts the still-pending async play).
+
+        Synchronous ``PlaySound`` blocks the thread for the duration
+        of the clip (~80-150 ms for our cues) — but the thread is
+        daemon and isolated from the main loop, so the user-facing
+        latency is identical: the start sound still kicks off in
+        parallel with everything else, just without the racy
+        Windows-side queue.
+        """
+        if not file_path:
+            return
+
         def play_sound():
             try:
-                # SND_FILENAME = play from file, SND_ASYNC = don't block
-                winsound.PlaySound(file_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-                
+                # Synchronous play in a daemon thread — see docstring.
+                winsound.PlaySound(file_path, winsound.SND_FILENAME)
             except Exception as e:
-                self.logger.warning(f"Failed to play sound file {file_path}: {e}")
-        
+                self.logger.warning(
+                    f"Failed to play sound file {file_path}: {e}"
+                )
+
         sound_thread = threading.Thread(target=play_sound, daemon=True)
         sound_thread.start()
     
