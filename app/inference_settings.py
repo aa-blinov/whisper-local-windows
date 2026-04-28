@@ -92,7 +92,7 @@ class InferenceSettings:
 
 
 @dataclass(frozen=True)
-class NemoInferenceSettings:
+class ParakeetInferenceSettings:
     """Tunables applied to NeMo's ``ASRModel.transcribe``.
 
     NeMo's API is deliberately narrower than faster-whisper's:
@@ -111,7 +111,7 @@ class NemoInferenceSettings:
     timestamps: bool = False
 
     @classmethod
-    def from_mapping(cls, data: Optional[Mapping[str, Any]]) -> "NemoInferenceSettings":
+    def from_mapping(cls, data: Optional[Mapping[str, Any]]) -> "ParakeetInferenceSettings":
         if not data:
             return cls()
         return cls(timestamps=bool(data.get("timestamps", False)))
@@ -119,5 +119,5 @@ class NemoInferenceSettings:
     def to_mapping(self) -> dict:
         return {"timestamps": bool(self.timestamps)}
 
-    def with_change(self, **fields: Any) -> "NemoInferenceSettings":
+    def with_change(self, **fields: Any) -> "ParakeetInferenceSettings":
         return replace(self, **fields)

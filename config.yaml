@@ -1,8 +1,8 @@
 whisper:
-  model: parakeet-tdt-v3-onnx
-  language: ru
-  beam_size: 20
-  compute_type: float32
+  model: whisper-large-v3-turbo
+  language: auto
+  beam_size: 5
+  compute_type: float16
 hotkey:
   start_recording_hotkey: ctrl+f2
   stop_recording_hotkey: ctrl+f3
@@ -11,9 +11,8 @@ audio:
   channels: 1
   dtype: float32
   max_duration: 300
-  device: 31
 clipboard:
-  auto_paste: 1
+  auto_paste: true
   preserve_clipboard: false
   key_simulation_delay: 0.05
 logging:

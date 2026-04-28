@@ -1,0 +1,123 @@
+"""History view + signal wiring as a mixin.
+
+Owns the History tab: load entries on first paint, clear / export
+buttons, copy-to-clipboard signal from row, and the
+``history_updated`` signal from the recording pipeline that pops a
+toast + prepends the newest entry to the table.
+
+Expects the host class to provide:
+
+- ``self._window``   — main window (uses ``self._window.history_view``
+                        and ``self._window.toast``)
+- ``self._history``  — history manager (or ``None``)
+
+Public entry point: ``_wire_history()``.
+
+The ``_on_history_updated_signal`` handler is connected from the
+recording-mixin (where the signal source lives), so it stays public
+to that mixin too.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+
+
+log = logging.getLogger(__name__)
+
+
+class HistoryMixin:
+    """History-tab slice of ``AppController``."""
+
+    def _wire_history(self) -> None:
+        view = self._window.history_view
+        if self._history is not None:
+            view.set_entries(self._history.get_entries())
+            view.clear_requested.connect(self._on_history_clear)
+            view.export_requested.connect(self._on_history_export)
+        view.copy_requested.connect(self._on_history_copy)
+
+    def _on_history_clear(self) -> None:
+        if self._history is None:
+            return
+        # Wipes the on-disk history file too — confirm before doing
+        # anything irreversible.
+        entries = self._history.get_entries()
+        if not entries:
+            return
+        answer = QMessageBox.question(
+            self._window,
+            "Clear history?",
+            f"Delete all {len(entries)} transcriptions? This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._history.clear_history()
+        self._window.history_view.set_entries(self._history.get_entries())
+
+    def _on_history_export(self) -> None:
+        if self._history is None:
+            return
+        entries = self._history.get_entries()
+        if not entries:
+            QMessageBox.information(
+                self._window,
+                "Nothing to export",
+                "Your history is empty — record a transcription first.",
+            )
+            return
+        path, _selected_filter = QFileDialog.getSaveFileName(
+            self._window,
+            "Export history",
+            "transcription_history.txt",
+            "Text files (*.txt);;All files (*.*)",
+        )
+        if not path:
+            return
+        try:
+            ok = bool(self._history.export_to_text(path))
+        except Exception as exc:
+            log.warning("History export raised: %s", exc)
+            ok = False
+        if ok:
+            QMessageBox.information(
+                self._window,
+                "History exported",
+                f"Saved {len(entries)} transcriptions to:\n{path}",
+            )
+        else:
+            QMessageBox.warning(
+                self._window,
+                "Export failed",
+                "Could not write the history file. Check the destination "
+                "path and permissions.",
+            )
+
+    def _on_history_copy(self, text: str) -> None:
+        QApplication.clipboard().setText(text)
+
+    def _on_history_updated_signal(self) -> None:
+        """Called from the recording-controller signal when a new
+        transcription lands.  Prepend the newest entry without
+        resetting the table model (so scroll + selection survive),
+        then pop the confirmation toast."""
+        if self._history is None:
+            return
+        entries = self._history.get_entries()
+        if not entries:
+            return
+        max_entries = getattr(self._history, "max_entries", 0)
+        self._window.history_view.prepend_entry(entries[0], max_entries)
+        try:
+            latest_text = getattr(entries[0], "text", "") or ""
+        except Exception:  # pragma: no cover — defensive
+            latest_text = ""
+        if latest_text:
+            try:
+                self._window.toast.show_message(latest_text)
+            except Exception:  # pragma: no cover — defensive
+                pass

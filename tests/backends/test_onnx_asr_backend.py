@@ -1123,12 +1123,12 @@ def test_transcribe_file_disables_with_timestamps_for_simplicity(
     fake_model.with_timestamps = MagicMock(return_value=fake_model)
 
     from app.backends.onnx_backend import OnnxAsrBackend
-    from app.inference_settings import NemoInferenceSettings
+    from app.inference_settings import ParakeetInferenceSettings
 
     backend = OnnxAsrBackend(model="x")
     backend.load()
     assert _wait(lambda: backend.status() == "ready")
-    backend.update_inference_settings(NemoInferenceSettings(timestamps=True))
+    backend.update_inference_settings(ParakeetInferenceSettings(timestamps=True))
 
     fake_audio = tmp_path / "x.wav"
     fake_audio.write_bytes(b"")
@@ -1145,13 +1145,13 @@ def test_with_timestamps_called_when_settings_enable_it(monkeypatch):
     fake_model.with_timestamps = MagicMock(return_value=fake_model)
 
     from app.backends.onnx_backend import OnnxAsrBackend
-    from app.inference_settings import NemoInferenceSettings
+    from app.inference_settings import ParakeetInferenceSettings
 
     backend = OnnxAsrBackend(model="x")
     backend.load()
     assert _wait(lambda: backend.status() == "ready")
 
-    backend.update_inference_settings(NemoInferenceSettings(timestamps=True))
+    backend.update_inference_settings(ParakeetInferenceSettings(timestamps=True))
     backend.transcribe(np.zeros(16000, dtype=np.float32))
 
     fake_model.with_timestamps.assert_called()
