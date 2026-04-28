@@ -310,11 +310,19 @@ def _do_onnx_asr_preimport() -> None:
         _x = _np.array([0.0], dtype=_np.float32)
 
         for _provider in _ort.get_available_providers():
+            # Always include CPU as the fallback so the session has a
+            # usable provider even if the primary one is unavailable.
+            # Avoid duplicating CPUExecutionProvider (ORT warns on that).
+            _providers = (
+                [_provider]
+                if _provider == "CPUExecutionProvider"
+                else [_provider, "CPUExecutionProvider"]
+            )
             try:
                 _sess = _ort.InferenceSession(
                     _WARMUP_ONNX_BYTES,
                     sess_options=_opts,
-                    providers=[_provider, "CPUExecutionProvider"],
+                    providers=_providers,
                 )
                 _sess.run(None, {"x": _x})
                 del _sess
