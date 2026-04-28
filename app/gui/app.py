@@ -433,6 +433,13 @@ def _autoload_persisted_model(backend) -> None:
 
 def main() -> int:
     import logging
+    import multiprocessing
+
+    # PyInstaller / cx_Freeze frozen builds require ``freeze_support``
+    # at the start of ``main`` so that ``multiprocessing.Process``
+    # spawn children correctly re-enter their target instead of
+    # re-running ``main`` recursively.  No-op outside frozen builds.
+    multiprocessing.freeze_support()
 
     # Read the configured ``storage.models_dir`` (may be empty for
     # 'use the default') from config.yaml, then plant ``HF_HOME``

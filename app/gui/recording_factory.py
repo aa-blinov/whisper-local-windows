@@ -15,7 +15,7 @@ from typing import Tuple
 from app.audio_feedback import AudioFeedback
 from app.audio_recorder import AudioRecorder
 from app.backends.base import TranscriptionBackend
-from app.backends.registry_backend import RegistryBackend
+from app.backends.subprocess_backend import SubprocessBackend
 from app.clipboard_manager import ClipboardManager
 from app.config_manager import ConfigManager
 from app.hotkey_listener import HotkeyListener
@@ -68,7 +68,11 @@ def build_recording_stack(
         preserve_clipboard=bool(clipboard_cfg.get("preserve_clipboard", False)),
     )
 
-    backend: TranscriptionBackend = RegistryBackend(
+    # SubprocessBackend hosts a RegistryBackend in a separate process,
+    # so ``onnx_asr.load_model`` and the ONNX session destructors can't
+    # hold the Win32 DLL loader-lock in our Qt process.  See
+    # ``app/backends/subprocess_backend.py`` for the full rationale.
+    backend: TranscriptionBackend = SubprocessBackend(
         model=raw_model,
         device=str(whisper_cfg.get("device", "auto")),
         compute_type=str(whisper_cfg.get("compute_type", "float16")),
