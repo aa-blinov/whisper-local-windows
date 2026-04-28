@@ -10,7 +10,7 @@ to the status poller and trigger ``backend.load()`` once the UI is up.
 from __future__ import annotations
 
 import logging
-from typing import Tuple
+from typing import Optional, Tuple
 
 from app.audio_feedback import AudioFeedback
 from app.audio_recorder import AudioRecorder
@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 
 def build_recording_stack(
     config_manager: ConfigManager,
+    backend: Optional[TranscriptionBackend] = None,
 ) -> Tuple[StateManager, HotkeyListener, TranscriptionBackend]:
     """Build the full domain stack and start the global hotkey listener.
 
@@ -35,6 +36,13 @@ def build_recording_stack(
     so the caller must keep all three objects alive for the lifetime of the
     app. The returned ``backend`` is constructed in the ``stopped`` state —
     call ``backend.load()`` to begin loading the configured model.
+
+    ``backend`` may be passed in by the caller — useful when the caller
+    wants to spawn the ``SubprocessBackend`` very early in startup
+    (Windows ``spawn`` + heavy onnx_asr import takes 3-7 s) and run
+    its init in parallel with the rest of the recording-stack
+    construction.  If omitted, a default ``SubprocessBackend`` is
+    built here.
     """
     whisper_cfg = config_manager.get_whisper_config()
     audio_cfg = config_manager.get_audio_config()
@@ -68,17 +76,19 @@ def build_recording_stack(
         preserve_clipboard=bool(clipboard_cfg.get("preserve_clipboard", False)),
     )
 
-    # SubprocessBackend hosts a RegistryBackend in a separate process,
-    # so ``onnx_asr.load_model`` and the ONNX session destructors can't
-    # hold the Win32 DLL loader-lock in our Qt process.  See
-    # ``app/backends/subprocess_backend.py`` for the full rationale.
-    backend: TranscriptionBackend = SubprocessBackend(
-        model=raw_model,
-        device=str(whisper_cfg.get("device", "auto")),
-        compute_type=str(whisper_cfg.get("compute_type", "float16")),
-        language=whisper_cfg.get("language") or None,
-        beam_size=int(whisper_cfg.get("beam_size", 5)),
-    )
+    # If the caller pre-spawned a backend (the production path —
+    # main() does this very early to overlap Windows ``spawn`` with
+    # the rest of startup), reuse it.  Otherwise build the default
+    # SubprocessBackend here for callers that don't bother with the
+    # early-spawn dance (tests, scripts, REPL).
+    if backend is None:
+        backend = SubprocessBackend(
+            model=raw_model,
+            device=str(whisper_cfg.get("device", "auto")),
+            compute_type=str(whisper_cfg.get("compute_type", "float16")),
+            language=whisper_cfg.get("language") or None,
+            beam_size=int(whisper_cfg.get("beam_size", 5)),
+        )
 
     state_manager = StateManager(
         audio_recorder=audio_recorder,

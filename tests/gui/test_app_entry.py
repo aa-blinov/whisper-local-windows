@@ -326,34 +326,42 @@ def test_preload_onnx_asr_swallows_import_error(monkeypatch):
     # Reaching this line means the exception didn't escape the thread.
 
 
-def test_main_kicks_off_onnx_asr_preimport_before_window_show():
-    """Static check: ``main()`` must call the preimport helper BEFORE
-    it tries to ``window.show()`` — otherwise we lose the overlap with
-    Qt window construction and the user can still see (Not responding).
+def test_main_spawns_subprocess_backend_before_recording_stack_build():
+    """Static check: ``main()`` must spawn the SubprocessBackend BEFORE
+    ``build_recording_stack`` so the worker process's Python re-exec
+    + onnx_asr re-import (3-7 s on a cold start) overlaps with logging
+    + recording-stack + MainWindow construction.  Otherwise the user
+    sees a 5-10 s blank screen on app launch waiting for the worker
+    to be ready.
 
-    Inspecting the source rather than driving main() end-to-end is a
-    deliberate trade-off — main() pulls in the entire recording stack,
-    QApplication, single-instance mutex, and tray icon, none of which
-    we want to spin up in a unit test.
+    Inspecting the source rather than driving main() end-to-end —
+    main() pulls in the entire QApplication, single-instance mutex,
+    and tray icon, none of which we want to spin up in a unit test.
     """
     import inspect
 
     import app.gui.app as app_module
 
     src = inspect.getsource(app_module.main)
-    preimport_idx = src.find("_preload_onnx_asr_async")
-    join_idx = src.find("_onnx_preload_t.join(")
-    show_idx = src.find("window.show()")
-    assert preimport_idx != -1, "main() should call _preload_onnx_asr_async"
-    assert join_idx != -1, (
-        "main() should join the preimport thread before window.show() "
-        "to guarantee DLL loader-lock acquisition is done first"
+    # Match real call sites only — anchor on the assignment / call shape
+    # so docstrings and comments mentioning the same names don't trip
+    # the order check.
+    spawn_idx = src.find("= SubprocessBackend(")
+    build_idx = src.find("= build_recording_stack(")
+    # ``= build_recording_stack(`` won't match because the call uses
+    # tuple-unpacking; fall back to the bare call form.
+    if build_idx == -1:
+        build_idx = src.find("build_recording_stack(\n")
+    show_idx = src.find("    window.show()")  # 4-space indent → real call
+    assert spawn_idx != -1, (
+        "main() should construct SubprocessBackend (early-spawn pattern)"
     )
+    assert build_idx != -1, "sanity: main() should call build_recording_stack"
     assert show_idx != -1, "sanity: main() should call window.show()"
-    assert preimport_idx < join_idx < show_idx, (
-        "order must be: kick off preimport → join (wait for DLL warmup) → "
-        "window.show() — that way DLL lock contention is absorbed before "
-        "the window becomes interactive"
+    assert spawn_idx < build_idx < show_idx, (
+        "order must be: spawn SubprocessBackend → build_recording_stack → "
+        "window.show() — that way Windows ``spawn`` overlaps with the "
+        "rest of startup instead of stalling the UI"
     )
 
 

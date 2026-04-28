@@ -509,14 +509,30 @@ def main() -> int:
     # We are the primary instance — bind the mutex handle so it survives.
     qt_app._instance_mutex = instance_handle  # type: ignore[attr-defined]
 
-    # Kick off ``import onnx_asr`` on a daemon thread so its onnxruntime +
-    # provider DLLs (and the loader-lock contention they trigger on
-    # Windows) are absorbed in parallel with QApplication / window
-    # construction.  Without this, the first model load can leave the
-    # title bar marked "(Not responding)" until the import finishes.
-    # Started after the single-instance gate so a second copy of the
-    # app exits without paying the import cost.
-    _onnx_preload_t = _preload_onnx_asr_async()
+    # Spawn the inference worker as the very first thing after the
+    # single-instance gate.  Windows ``multiprocessing.spawn`` re-execs
+    # Python and re-imports onnx_asr (~3-7 s on a cold start); doing it
+    # now lets that work overlap with logging + recording-stack +
+    # MainWindow construction below, so by the time we hit
+    # ``window.show()`` the worker has usually finished init and the
+    # first ``backend.load()`` (autoload) ack-roundtrips in <50 ms
+    # instead of stalling the UI.
+    #
+    # ``SubprocessBackend.__init__`` is async — it returns once the
+    # child process is started + the init command has been written to
+    # the pipe; the worker's ack is consumed by the reader thread and
+    # any later ``_send_cmd`` blocks on the init event until ready.
+    from app.backends.subprocess_backend import SubprocessBackend
+
+    _whisper_cfg = _early_config.get_whisper_config()
+    _backend_kwargs = dict(
+        model=_whisper_cfg.get("model") or "whisper-large-v3-turbo",
+        device=str(_whisper_cfg.get("device", "auto")),
+        compute_type=str(_whisper_cfg.get("compute_type", "float16")),
+        language=_whisper_cfg.get("language") or None,
+        beam_size=int(_whisper_cfg.get("beam_size", 5)),
+    )
+    _early_backend = SubprocessBackend(**_backend_kwargs)
 
     # Set up the logging pipeline BEFORE building the recording stack so the
     # HotkeyListener / model-load messages from build_recording_stack reach
@@ -564,8 +580,12 @@ def main() -> int:
     backend = None
     recording_controller = None
     try:
+        # Pass the pre-spawned backend in so build_recording_stack
+        # doesn't create a second one — the early-spawned worker has
+        # already started initialising in parallel.
         state_manager, hotkey_listener, backend = build_recording_stack(
             config_manager=config,
+            backend=_early_backend,
         )
     except Exception as exc:
         logging.getLogger(__name__).warning(
@@ -578,15 +598,6 @@ def main() -> int:
             state_manager=state_manager,
             hotkey_listener=hotkey_listener,
         )
-
-    # Block until the preimport + ORT provider warmup finishes.
-    # Normally the thread completes during build_recording_stack (~1-2 s),
-    # so this join returns immediately.  The timeout is a safety net:
-    # if ORT hangs on a pathological install we don't block the user
-    # indefinitely — they'll see the first model load freeze instead,
-    # which is the pre-existing behaviour.  15 s is generous; the real
-    # warmup session takes <2 s on this dev box.
-    _onnx_preload_t.join(timeout=15)
 
     history = state_manager.history_manager if state_manager is not None else None
 
@@ -625,20 +636,23 @@ def main() -> int:
     if ico_path and os.path.isfile(ico_path):
         _force_window_icon(int(window.winId()), ico_path)
 
-    # Defer the persisted-model autoload until the Qt event loop has
-    # ticked at least once — otherwise the loader-thread starts firing
-    # tqdm-driven download_progress signals into the main thread queue
-    # before Qt has had a chance to acknowledge to Windows that the
-    # message pump is alive, and the title bar gets stamped with
-    # "(Not responding)" even though the worker is doing the actual work.
-    # Using singleShot(0, …) schedules the call onto the next event
-    # loop iteration, after Qt has processed WM_PAINT / WM_NCCALCSIZE
-    # / WM_SHOWWINDOW from window.show().  The user perceives no delay
-    # — the loading pill appears within ~50 ms — but Windows now sees
-    # a responsive process before the heavy load starts.
-    from PySide6.QtCore import QTimer
+    # Run the persisted-model autoload on a daemon thread so the Qt
+    # main thread isn't blocked if the worker process is still finishing
+    # its init when we get here.  ``backend.load()`` calls
+    # ``SubprocessBackend._send_cmd`` which waits on the worker's
+    # ``_init_event`` — that wait can take a couple of seconds on a
+    # cold start (Windows ``spawn`` + onnx_asr re-import).  Doing it
+    # off the main thread means the window is fully interactive
+    # straight away; the loading pill / topbar progress paint as soon
+    # as the worker is ready.
+    import threading as _threading
 
-    QTimer.singleShot(0, lambda: _autoload_persisted_model(backend))
+    _threading.Thread(
+        target=_autoload_persisted_model,
+        args=(backend,),
+        daemon=True,
+        name="autoload-model",
+    ).start()
 
     try:
         return app.exec()

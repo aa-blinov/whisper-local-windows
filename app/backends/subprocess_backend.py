@@ -106,6 +106,17 @@ class SubprocessBackend:
         ] = None
         self._shutdown = False
 
+        # Async init: don't block the caller waiting for the worker
+        # to come up.  ``__init__`` returns immediately; the reader
+        # thread captures the init ack into ``_init_event`` and any
+        # subsequent ``_send_cmd`` blocks on that event before
+        # sending its own command.  Why: Windows ``spawn`` re-execs
+        # Python and re-imports onnx_asr (~3-7 s); doing that
+        # synchronously here used to delay ``window.show()`` and the
+        # user saw a blank screen for 5-10 s on app startup.
+        self._init_event = threading.Event()
+        self._init_error: Optional[str] = None
+
         self._reader_thread = threading.Thread(
             target=self._read_loop,
             name="onnx-worker-reader",
@@ -113,15 +124,21 @@ class SubprocessBackend:
         )
         self._reader_thread.start()
 
-        # Kick off the worker's RegistryBackend with the user's kwargs.
-        # ``_send_cmd`` blocks until the worker acks ("ok", None).
-        self._send_cmd(("init", kwargs), timeout=_FAST_TIMEOUT)
+        # Fire the init command — non-blocking; the reader thread
+        # will set ``_init_event`` when the worker acks.
+        try:
+            self._parent_conn.send(("init", kwargs))
+        except (BrokenPipeError, OSError) as exc:  # pragma: no cover
+            self._init_error = f"init send failed: {exc}"
+            self._init_event.set()
 
     # ------------------------------------------------------------------ IPC
 
     def _read_loop(self) -> None:
         """Reader thread — splits the pipe stream into progress events
-        (dispatched to the user callback) and command responses
+        (dispatched to the user callback), log records (re-emitted
+        through the parent's logging), the init ack (consumed
+        internally to flip ``_init_event``), and command responses
         (queued for ``_send_cmd``)."""
         while True:
             try:
@@ -129,7 +146,11 @@ class SubprocessBackend:
             except (EOFError, OSError):
                 # Worker process exited or the pipe was closed —
                 # signal any waiting _send_cmd by enqueuing a sentinel
-                # error so it doesn't block forever.
+                # error so it doesn't block forever.  Also unblock
+                # any caller still waiting on init.
+                if not self._init_event.is_set():
+                    self._init_error = "Worker pipe closed before init"
+                    self._init_event.set()
                 self._response_queue.put(
                     ("error", "Subprocess pipe closed unexpectedly")
                 )
@@ -157,14 +178,38 @@ class SubprocessBackend:
                 except Exception as exc:  # pragma: no cover
                     log.warning("worker log forward failed: %s", exc)
             else:
-                self._response_queue.put(msg)
+                # First command response is the init ack (we sent
+                # ``("init", …)`` immediately at construction).  Capture
+                # it here so callers don't see it as the response to
+                # their first ``_send_cmd``.
+                if not self._init_event.is_set():
+                    if msg[0] == "error":
+                        self._init_error = str(msg[1])
+                    self._init_event.set()
+                else:
+                    self._response_queue.put(msg)
 
     def _send_cmd(self, cmd: tuple, *, timeout: float = _FAST_TIMEOUT) -> Any:
         """Send a command and block until the worker replies.
 
-        Raises :class:`RuntimeError` if the worker reports an error or
-        the pipe times out.  Thread-safe via ``_send_lock``.
+        Blocks first on ``_init_event`` if the worker hasn't finished
+        initialising yet — Windows ``spawn`` + heavy onnx_asr import
+        can take 3-7 s after construction.  Callers running on the
+        Qt main thread should keep that in mind; the autoload path
+        deliberately runs on a daemon thread to avoid stalling the UI.
+
+        Raises :class:`RuntimeError` if the worker reports an error
+        (or never inits, or the pipe times out).  Thread-safe via
+        ``_send_lock``.
         """
+        if not self._init_event.is_set():
+            if not self._init_event.wait(timeout=timeout):
+                raise RuntimeError(
+                    f"Subprocess worker failed to init within {timeout}s"
+                )
+        if self._init_error is not None:
+            raise RuntimeError(f"Subprocess init failed: {self._init_error}")
+
         with self._send_lock:
             try:
                 self._parent_conn.send(cmd)
