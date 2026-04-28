@@ -39,7 +39,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from app.backends._progress import install_tqdm_progress, set_progress_callback
-from app.inference_settings import ParakeetInferenceSettings
+from app.inference_settings import InferenceSettings, ParakeetInferenceSettings
 
 log = logging.getLogger(__name__)
 
@@ -201,11 +201,33 @@ class OnnxAsrBackend:
             self._status = "stopped"
         self.load()
 
-    def update_inference_settings(self, settings: ParakeetInferenceSettings) -> None:
+    def update_inference_settings(self, settings) -> None:
         """Apply a new settings bundle.  Effect is per-call: the next
-        ``transcribe`` reads ``self._inference_settings``.  No reload."""
+        ``transcribe`` reads ``self._inference_settings``.  No reload.
+
+        Accepts either ``InferenceSettings`` (Whisper card) or
+        ``ParakeetInferenceSettings`` (Parakeet card).  When the
+        bundle carries a ``language`` field (Whisper), update the
+        live ``_language`` so the next ``transcribe`` honours the
+        user's choice without an app restart — this is what wires the
+        Whisper inference panel to the running model.
+        """
         with self._lock:
             self._inference_settings = settings
+            # Whisper's panel sends an InferenceSettings with a
+            # ``language`` attribute.  Apply it live so the next
+            # transcribe call passes the new value.  Other families
+            # (gigaam / parakeet) ignore self._language anyway, so
+            # writing it here is harmless even if the user pushed a
+            # cross-shape settings object by accident.
+            new_language = getattr(settings, "language", None)
+            if isinstance(settings, InferenceSettings):
+                # ``InferenceSettings.language`` may be ``None`` (auto)
+                # or an explicit string — either way it is the new
+                # source of truth.  Don't read ``getattr`` here so a
+                # future field with the same name on an unrelated
+                # object can't silently overwrite our state.
+                self._language = new_language
 
     def transcribe(
         self, audio: np.ndarray, sample_rate: int = 16_000

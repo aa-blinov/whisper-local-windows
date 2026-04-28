@@ -1137,6 +1137,135 @@ def test_transcribe_file_disables_with_timestamps_for_simplicity(
     fake_model.with_timestamps.assert_not_called()
 
 
+# ---- Live language update via update_inference_settings -------------------
+
+
+def test_update_inference_settings_with_whisper_settings_updates_live_language(
+    monkeypatch,
+):
+    """Whisper's inference panel sends an ``InferenceSettings`` (with a
+    ``language`` field).  ``update_inference_settings`` must pull the
+    new language out and apply it to the live backend so the next
+    ``transcribe`` call passes the user's choice — without it the
+    language change persists to config but doesn't take effect until
+    the next app launch."""
+    _, fake_model = _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+    from app.inference_settings import InferenceSettings
+
+    backend = OnnxAsrBackend(
+        model="onnx-community/whisper-large-v3-turbo",
+        family="whisper",
+        language="en",       # initial language
+    )
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    # Simulate the user picking 'ru' from the Whisper inference panel.
+    backend.update_inference_settings(InferenceSettings(language="ru"))
+
+    # current_language() reflects the new value immediately.
+    assert backend.current_language() == "ru"
+
+    # And the next transcribe forwards it to recognize().
+    backend.transcribe(np.zeros(16000, dtype=np.float32))
+    _args, kwargs = fake_model.recognize.call_args
+    assert kwargs.get("language") == "ru"
+
+
+def test_update_inference_settings_with_whisper_auto_resets_to_autodetect(
+    monkeypatch,
+):
+    """Picking 'auto' (or empty) in the language combo must reset the
+    backend to auto-detect — i.e. ``current_language()`` returns None
+    and ``transcribe()`` omits the language kwarg."""
+    _, fake_model = _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+    from app.inference_settings import InferenceSettings
+
+    backend = OnnxAsrBackend(
+        model="onnx-community/whisper-large-v3-turbo",
+        family="whisper",
+        language="ru",
+    )
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    backend.update_inference_settings(InferenceSettings(language="auto"))
+
+    assert backend.current_language() is None
+
+    backend.transcribe(np.zeros(16000, dtype=np.float32))
+    _args, kwargs = fake_model.recognize.call_args
+    assert "language" not in kwargs
+
+
+def test_update_inference_settings_does_not_touch_language_for_gigaam(
+    monkeypatch,
+):
+    """GigaAM is Russian-only; even if the user passes a different
+    language in an InferenceSettings (which shouldn't happen because
+    GigaAM cards have no panel), ``current_language()`` still returns
+    'ru' — no path lets the user accidentally turn off Russian."""
+    _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+    from app.inference_settings import InferenceSettings
+
+    backend = OnnxAsrBackend(model="x", family="gigaam")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    backend.update_inference_settings(InferenceSettings(language="en"))
+
+    assert backend.current_language() == "ru"
+
+
+def test_update_inference_settings_does_not_touch_language_for_parakeet(
+    monkeypatch,
+):
+    """Parakeet auto-detects across 25 languages; whatever the user
+    picks in a (hypothetical) panel, ``current_language()`` stays None."""
+    _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+    from app.inference_settings import InferenceSettings
+
+    backend = OnnxAsrBackend(model="x", family="parakeet")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    backend.update_inference_settings(InferenceSettings(language="en"))
+
+    assert backend.current_language() is None
+
+
+def test_update_inference_settings_with_parakeet_settings_keeps_language(
+    monkeypatch,
+):
+    """``ParakeetInferenceSettings`` doesn't carry a language field —
+    the existing ``_language`` must survive the update unchanged."""
+    _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+    from app.inference_settings import ParakeetInferenceSettings
+
+    backend = OnnxAsrBackend(
+        model="x", family="whisper", language="ru",
+    )
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    # Whisper backend with a non-Whisper settings shape (defensive —
+    # in practice the controller never crosses streams, but the
+    # backend shouldn't lose state if it does).
+    backend.update_inference_settings(ParakeetInferenceSettings(timestamps=True))
+
+    assert backend.current_language() == "ru"
+
+
 def test_with_timestamps_called_when_settings_enable_it(monkeypatch):
     """When the user enables timestamps in inference settings, the backend
     must call ``model.with_timestamps()`` to wrap the model before running
