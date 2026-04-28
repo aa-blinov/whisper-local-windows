@@ -250,6 +250,63 @@ def _apply_storage_path(configured: Optional[str]) -> str:
     return root
 
 
+def _do_onnx_asr_preimport() -> None:
+    """Actually perform the eager ``import onnx_asr``.
+
+    Split out from ``_preload_onnx_asr_async`` so tests can monkeypatch
+    just the import call itself without having to fake
+    ``threading.Thread``.  This function is allowed to raise — the
+    surrounding worker wrapper turns any exception into a debug log so
+    the preimport stays a pure latency optimisation that never crashes
+    the app.
+    """
+    import onnx_asr  # noqa: F401 — pure side-effect import
+
+
+def _preload_onnx_asr_async() -> "threading.Thread":
+    """Kick off ``import onnx_asr`` on a daemon worker thread.
+
+    Why this exists: on Windows, the first ``import onnx_asr`` pulls in
+    onnxruntime and its CUDA / DirectML provider DLLs, which acquire the
+    OS loader-lock for ~1-2 s.  If that happens on the main thread (or
+    if it happens after the window is shown but before Qt has finished
+    its event-loop warm-up), Windows decides the UI is hung and slaps
+    a "(Not responding)" badge on the title bar.  Pre-importing on a
+    daemon thread *before* ``window.show()`` overlaps the loader-lock
+    contention with QApplication construction so the UI is never the
+    one stuck waiting.
+
+    Returns the started ``Thread`` so callers can ``join()`` it during
+    teardown if they want — but ``main()`` doesn't, since the thread is
+    a daemon and dies with the interpreter.  Returning it is also what
+    the test suite uses to assert daemon-ness and naming.
+    """
+    import logging
+    import threading
+
+    log = logging.getLogger(__name__)
+
+    def _worker() -> None:
+        # Swallow EVERYTHING — the preimport is a latency optimisation,
+        # not part of the model-load contract.  If onnx_asr is missing
+        # or broken, the user will discover it when they click a model
+        # and the proper error path takes over; we must never crash a
+        # background thread to the point that pytest / the user's
+        # logs scream.
+        try:
+            _do_onnx_asr_preimport()
+        except Exception as exc:  # noqa: BLE001 — intentionally broad
+            log.debug("onnx_asr preimport failed (deferred to load): %s", exc)
+
+    t = threading.Thread(
+        target=_worker,
+        name="onnx-asr-preimport",
+        daemon=True,
+    )
+    t.start()
+    return t
+
+
 def _autoload_persisted_model(backend) -> None:
     """Kick off the persisted model load if its weights are already on disk.
 
@@ -374,6 +431,15 @@ def main() -> int:
 
     # We are the primary instance — bind the mutex handle so it survives.
     qt_app._instance_mutex = instance_handle  # type: ignore[attr-defined]
+
+    # Kick off ``import onnx_asr`` on a daemon thread so its onnxruntime +
+    # provider DLLs (and the loader-lock contention they trigger on
+    # Windows) are absorbed in parallel with QApplication / window
+    # construction.  Without this, the first model load can leave the
+    # title bar marked "(Not responding)" until the import finishes.
+    # Started after the single-instance gate so a second copy of the
+    # app exits without paying the import cost.
+    _preload_onnx_asr_async()
 
     # Set up the logging pipeline BEFORE building the recording stack so the
     # HotkeyListener / model-load messages from build_recording_stack reach

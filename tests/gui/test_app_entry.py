@@ -230,6 +230,127 @@ def test_app_module_no_longer_imports_splash():
     )
 
 
+# ---- onnx_asr preimport (Option A: dodge Windows DLL loader-lock freeze) ----
+
+
+def test_preload_onnx_asr_returns_daemon_thread():
+    """``_preload_onnx_asr_async`` must return a daemon Thread so the
+    process exits cleanly even if the import is still in flight when
+    the user quits — non-daemon threads block interpreter teardown.
+    """
+    import threading
+
+    from app.gui.app import _preload_onnx_asr_async
+
+    t = _preload_onnx_asr_async()
+    try:
+        assert isinstance(t, threading.Thread)
+        assert t.daemon is True, "preimport thread must be daemon"
+    finally:
+        # Wait for the thread, capped — if it deadlocks the test
+        # would hang otherwise. 30 s is generous; a real onnx_asr
+        # import takes ~1.5 s on the dev box.
+        t.join(timeout=30)
+
+
+def test_preload_onnx_asr_thread_has_descriptive_name():
+    """Named threads make ``psutil`` / Logs view diagnostics readable
+    when a user reports a hang. Without a name the listener shows
+    ``Thread-N`` and we lose the context."""
+    from app.gui.app import _preload_onnx_asr_async
+
+    t = _preload_onnx_asr_async()
+    try:
+        assert "onnx" in t.name.lower(), (
+            f"expected 'onnx' in thread name for diagnostics, got {t.name!r}"
+        )
+    finally:
+        t.join(timeout=30)
+
+
+def test_preload_onnx_asr_does_not_block_caller(monkeypatch):
+    """The caller thread must return immediately — the whole point is
+    to overlap the heavy import with QApplication / window construction.
+    If we block here, we've lost the latency win."""
+    import threading
+    import time
+
+    # Stub out the import target so the worker blocks deterministically.
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_import():
+        started.set()
+        # Hold the worker until the test releases it. If the caller
+        # were waiting on us, the assertion below would time out.
+        release.wait(5)
+
+    import app.gui.app as app_module
+
+    monkeypatch.setattr(app_module, "_do_onnx_asr_preimport", slow_import)
+
+    t0 = time.monotonic()
+    t = app_module._preload_onnx_asr_async()
+    elapsed = time.monotonic() - t0
+    try:
+        assert elapsed < 0.5, (
+            f"caller blocked for {elapsed:.2f}s — preimport must run "
+            f"on a background thread"
+        )
+        assert started.wait(2.0), "preimport worker did not start"
+    finally:
+        release.set()
+        t.join(timeout=5)
+
+
+def test_preload_onnx_asr_swallows_import_error(monkeypatch):
+    """If onnx_asr is missing (test env without the heavy dep), or
+    import dies on a broken install, the preimport thread must not
+    propagate — startup should continue normally and the user discovers
+    the problem only when they try to load a model."""
+    import threading
+
+    failure_seen = threading.Event()
+
+    def boom():
+        failure_seen.set()
+        raise ImportError("simulated broken install")
+
+    import app.gui.app as app_module
+
+    monkeypatch.setattr(app_module, "_do_onnx_asr_preimport", boom)
+
+    t = app_module._preload_onnx_asr_async()
+    t.join(timeout=5)
+    assert failure_seen.is_set(), "stub must have been called"
+    # Reaching this line means the exception didn't escape the thread.
+
+
+def test_main_kicks_off_onnx_asr_preimport_before_window_show():
+    """Static check: ``main()`` must call the preimport helper BEFORE
+    it tries to ``window.show()`` — otherwise we lose the overlap with
+    Qt window construction and the user can still see (Not responding).
+
+    Inspecting the source rather than driving main() end-to-end is a
+    deliberate trade-off — main() pulls in the entire recording stack,
+    QApplication, single-instance mutex, and tray icon, none of which
+    we want to spin up in a unit test.
+    """
+    import inspect
+
+    import app.gui.app as app_module
+
+    src = inspect.getsource(app_module.main)
+    preimport_idx = src.find("_preload_onnx_asr_async")
+    show_idx = src.find("window.show()")
+    assert preimport_idx != -1, "main() should call _preload_onnx_asr_async"
+    assert show_idx != -1, "sanity: main() should call window.show()"
+    assert preimport_idx < show_idx, (
+        "preimport must be kicked off BEFORE window.show() so the heavy "
+        "import overlaps with Qt window construction"
+    )
+
+
 # ---- AUMID icon registry registration --------------------------------------
 
 

@@ -28,6 +28,7 @@ config changes don't have to be plumbed through.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Callable, Optional
 
 import numpy as np
@@ -37,6 +38,37 @@ from app.model_mapping import alias_for, canonical_for, get_model
 
 
 log = logging.getLogger(__name__)
+
+
+def _shutdown_in_background(inner: TranscriptionBackend) -> threading.Thread:
+    """Tear down the old inner backend on a daemon worker thread.
+
+    Why this is async: ONNX session destruction acquires the GIL plus
+    the OS DLL loader-lock to drop the onnxruntime / CUDA provider
+    libraries.  On Windows that combination can stall the calling
+    thread for several hundred milliseconds.  When the caller is the
+    Qt main thread (model card "Switch" click), that stall paints the
+    window as "(Not responding)".  We hand the destructor off to a
+    daemon thread and return immediately.
+
+    Errors inside ``shutdown()`` are caught and logged — by the time
+    we get here the caller has already moved on, so there's nobody to
+    propagate to.  Resource leaks at this stage are debug-level only;
+    the new backend is already up and the user has no recourse.
+    """
+    def _worker() -> None:
+        try:
+            inner.shutdown()
+        except Exception as exc:  # noqa: BLE001 — defensive
+            log.warning("Old backend shutdown raised in worker: %s", exc)
+
+    t = threading.Thread(
+        target=_worker,
+        name="onnx-shutdown-worker",
+        daemon=True,
+    )
+    t.start()
+    return t
 
 
 def _build_onnx_asr(
@@ -136,10 +168,11 @@ class RegistryBackend:
             self._inner.current_model(), current_family,
             canonical, onnx_family,
         )
-        try:
-            self._inner.shutdown()
-        except Exception as exc:  # pragma: no cover — defensive
-            log.warning("Old backend shutdown raised: %s", exc)
+        # Hand the old session's destructor to a daemon worker so the
+        # caller (often the Qt main thread, via the model card "Switch"
+        # button) doesn't block on ONNX teardown — see
+        # ``_shutdown_in_background`` for the rationale.
+        _shutdown_in_background(self._inner)
 
         if compute_type is not None:
             self._kwargs["quantization"] = _quantization_for(compute_type)
