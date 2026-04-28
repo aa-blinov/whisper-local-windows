@@ -18,7 +18,14 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 from app.gui.main_window import MainWindow
 from app.inference_settings import InferenceSettings, ParakeetInferenceSettings
 from app.model_mapping import MODELS, alias_for, canonical_for, get_model
-from app.utils import (
+# NB: ``cached_models_size``, ``get_models_root``, and
+# ``move_cached_dir`` are not used directly in this file any more —
+# the storage logic moved to ``_storage_mixin``.  Kept in the import
+# block because the mixin looks them up via this module
+# (``app_controller.get_models_root`` etc.) so ``monkeypatch.setattr
+# (controller_module, …)`` calls in the test suite still land.  See
+# ``_storage_mixin._ctrl_module`` for the dispatch.
+from app.utils import (  # noqa: F401  (re-export for tests + storage mixin)
     cached_models_size,
     delete_cached_for_info,
     get_models_root,
@@ -51,33 +58,19 @@ def _apply_hf_token_to_env(configured: Optional[str]) -> bool:
     return False
 
 
-def _apply_env_for_models_root(configured: str) -> str:
-    """Mirror the user's chosen models root into the live process
-    environment so the next ``onnx_asr.load_model(...)`` call's
-    ``huggingface_hub`` download picks it up without a restart.
-
-    Mirrors the startup logic in ``app.gui.app._apply_storage_path``
-    — kept in lockstep so 'change live' and 'apply on next launch'
-    end up at the same env state.
-
-    Returns the resolved root for logging.
-    """
-    import os as _os
-
-    root = get_models_root(configured)
-    _os.environ["HF_HOME"] = root
-    return root
-
-
-def _human_size(num_bytes: int) -> str:
-    """Compact human size for status / dialog text. KB/MB/GB to one
-    decimal — close enough for 'will this fit?' reasoning."""
-    n = float(num_bytes)
-    for unit in ("B", "KB", "MB", "GB"):
-        if n < 1024 or unit == "GB":
-            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} {unit}"
-        n /= 1024.0
-    return f"{n:.1f} GB"
+# ``_apply_env_for_models_root`` and ``_human_size`` live in the
+# storage mixin module now — re-imported here so legacy test fixtures
+# (e.g. ``import app.gui.controllers.app_controller as mod; mod.
+# _apply_env_for_models_root``) keep finding them.  See ``_storage_mixin.py``
+# for the actual implementations.
+from app.gui.controllers._history_mixin import HistoryMixin
+from app.gui.controllers._storage_mixin import (  # noqa: E402, F401
+    StorageMixin,
+    _apply_env_for_models_root,
+    _human_size,
+)
+from app.gui.controllers._transcribe_mixin import TranscribeMixin
+from app.gui.controllers._tray_mixin import TrayMixin
 
 
 class _ConfigLike(Protocol):
@@ -105,7 +98,13 @@ class _TrayLike(Protocol):
     def set_state(self, state: str) -> None: ...
 
 
-class AppController(QObject):
+class AppController(
+    HistoryMixin,
+    StorageMixin,
+    TranscribeMixin,
+    TrayMixin,
+    QObject,
+):
     # Worker threads emit these to push results back onto the main
     # Qt thread (auto-queued thanks to the cross-thread connection).
     _mic_test_completed = Signal(float, float)
@@ -399,14 +398,11 @@ class AppController(QObject):
         view.hf_token_reset_requested.connect(self._on_hf_token_reset)
         view.test_mic_requested.connect(self._on_test_mic_requested)
 
-        # Storage card — render the resolved path on first paint so
-        # the user sees where weights actually live, even when they
-        # haven't picked a custom path yet.
-        view.storage_path_change_requested.connect(self._on_storage_path_change)
-        view.storage_reset_requested.connect(self._on_storage_reset)
-        view.storage_open_requested.connect(self._on_storage_open)
-        self._refresh_storage_path()
-        self._refresh_storage_size()
+        # Storage card — connect signals + paint resolved path / size.
+        # The whole behaviour lives in ``StorageMixin``; calling
+        # ``_wire_storage`` is the single coupling point with this
+        # method.
+        self._wire_storage()
 
         # Hugging Face card — paint the persisted token + apply to
         # env (in case ``app.py``'s startup hook missed something).
@@ -414,219 +410,6 @@ class AppController(QObject):
         persisted_token = self._config.get_setting("huggingface", "token") or ""
         view.set_hf_token(persisted_token)
         _apply_hf_token_to_env(persisted_token)
-
-    def _refresh_storage_path(self) -> None:
-        """Push the resolved storage path into the Settings card. The
-        view shows ``(default)`` after the path when nothing's been
-        overridden — same source-of-truth (``get_models_root``) the
-        rest of the app uses at startup."""
-        configured = self._config.get_setting("storage", "models_dir")
-        is_default = not (configured and str(configured).strip())
-        resolved = get_models_root(configured)
-        self._window.shortcuts_view.set_storage_path(
-            resolved, is_default=is_default,
-        )
-
-    def _refresh_storage_size(self) -> None:
-        """Compute the on-disk size of the cache and push it into the
-        Settings card.
-
-        Walks ``<root>/hub`` recursively which can take 100-300 ms for
-        a multi-GB cache; runs in a ``QThreadPool`` worker so the UI
-        thread stays responsive.  The result lands back via a Qt
-        signal that this method connects to ``set_storage_size``.
-        """
-        view = self._window.shortcuts_view
-        view.set_storage_size("computing…")
-
-        configured = self._config.get_setting("storage", "models_dir")
-        resolved = get_models_root(configured)
-
-        from PySide6.QtCore import QRunnable, QThreadPool
-
-        signal = self._storage_size_ready
-
-        class _Worker(QRunnable):
-            def run(self_inner) -> None:  # noqa: N805 (Qt-style)
-                try:
-                    nbytes = cached_models_size(resolved)
-                except Exception:  # pragma: no cover — defensive
-                    nbytes = 0
-                try:
-                    signal.emit(_human_size(nbytes))
-                except RuntimeError:
-                    # The controller was destroyed before the worker
-                    # finished — common at app shutdown / test teardown.
-                    # Drop the result silently; the next AppController
-                    # will recompute on init.
-                    pass
-
-        QThreadPool.globalInstance().start(_Worker())
-
-    def _on_storage_size_ready(self, text: str) -> None:
-        self._window.shortcuts_view.set_storage_size(text)
-
-    def _on_storage_open(self) -> None:
-        """Open the resolved models directory in the OS file manager.
-
-        On Windows uses ``os.startfile`` which honours the user's
-        default explorer.  Creates the directory first if it doesn't
-        exist (might happen on a brand-new install before any model
-        has been downloaded) so the user doesn't get a 'path not
-        found' error popup.
-        """
-        configured = self._config.get_setting("storage", "models_dir")
-        resolved = get_models_root(configured)
-        try:
-            Path(resolved).mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            log.warning("Failed to create storage dir for open: %s", exc)
-        try:
-            os.startfile(resolved)  # type: ignore[attr-defined]
-        except Exception as exc:
-            log.warning("Failed to open storage dir %s: %s", resolved, exc)
-            QMessageBox.warning(
-                self._window,
-                "Open folder",
-                f"Could not open the folder:\n{resolved}\n\n{exc}",
-            )
-
-    def _on_storage_path_change(self) -> None:
-        """User clicked Change….
-
-        Flow:
-          1. Open the folder picker; bail on Cancel.
-          2. If the pick equals the current root → no-op.
-          3. Sum cached weights at the old root. If non-zero, ask
-             Yes/No/Cancel about migrating them. Cancel here aborts
-             the whole change so the user can re-pick without leaving
-             config in a half-applied state.
-          4. On Yes — block UI with a wait cursor and call
-             ``move_cached_dir`` for ``hub/`` and ``gigaam/`` in
-             sequence; the helper handles intra- vs cross-volume
-             internally and refuses to overwrite existing dirs.
-          5. Write the new path to config and pop a single info
-             dialog summarising what moved + the restart caveat
-             (env vars are baked at startup).
-        """
-        configured = self._config.get_setting("storage", "models_dir") or ""
-        old_root = get_models_root(configured)
-        start_dir = configured or str(Path(old_root).parent)
-        chosen = QFileDialog.getExistingDirectory(
-            self._window,
-            "Choose models folder",
-            start_dir,
-        )
-        if not chosen:
-            return  # Cancelled at the folder picker.
-
-        try:
-            same = Path(chosen).resolve() == Path(old_root).resolve()
-        except OSError:
-            same = chosen == old_root
-        if same:
-            return  # Picked the same folder — nothing to do.
-
-        old_size = cached_models_size(old_root)
-        move_outcomes: list[tuple[str, dict]] = []
-
-        if old_size > 0:
-            answer = QMessageBox.question(
-                self._window,
-                "Move existing weights?",
-                (
-                    f"You have {_human_size(old_size)} of cached models at:\n"
-                    f"{old_root}\n\n"
-                    f"Move them to the new location?\n{chosen}\n\n"
-                    "Yes — relocate now (intra-drive is instant; "
-                    "across drives can take several minutes for large "
-                    "caches).\n"
-                    "No  — leave them in place; new downloads go to "
-                    "the new folder.\n"
-                    "Cancel — go back without changing anything."
-                ),
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                QMessageBox.Cancel,
-            )
-            if answer == QMessageBox.Cancel:
-                return  # Bail without writing config.
-            if answer == QMessageBox.Yes:
-                QApplication.setOverrideCursor(Qt.WaitCursor)
-                try:
-                    # Single-engine app — only the HF hub subtree
-                    # exists.  The legacy ``gigaam`` subtree (used by
-                    # the old gigaam-Python backend) was retired with
-                    # the ONNX-only refactor.
-                    result = move_cached_dir(
-                        str(Path(old_root) / "hub"),
-                        str(Path(chosen) / "hub"),
-                    )
-                    move_outcomes.append(("hub", result))
-                finally:
-                    QApplication.restoreOverrideCursor()
-
-        self._config.update_user_setting("storage", "models_dir", chosen)
-        # Mirror into the live process env — both backends read these
-        # at every load, so the change takes effect on the very next
-        # ``Download`` click without a restart.
-        _apply_env_for_models_root(chosen)
-        self._refresh_storage_path()
-        self._refresh_storage_size()
-        # Refresh every model card's cache state so the Download ↔ Select
-        # button reflects the new directory immediately — without this the
-        # cards keep showing "Download" even when the chosen folder already
-        # contains the model weights.
-        self._window.models_view.refresh_cache_state()
-
-        # Build a user-friendly summary so they know what landed
-        # where and what didn't.
-        summary_lines = [f"Models folder set to:\n{chosen}\n"]
-        if move_outcomes:
-            for name, result in move_outcomes:
-                if result.get("moved"):
-                    summary_lines.append(
-                        f"  • {name}: moved {_human_size(int(result['bytes']))}"
-                    )
-                else:
-                    reason = result.get("reason", "no source")
-                    if "missing" in reason or "same" in reason:
-                        # Don't bother surfacing 'gigaam: source missing'
-                        # — that's the normal case for Whisper-only
-                        # users and would clutter the dialog.
-                        continue
-                    summary_lines.append(f"  • {name}: skipped ({reason})")
-            summary_lines.append("")
-        elif old_size > 0:
-            summary_lines.append(
-                f"Existing {_human_size(old_size)} of weights left at:\n"
-                f"{old_root}\n"
-            )
-        summary_lines.append(
-            "New downloads will land at the new location immediately."
-        )
-
-        QMessageBox.information(
-            self._window,
-            "Models folder updated",
-            "\n".join(summary_lines),
-        )
-
-    def _on_storage_reset(self) -> None:
-        """Reset Storage to default and mirror that into the live
-        env so subsequent loads/downloads use the default path."""
-        self._config.update_user_setting("storage", "models_dir", "")
-        resolved = _apply_env_for_models_root("")
-        self._refresh_storage_path()
-        self._refresh_storage_size()
-        self._window.models_view.refresh_cache_state()
-        QMessageBox.information(
-            self._window,
-            "Models folder reset",
-            (
-                f"Models folder set to default:\n{resolved}\n\n"
-                "New downloads will land there immediately."
-            ),
-        )
 
     def _on_hf_token_changed(self, token: str) -> None:
         """Persist the new token, mirror into env, and re-evaluate
@@ -862,131 +645,6 @@ class AppController(QObject):
         self._on_hf_token_changed("")
         self._window.shortcuts_view.set_hf_token("")
 
-    def _wire_history(self) -> None:
-        view = self._window.history_view
-        if self._history is not None:
-            view.set_entries(self._history.get_entries())
-            view.clear_requested.connect(self._on_history_clear)
-            view.export_requested.connect(self._on_history_export)
-        view.copy_requested.connect(self._on_history_copy)
-
-    def _on_history_clear(self) -> None:
-        if self._history is None:
-            return
-        # Wipes the on-disk history file too — confirm before doing
-        # anything irreversible.
-        entries = self._history.get_entries()
-        if not entries:
-            return
-        answer = QMessageBox.question(
-            self._window,
-            "Clear history?",
-            f"Delete all {len(entries)} transcriptions? This cannot be undone.",
-            QMessageBox.Yes | QMessageBox.Cancel,
-            QMessageBox.Cancel,
-        )
-        if answer != QMessageBox.Yes:
-            return
-        self._history.clear_history()
-        self._window.history_view.set_entries(self._history.get_entries())
-
-    def _on_history_export(self) -> None:
-        if self._history is None:
-            return
-        entries = self._history.get_entries()
-        if not entries:
-            QMessageBox.information(
-                self._window,
-                "Nothing to export",
-                "Your history is empty — record a transcription first.",
-            )
-            return
-        path, _selected_filter = QFileDialog.getSaveFileName(
-            self._window,
-            "Export history",
-            "transcription_history.txt",
-            "Text files (*.txt);;All files (*.*)",
-        )
-        if not path:
-            return
-        try:
-            ok = bool(self._history.export_to_text(path))
-        except Exception as exc:
-            log.warning("History export raised: %s", exc)
-            ok = False
-        if ok:
-            QMessageBox.information(
-                self._window,
-                "History exported",
-                f"Saved {len(entries)} transcriptions to:\n{path}",
-            )
-        else:
-            QMessageBox.warning(
-                self._window,
-                "Export failed",
-                "Could not write the history file. Check the destination "
-                "path and permissions.",
-            )
-
-    def _on_history_copy(self, text: str) -> None:
-        QApplication.clipboard().setText(text)
-
-    # ---- Transcribe-file view -----------------------------------------------
-
-    def _wire_transcribe(self) -> None:
-        """Hook the file-transcribe view into the recording controller.
-
-        File picks dispatch through ``RecordingController.transcribe_file_async``
-        which runs ``backend.transcribe_file`` on a worker and emits a
-        result signal.  The view stays responsive — busy state is shown
-        until the result lands.
-        """
-        view = self._window.transcribe_view
-        view.file_dropped.connect(self._on_transcribe_file_picked)
-
-    def _on_transcribe_file_picked(self, path: str) -> None:
-        view = self._window.transcribe_view
-        view.set_busy(path)
-        if self._recording is None:
-            view.set_error(
-                "Recording stack isn't initialised — try restarting the app."
-            )
-            return
-        target = getattr(self._recording, "transcribe_file_async", None)
-        if target is None:
-            view.set_error(
-                "This build doesn't support file transcription."
-            )
-            return
-        # Connect once, lazily — multiple connects from repeated picks
-        # are guarded by Qt.UniqueConnection.
-        try:
-            self._recording.file_transcribed.connect(
-                self._on_transcribe_done, Qt.UniqueConnection,
-            )
-        except (TypeError, RuntimeError):
-            pass
-        try:
-            self._recording.file_transcription_failed.connect(
-                self._on_transcribe_failed, Qt.UniqueConnection,
-            )
-        except (TypeError, RuntimeError):
-            pass
-        target(path)
-
-    def _on_transcribe_done(self, path: str, text: str) -> None:
-        view = self._window.transcribe_view
-        # Ignore stale results: if the user picked a second file the
-        # view's current_file() is the latter; only render the latest.
-        if view.current_file() != path:
-            return
-        view.set_result(text)
-
-    def _on_transcribe_failed(self, path: str, message: str) -> None:
-        view = self._window.transcribe_view
-        if view.current_file() != path:
-            return
-        view.set_error(message)
 
     def _wire_recording(self, recording: _RecordingLike) -> None:
         recording.state_changed.connect(self._window.topbar.set_recording_state)
@@ -1164,47 +822,3 @@ class AppController(QObject):
         except Exception:  # pragma: no cover — defensive
             pass
 
-    def _wire_tray(self, tray: _TrayLike) -> None:
-        self._window.set_close_to_tray(True)
-        tray.show_requested.connect(self._on_tray_show)
-        tray.quit_requested.connect(self._on_tray_quit)
-
-    def _on_tray_show(self) -> None:
-        self._window.show()
-        self._window.raise_()
-        self._window.activateWindow()
-
-    def _on_tray_quit(self) -> None:
-        # Close the main window (will accept thanks to request_quit's flag)
-        # and then explicitly tell the QApplication to leave its event loop.
-        # ``setQuitOnLastWindowClosed(False)`` is set when a tray is present,
-        # so the app would otherwise stay alive forever after the window
-        # disappears.
-        self._window.request_quit()
-        app = QApplication.instance()
-        if app is not None:
-            app.quit()
-
-    def _on_history_updated_signal(self) -> None:
-        if self._history is None:
-            return
-        entries = self._history.get_entries()
-        if not entries:
-            return
-        # Prepend the newest entry (index 0) without resetting the whole
-        # table model — beginInsertRows preserves scroll position and
-        # selection when the user is reading history while transcribing.
-        max_entries = getattr(self._history, "max_entries", 0)
-        self._window.history_view.prepend_entry(entries[0], max_entries)
-        # Pop a confirmation toast for the most recent entry — gives
-        # the user a visible "yes, the hotkey worked" moment that
-        # was missing from the silent clipboard-paste flow.
-        try:
-            latest_text = getattr(entries[0], "text", "") or ""
-        except Exception:  # pragma: no cover — defensive
-            latest_text = ""
-        if latest_text:
-            try:
-                self._window.toast.show_message(latest_text)
-            except Exception:  # pragma: no cover — defensive
-                pass
