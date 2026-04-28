@@ -40,6 +40,8 @@ Out-of-band messages (not in response to a command):
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from typing import TYPE_CHECKING
 
 # Late-bound at module level so tests can monkey-patch them with
@@ -71,9 +73,34 @@ def _worker_main(child_conn: "Connection") -> None:
 
     Returns when the parent closes the pipe (EOFError) or sends
     ``("shutdown_worker",)`` — both are normal exits.
+
+    Two threads write to ``child_conn``:
+    1. This main loop (command responses, log records, progress events)
+    2. A background ``status-broadcaster`` thread that pushes a
+       ``("status_change", new_status)`` message every time the
+       inner backend's status changes (``stopped`` → ``loading`` →
+       ``ready`` / ``error``).  Push-based status removes the need
+       for the parent to ``send("status")`` every 200 ms — a major
+       source of IPC contention while a model is loading.
+
+    Both writers go through ``_send_lock`` so multiprocessing
+    ``Connection.send`` doesn't get its bytes interleaved.
     """
     log = logging.getLogger("subprocess_worker")
     log.info("Worker process started")
+
+    # Serialise pipe writes between the main command loop and the
+    # status-broadcaster thread.  ``Connection.send`` is NOT
+    # thread-safe; concurrent sends would corrupt the framing and
+    # break pickle reads on the parent side.
+    send_lock = threading.Lock()
+
+    def safe_send(msg: tuple) -> None:
+        try:
+            with send_lock:
+                child_conn.send(msg)
+        except Exception:  # pragma: no cover — pipe broken
+            pass
 
     # Forward all logging records from this worker process back to the
     # parent over the pipe so users see them in the Logs view.  pythonw
@@ -82,17 +109,14 @@ def _worker_main(child_conn: "Connection") -> None:
     # disappears into the void.
     class _PipeLogHandler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
-            try:
-                # ``getMessage()`` formats with args; the parent only
-                # needs the rendered message + level + logger name.
-                child_conn.send((
-                    "log",
-                    record.levelno,
-                    record.name,
-                    record.getMessage(),
-                ))
-            except Exception:  # pragma: no cover — pipe broken
-                pass
+            # ``getMessage()`` formats with args; the parent only
+            # needs the rendered message + level + logger name.
+            safe_send((
+                "log",
+                record.levelno,
+                record.name,
+                record.getMessage(),
+            ))
 
     root = logging.getLogger()
     root.setLevel(logging.INFO)
@@ -107,14 +131,44 @@ def _worker_main(child_conn: "Connection") -> None:
     # the parent's reader thread will dispatch to the user's progress
     # callback.
     def _forward_progress(current: int, total: int, desc: str) -> None:
-        try:
-            child_conn.send(
-                ("progress", int(current), int(total), str(desc))
-            )
-        except Exception:  # pragma: no cover — pipe broken
-            pass
+        safe_send(("progress", int(current), int(total), str(desc)))
 
     _set_progress_callback(_forward_progress)
+
+    # ``backend`` is shared between the main command loop and the
+    # status-broadcaster thread; the GIL guarantees atomic
+    # reference-reads, but we still capture it via ``backend_holder``
+    # so the broadcaster sees the up-to-date value after ``init``.
+    backend_holder: list = [None]
+    stop_broadcaster = threading.Event()
+
+    def _status_broadcaster() -> None:
+        """Push status changes to the parent so it doesn't have to poll.
+
+        Polls the inner backend's ``status()`` every 100 ms, sends a
+        ``("status_change", new_status)`` message on transition only.
+        100 ms is invisible to the user (typical state transitions
+        last 1-10 s) but fast enough that the UI's loading pill
+        repaints almost immediately when the model goes ready.
+        """
+        last = None
+        while not stop_broadcaster.is_set():
+            b = backend_holder[0]
+            if b is not None:
+                try:
+                    cur = b.status()
+                except Exception:  # pragma: no cover — defensive
+                    cur = None
+                if cur is not None and cur != last:
+                    safe_send(("status_change", cur))
+                    last = cur
+            stop_broadcaster.wait(0.1)
+
+    threading.Thread(
+        target=_status_broadcaster,
+        name="status-broadcaster",
+        daemon=True,
+    ).start()
 
     backend = None
 
@@ -139,67 +193,74 @@ def _worker_main(child_conn: "Connection") -> None:
                         "RegistryBackend unavailable in worker process"
                     )
                 backend = _RegistryBackend(**kwargs)
-                child_conn.send(("ok", None))
+                # Make the new backend visible to the broadcaster
+                # thread so it can start pushing status changes.
+                backend_holder[0] = backend
+                safe_send(("ok", None))
                 continue
 
             if op == "shutdown_worker":
+                # Stop the status broadcaster before we tear down the
+                # inner backend so it doesn't read a half-shutdown
+                # state and push spurious "stopped" messages.
+                stop_broadcaster.set()
                 # Tear down the inner backend cleanly, then exit the loop.
                 if backend is not None:
                     try:
                         backend.shutdown()
                     except Exception as exc:  # pragma: no cover
                         log.warning("Inner shutdown raised: %s", exc)
-                child_conn.send(("ok", None))
+                safe_send(("ok", None))
                 log.info("Shutdown requested — exiting")
                 break
 
             if backend is None:
-                child_conn.send(
+                safe_send(
                     ("error", "Backend not initialised — send 'init' first")
                 )
                 continue
 
             if op == "status":
-                child_conn.send(("ok", backend.status()))
+                safe_send(("ok", backend.status()))
             elif op == "health_check":
-                child_conn.send(("ok", backend.health_check()))
+                safe_send(("ok", backend.health_check()))
             elif op == "current_model":
-                child_conn.send(("ok", backend.current_model()))
+                safe_send(("ok", backend.current_model()))
             elif op == "current_language":
-                child_conn.send(("ok", backend.current_language()))
+                safe_send(("ok", backend.current_language()))
             elif op == "load":
                 backend.load()
-                child_conn.send(("ok", None))
+                safe_send(("ok", None))
             elif op == "transcribe":
                 audio, sample_rate = args
-                child_conn.send(
+                safe_send(
                     ("ok", backend.transcribe(audio, sample_rate=sample_rate))
                 )
             elif op == "transcribe_file":
                 path = args[0]
-                child_conn.send(("ok", backend.transcribe_file(path)))
+                safe_send(("ok", backend.transcribe_file(path)))
             elif op == "change_model":
                 model, compute_type = args
                 backend.change_model(model, compute_type=compute_type)
-                child_conn.send(("ok", None))
+                safe_send(("ok", None))
             elif op == "cancel_load":
                 backend.cancel_load()
-                child_conn.send(("ok", None))
+                safe_send(("ok", None))
             elif op == "update_inference_settings":
                 settings = args[0]
                 backend.update_inference_settings(settings)
-                child_conn.send(("ok", None))
+                safe_send(("ok", None))
             elif op == "shutdown":
                 # Non-terminal shutdown: stop the inner backend but keep
                 # the worker alive (legacy compatibility — main process
                 # always uses ``shutdown_worker`` to actually terminate).
                 backend.shutdown()
-                child_conn.send(("ok", None))
+                safe_send(("ok", None))
             else:
-                child_conn.send(("error", f"Unknown command: {op!r}"))
+                safe_send(("error", f"Unknown command: {op!r}"))
         except Exception as exc:
             log.exception("Worker command %r failed", op)
-            child_conn.send(
+            safe_send(
                 ("error", f"{type(exc).__name__}: {exc}")
             )
 

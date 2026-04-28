@@ -71,7 +71,7 @@ def _drive_worker(commands, *, init_kwargs=None):
 def _recv_response(conn, timeout):
     """Read one command response from ``conn``, skipping out-of-band
     messages (``progress`` from tqdm, ``log`` from the worker's log
-    forwarder)."""
+    forwarder, ``status_change`` from the status broadcaster)."""
     deadline = time.monotonic() + timeout
     while True:
         remaining = max(0.01, deadline - time.monotonic())
@@ -80,7 +80,7 @@ def _recv_response(conn, timeout):
                 f"no response within {timeout}s"
             )
         msg = conn.recv()
-        if msg and msg[0] in ("progress", "log"):
+        if msg and msg[0] in ("progress", "log", "status_change"):
             continue
         return msg
 
@@ -400,20 +400,68 @@ def test_subprocess_backend_init_sends_init(patched_subprocess):
     assert kwargs["device"] == "auto"
 
 
-def test_subprocess_backend_status_forwards(patched_subprocess):
-    """status() sends ("status",) and returns the worker's response."""
-    import app.backends.subprocess_backend as mod
+def test_subprocess_backend_status_served_from_cache(patched_subprocess):
+    """``status()`` no longer round-trips through the pipe — it reads
+    a local cache populated by ``status_change`` push messages from
+    the worker.  RecordingController polls status() every 200 ms; an
+    IPC round-trip per poll contended with the worker's tqdm + log
+    forwarding stream and stuttered the UI during a model load.
+
+    Verifies:
+    1. Initial status is ``"stopped"`` even before the worker sends
+       anything (sane default — UI shows the right pill on boot).
+    2. After a ``("status_change", "loading")`` arrives on the pipe,
+       the next ``status()`` returns ``"loading"`` without any new
+       command being sent.
+    """
+    from app.backends.subprocess_backend import SubprocessBackend
+
+    backend = SubprocessBackend(model="x")
+    conn = patched_subprocess["conn_holder"]["conn"]
+    sent_before = list(patched_subprocess["sent"])
+
+    # Default cache before any push.
+    assert backend.status() == "stopped"
+
+    # Worker pushes a status change.
+    conn.push(("status_change", "loading"))
+
+    # Reader thread is async — give it a moment.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if backend.status() == "loading":
+            break
+        time.sleep(0.01)
+
+    assert backend.status() == "loading"
+    # No new pipe send for the status() call itself — only the
+    # init that fired in __init__.
+    assert patched_subprocess["sent"] == sent_before
+
+    backend.shutdown()
+
+
+def test_subprocess_backend_health_check_served_from_cache(patched_subprocess):
+    """``health_check()`` is just ``status() == "ready"`` and shares
+    the same cache fast-path.  No IPC."""
     from app.backends.subprocess_backend import SubprocessBackend
 
     backend = SubprocessBackend(model="x")
     conn = patched_subprocess["conn_holder"]["conn"]
 
-    # Pre-queue the response for the next send.
-    conn.push(("ok", "ready"))
-    result = backend.status()
+    # No "ready" yet — health_check should be False.
+    assert backend.health_check() is False
 
-    assert result == "ready"
-    assert ("status",) in patched_subprocess["sent"]
+    conn.push(("status_change", "ready"))
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if backend.health_check():
+            break
+        time.sleep(0.01)
+
+    assert backend.health_check() is True
+    backend.shutdown()
 
 
 def test_subprocess_backend_progress_routes_to_callback(patched_subprocess):
@@ -443,7 +491,12 @@ def test_subprocess_backend_progress_routes_to_callback(patched_subprocess):
 def test_subprocess_backend_error_response_raises(patched_subprocess):
     """An ``("error", "msg")`` from worker must surface as a
     RuntimeError on the calling thread — otherwise the parent is
-    silently broken."""
+    silently broken.
+
+    Uses ``current_model()`` rather than ``status()`` because
+    ``status()`` is now served from the local cache (no IPC) and
+    can't surface a worker-side error.
+    """
     from app.backends.subprocess_backend import SubprocessBackend
 
     backend = SubprocessBackend(model="x")
@@ -451,7 +504,7 @@ def test_subprocess_backend_error_response_raises(patched_subprocess):
 
     conn.push(("error", "RuntimeError: boom"))
     with pytest.raises(RuntimeError, match="boom"):
-        backend.status()
+        backend.current_model()
 
 
 def test_subprocess_backend_change_model_sync(patched_subprocess):

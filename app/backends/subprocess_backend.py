@@ -106,6 +106,15 @@ class SubprocessBackend:
         ] = None
         self._shutdown = False
 
+        # Status cache populated by ``status_change`` push messages
+        # from the worker.  Removes the need for the parent to
+        # ``_send_cmd(("status",))`` every 200 ms (RecordingController
+        # poll) — that IPC round-trip would contend with the worker's
+        # tqdm-progress + log forwarding stream and stutter the UI
+        # during model loads.
+        self._status_cache: str = "stopped"
+        self._status_cache_lock = threading.Lock()
+
         # Async init: don't block the caller waiting for the worker
         # to come up.  ``__init__`` returns immediately; the reader
         # thread captures the init ack into ``_init_event`` and any
@@ -168,6 +177,17 @@ class SubprocessBackend:
                         cb(int(msg[1]), int(msg[2]), str(msg[3]))
                     except Exception as exc:  # pragma: no cover
                         log.warning("progress callback raised: %s", exc)
+            elif msg[0] == "status_change":
+                # Worker pushes this on every transition of its inner
+                # backend.status() so the parent can answer
+                # ``backend.status()`` from cache instead of doing an
+                # IPC round-trip.
+                try:
+                    new_status = str(msg[1])
+                except Exception:  # pragma: no cover — defensive
+                    continue
+                with self._status_cache_lock:
+                    self._status_cache = new_status
             elif msg[0] == "log":
                 # Re-emit worker log records through the parent's
                 # logging system so they land in app.log + Logs view.
@@ -228,10 +248,17 @@ class SubprocessBackend:
     # ------------------------------------------------------------------ TranscriptionBackend Protocol
 
     def status(self) -> str:
-        return self._send_cmd(("status",), timeout=_FAST_TIMEOUT)
+        # Served from the local cache populated by ``status_change``
+        # push messages from the worker.  No IPC — RecordingController
+        # polls this every 200 ms; an IPC round-trip per poll would
+        # serialise against the worker's tqdm + log forwarding and
+        # stutter the UI during a model load.
+        with self._status_cache_lock:
+            return self._status_cache
 
     def health_check(self) -> bool:
-        return self._send_cmd(("health_check",), timeout=_FAST_TIMEOUT)
+        # Same fast-path as ``status()`` — no IPC.
+        return self.status() == "ready"
 
     def current_model(self) -> str:
         return self._send_cmd(("current_model",), timeout=_FAST_TIMEOUT)
