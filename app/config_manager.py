@@ -1,7 +1,9 @@
+import copy
 import logging
 import os
 import shutil
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Dict
 
@@ -90,6 +92,12 @@ class ConfigManager:
         self.base_dir = self._resolve_base_dir()
         self.config_path = self.base_dir / config_filename
         self.config: Dict[str, Any] = {}
+        # Serialises concurrent ``_write_config_file`` calls — the
+        # async writer thread we spawn from ``update_user_setting``
+        # would otherwise race itself when the user clicks Select on
+        # a model card (two writes, model + compute_type, fired ~5 ms
+        # apart on the Qt main thread).
+        self._write_lock = threading.Lock()
         self._load_or_create()
         self.logger.info(f"Configuration loaded: {self.config_path}")
 
@@ -222,7 +230,46 @@ class ConfigManager:
                 result[extra_k] = extra_v
         return result
 
-    def _write_config_file(self):
+    def flush_pending_writes(self, timeout: float = 5.0) -> bool:
+        """Block until any in-flight async writer thread has finished.
+
+        Daemon threads spawned by ``update_user_setting`` write the
+        YAML file at their own pace.  Production code rarely needs
+        this — the in-memory ``self.config`` already reflects the
+        change before the disk catches up — but tests that read the
+        file back immediately after a write call this to drain the
+        queue.  Returns True iff the writer completed within
+        ``timeout``; False on timeout (the caller can decide whether
+        to error out or just retry).
+        """
+        if self._write_lock.acquire(timeout=timeout):
+            self._write_lock.release()
+            return True
+        return False
+
+    def _write_config_file_locked(self):
+        """Run on the writer daemon thread — serialised by ``_write_lock``.
+
+        Takes a snapshot of ``self.config`` *under* the lock to defend
+        against the Qt main thread mutating the dict mid-serialisation
+        when several ``update_user_setting`` calls fire in quick
+        succession (Select-button click writes both ``whisper.model``
+        and ``whisper.compute_type`` ~5 ms apart).
+        """
+        with self._write_lock:
+            snapshot = copy.deepcopy(self.config)
+            self._write_config_file(snapshot)
+
+    def _write_config_file(self, payload: Dict[str, Any] | None = None):
+        """Synchronous YAML write + atomic rename.
+
+        ``payload`` defaults to ``self.config`` for the legacy code path
+        (``_load_or_create`` after seeding defaults).  When called from
+        the writer thread, the caller passes a deep-copied snapshot so
+        the dict can't change under our feet during ``yaml.safe_dump``.
+        """
+        if payload is None:
+            payload = self.config
         # Write to a .tmp sibling first, then rename atomically so a crash
         # mid-write never leaves a half-written (corrupted) config file.
         tmp = self.config_path.with_name(self.config_path.name + ".tmp")
@@ -230,7 +277,7 @@ class ConfigManager:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(tmp, "w", encoding="utf-8") as f:
                 yaml.safe_dump(
-                    self.config, f,
+                    payload, f,
                     allow_unicode=True,
                     default_flow_style=False,
                     sort_keys=False,
@@ -256,7 +303,20 @@ class ConfigManager:
         if old == value:
             return
         self.config[section][key] = value
-        self._write_config_file()
+        # YAML serialise + atomic os.replace can take 100-500 ms when
+        # the file is on a slow disk or under antivirus inspection.
+        # Calling this from the Qt main thread (model-card Select
+        # click triggers two writes back-to-back) freezes the UI
+        # noticeably — wheel-scroll events back up while the main
+        # thread is blocked on libc writes.  Spawn a daemon writer
+        # so the caller returns immediately; the lock inside
+        # ``_write_config_file_locked`` keeps concurrent writers
+        # from racing.
+        threading.Thread(
+            target=self._write_config_file_locked,
+            daemon=True,
+            name="config-write",
+        ).start()
         self.logger.info(f"Updated setting {section}.{key}: {old} -> {value}")
 
     # For backward compatibility with existing code expecting dict copies

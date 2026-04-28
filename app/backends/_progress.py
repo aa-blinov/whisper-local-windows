@@ -34,11 +34,13 @@ _progress_callback: Optional[Callable[[int, int, str], None]] = None
 # for every chunk it pulls off the socket — easily 200+ times per
 # second for a multi-GB file.  Each of those becomes a Qt signal
 # emitted into the main thread's event queue, and at that rate the
-# main thread can't drain the queue fast enough — the message pump
-# starves and Windows marks the window "(Not responding)".  100 ms
-# (10 Hz) is plenty for a smooth-looking progress bar and three
-# orders of magnitude below tqdm's natural rate.
-_FIRE_THROTTLE_S: float = 0.1
+# main thread can't drain the queue fast enough — the smooth-scroll
+# QTimer (running at 144 Hz to match the display) gets starved out,
+# the wheel events queue up, and the user feels the scroll "stick"
+# while a download is in flight.  200 ms (5 Hz) is still smooth
+# visually for a percentage display and leaves three full smooth-
+# scroll frames between every signal emit.
+_FIRE_THROTTLE_S: float = 0.2
 
 
 def set_progress_callback(
