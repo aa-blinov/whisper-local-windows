@@ -495,7 +495,10 @@ class ModelCard(QFrame):
         if not self._loading:
             return
         self._loading_elapsed_s = max(0, int(seconds))
-        self._refresh_loading_pill()
+        # Deliberately no ``_refresh_loading_pill()`` — the pill text
+        # only ever changes on real download progress, not on elapsed
+        # ticks.  The elapsed counter lives on the topbar pill so the
+        # same number doesn't appear in two places at once.
 
     def _refresh_loading_pill(self) -> None:
         """Recompute the loading pill text from progress + elapsed inputs.
@@ -506,7 +509,7 @@ class ModelCard(QFrame):
             return
         if self._loading_progress_text:
             self._active_pill.setText(self._loading_progress_text)
-        elif self._loading_elapsed_s > 0:
-            self._active_pill.setText(f"Loading {self._loading_elapsed_s}s")
         else:
+            # No elapsed-seconds branch on the card \u2014 topbar pill
+            # owns that display.
             self._active_pill.setText("Loading\u2026")

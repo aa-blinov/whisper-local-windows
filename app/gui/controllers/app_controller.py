@@ -811,14 +811,14 @@ class AppController(
 
     def _on_loading_tick(self) -> None:
         self._loading_elapsed_s += 1
+        # Topbar pill owns the elapsed-seconds display.  We deliberately
+        # don't push the same number into the models view — duplicating
+        # "Loading 5s" on the active card alongside "Loading: <name> 5s"
+        # in the topbar was redundant noise.  ``ModelCard.set_loading_elapsed``
+        # still records the value for any future card-level use, but
+        # doesn't render it.
         try:
             self._window.topbar.set_loading_elapsed(self._loading_elapsed_s)
-        except Exception:  # pragma: no cover — defensive
-            pass
-        try:
-            self._window.models_view.set_loading_elapsed(
-                self._loading_elapsed_s
-            )
         except Exception:  # pragma: no cover — defensive
             pass
 

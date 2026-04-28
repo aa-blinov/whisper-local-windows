@@ -498,7 +498,7 @@ def test_model_card_loading_progress_updates_pill_text(qtbot):
     assert "35%" in card._active_pill.text()
 
 
-def test_model_card_loading_elapsed_shows_seconds_when_no_progress(qtbot):
+def test_model_card_set_loading_elapsed_does_not_change_pill_text(qtbot):
     """Cached model loads (CTranslate2 deserialisation) take ~15 seconds
     without ever firing a tqdm progress event. Without an elapsed
     counter the pill just sits at 'Loading…' and looks frozen — show
@@ -510,12 +510,17 @@ def test_model_card_loading_elapsed_shows_seconds_when_no_progress(qtbot):
     card.set_active(True)
     card.set_loading(True)
 
+    initial = card._active_pill.text()
+
     card.set_loading_elapsed(5)
-    text = card._active_pill.text()
-    assert "5" in text and ("s" in text.lower() or "сек" in text.lower())
+    # Pill text doesn't change on elapsed ticks — topbar pill owns
+    # the seconds display so the same number doesn't appear twice.
+    assert card._active_pill.text() == initial
+    assert card._loading_elapsed_s == 5
 
     card.set_loading_elapsed(12)
-    assert "12" in card._active_pill.text()
+    assert card._active_pill.text() == initial
+    assert card._loading_elapsed_s == 12
 
 
 def test_model_card_loading_progress_takes_priority_over_elapsed(qtbot):
