@@ -581,8 +581,6 @@ def main() -> int:
     # warmup session takes <2 s on this dev box.
     _onnx_preload_t.join(timeout=15)
 
-    _autoload_persisted_model(backend)
-
     history = state_manager.history_manager if state_manager is not None else None
 
     # qt_app already exists from the single-instance gate above.
@@ -619,6 +617,21 @@ def main() -> int:
     ico_path = resolve_asset_path("assets/tray_idle.ico")
     if ico_path and os.path.isfile(ico_path):
         _force_window_icon(int(window.winId()), ico_path)
+
+    # Defer the persisted-model autoload until the Qt event loop has
+    # ticked at least once — otherwise the loader-thread starts firing
+    # tqdm-driven download_progress signals into the main thread queue
+    # before Qt has had a chance to acknowledge to Windows that the
+    # message pump is alive, and the title bar gets stamped with
+    # "(Not responding)" even though the worker is doing the actual work.
+    # Using singleShot(0, …) schedules the call onto the next event
+    # loop iteration, after Qt has processed WM_PAINT / WM_NCCALCSIZE
+    # / WM_SHOWWINDOW from window.show().  The user perceives no delay
+    # — the loading pill appears within ~50 ms — but Windows now sees
+    # a responsive process before the heavy load starts.
+    from PySide6.QtCore import QTimer
+
+    QTimer.singleShot(0, lambda: _autoload_persisted_model(backend))
 
     try:
         return app.exec()
