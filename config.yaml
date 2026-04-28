@@ -1,8 +1,8 @@
 whisper:
-  model: parakeet-tdt-v3-onnx
+  model: t-one
   language: ru
   beam_size: 20
-  compute_type: float32
+  compute_type: float16
 hotkey:
   start_recording_hotkey: ctrl+f2
   stop_recording_hotkey: ctrl+f3

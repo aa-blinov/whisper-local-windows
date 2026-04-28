@@ -184,7 +184,6 @@ class ConfigManager:
                     with open(path, "r", encoding="utf-8") as f:
                         data = yaml.safe_load(f) or {}
                     self.config = self._fill_defaults(data, DEFAULT_CONFIG)
-                    self._migrate_legacy_whisper_section()
                     return
                 except Exception as exc:
                     self.logger.warning(
@@ -199,7 +198,6 @@ class ConfigManager:
             with open(path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
             self.config = self._fill_defaults(data, DEFAULT_CONFIG)
-            self._migrate_legacy_whisper_section()
         except Exception as e:
             self.logger.error(f"Failed to load config.yaml: {e}. Recreating defaults.")
             self.config = DEFAULT_CONFIG.copy()
@@ -246,51 +244,6 @@ class ConfigManager:
             except OSError:
                 pass
 
-    # --- Migration from legacy schema (model_size / whisper_model / whisper_url) ---
-    def _migrate_legacy_whisper_section(self, write_if_changed: bool = False):
-        """Strip / map fields that existed in the pre-in-process
-        Docker / Wyoming era of this app:
-
-          - ``model_size`` / ``whisper_model``  → ``model`` (current
-            schema), via the registry's canonical mapping.
-          - ``whisper_url`` / ``backend_mode`` / ``local_url`` /
-            ``external_url`` → dropped. We always run the inference
-            backend in-process now, so URLs and the local/external
-            switch have no consumers.
-        """
-        wh = self.config.get("whisper", {})
-        if not isinstance(wh, dict):  # sanity
-            return
-        legacy_model_size = wh.pop("model_size", None)
-        legacy_model = wh.pop("whisper_model", None)
-        # Older configs carried these — drop them silently. They're
-        # not read anywhere anymore.
-        wh.pop("whisper_url", None)
-        wh.pop("backend_mode", None)
-        wh.pop("local_url", None)
-        wh.pop("external_url", None)
-        changed = False
-        # Determine canonical model
-        if legacy_model_size or legacy_model:
-            from app.model_mapping import canonical_for
-            # priority: explicit whisper_model if non-empty else map model_size
-            candidate = legacy_model if legacy_model else legacy_model_size
-            if isinstance(candidate, str) and candidate:
-                wh["model"] = canonical_for(candidate)
-                changed = True
-        if "model" not in wh:
-            wh["model"] = DEFAULT_CONFIG["whisper"]["model"]
-            changed = True
-        # Ensure required keys exist
-        for k in ("beam_size", "language"):
-            if k not in wh:
-                wh[k] = DEFAULT_CONFIG["whisper"][k]
-                changed = True
-        if changed:
-            self.config["whisper"] = wh
-            self.logger.info("Migrated legacy whisper config -> new schema")
-            if write_if_changed:
-                self._write_config_file()
 
     # --- Public accessors (return live copies) ---
     def get_setting(self, section: str, key: str):

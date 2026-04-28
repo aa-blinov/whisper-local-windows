@@ -873,13 +873,13 @@ def test_parakeet_card_uses_nemo_inference_panel(qtbot):
     """Parakeet cards get the minimal panel — onnx-asr only exposes
     the ``timestamps`` toggle for the TDT family."""
     from app.gui.widgets.model_card import ModelCard
-    from app.gui.widgets.nemo_inference_settings_panel import (
-        NemoInferenceSettingsPanel,
+    from app.gui.widgets.parakeet_inference_settings_panel import (
+        ParakeetInferenceSettingsPanel,
     )
 
     card = ModelCard(_make_parakeet_info())
     qtbot.addWidget(card)
-    assert isinstance(card._settings_panel, NemoInferenceSettingsPanel)
+    assert isinstance(card._settings_panel, ParakeetInferenceSettingsPanel)
 
 
 def test_gigaam_card_has_no_inference_panel(qtbot):
@@ -898,17 +898,17 @@ def test_parakeet_card_panel_emits_through_card_signal(qtbot):
     own ``inference_settings_changed`` so the controller listens at
     a single point regardless of backend family."""
     from app.gui.widgets.model_card import ModelCard
-    from app.inference_settings import NemoInferenceSettings
+    from app.inference_settings import ParakeetInferenceSettings
 
     card = ModelCard(_make_parakeet_info())
     qtbot.addWidget(card)
 
     with qtbot.waitSignal(card.inference_settings_changed, timeout=1000) as blocker:
         card._settings_panel.settings_changed.emit(
-            NemoInferenceSettings(timestamps=True)
+            ParakeetInferenceSettings(timestamps=True)
         )
 
     alias, settings = blocker.args
     assert alias == "parakeet-tdt-v3"
-    assert isinstance(settings, NemoInferenceSettings)
+    assert isinstance(settings, ParakeetInferenceSettings)
     assert settings.timestamps is True

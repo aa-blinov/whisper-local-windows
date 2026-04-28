@@ -222,6 +222,8 @@ you only want to reset the storage path.
 
 ## Architecture
 
+### Layer overview
+
 ```
                                  ┌─────────────────────────────┐
                                  │  Qt UI (app/gui)            │
@@ -245,9 +247,9 @@ you only want to reset the storage path.
                           └──────────────────┘            │
                                                           ▼
                                           ┌────────────────────────────┐
-                                          │ RoutedBackend  (facade)    │
-                                          │ resolves alias → canonical │
-                                          │ + onnx_load_id; rebuilds   │
+                                          │ RegistryBackend  (façade)  │
+                                          │ alias → canonical / family │
+                                          │ / onnx_load_id; rebuilds   │
                                           │ inner on family change.    │
                                           └────────────┬───────────────┘
                                                        │
@@ -267,22 +269,81 @@ you only want to reset the storage path.
                                           └────────────────────────────┘
 ```
 
-The Qt layer (`app/gui/`) holds every UI concern. The domain layer
-(`app/state_manager.py`, `app/audio_recorder.py`,
-`app/clipboard_manager.py`) is what `RecordingController` wires Qt
-signals into. The speech-to-text engine sits behind the
-`TranscriptionBackend` Protocol in `app/backends/`. `RoutedBackend` is a
-thin family-aware façade that always builds an `OnnxAsrBackend` —
-left in place so future cloud / on-device alternatives could plug in
-behind the same interface. `ResourceMonitor` polls CPU / RAM / GPU on a
-Qt timer to drive the topbar widget. There's no splash screen — ONNX
-loads in 3–5 s with no GIL-blocking cold import, so the main window
-appears immediately and the model becomes ready in the background.
+### Module layout
+
+```
+app/
+├── gui/                                   ← Qt UI (everything user-facing)
+│   ├── app.py                                application entry point + main()
+│   ├── main_window.py                       sidebar + stacked views shell
+│   ├── recording_factory.py                 builds the StateManager + backend stack
+│   ├── refresh_rate.py                      display-aware tick interval helper
+│   ├── smooth_scroll.py                     cosine-eased wheel animation
+│   ├── theme.py / log_bridge.py             design tokens + logging→Qt bridge
+│   ├── controllers/
+│   │   ├── app_controller.py                  AppController orchestrator (815 LOC)
+│   │   │                                      ├ Models tab wiring
+│   │   │                                      ├ Shortcuts/Settings + mic test
+│   │   │                                      └ Recording state + cancel-load
+│   │   ├── _history_mixin.py                  HistoryMixin (clear / export / toast)
+│   │   ├── _storage_mixin.py                  StorageMixin (path / size / Open folder)
+│   │   ├── _transcribe_mixin.py               TranscribeMixin (file dispatch)
+│   │   ├── _tray_mixin.py                     TrayMixin (show / quit)
+│   │   └── recording_controller.py            QObject wrapper over StateManager
+│   ├── views/                              one widget per sidebar tab
+│   │   ├── models_view.py / history_view.py / logs_view.py
+│   │   ├── shortcuts_view.py / transcribe_view.py / placeholder.py
+│   ├── widgets/                            building blocks
+│   │   ├── model_card.py / sidebar.py / topbar.py / toast.py
+│   │   ├── inference_settings_panel.py        Whisper-style 5-knob panel
+│   │   ├── parakeet_inference_settings_panel.py  Parakeet timestamps toggle
+│   │   ├── recording_status_widget.py / vu_meter.py / resource_widget.py
+│   │   ├── tray_icon.py / flow_layout.py
+│   │   └── styles/                            dark.qss + Heroicon SVGs
+│   └── styles/dark.qss                     stylesheet (color tokens templated in)
+├── backends/                              ← ASR inference (single engine)
+│   ├── base.py                              TranscriptionBackend Protocol
+│   ├── onnx_backend.py                      OnnxAsrBackend (the actual inference)
+│   ├── registry_backend.py                  RegistryBackend (alias resolution façade)
+│   └── _progress.py                         tqdm hook for HF download progress
+├── state_manager.py                       ← domain: recording / processing FSM
+├── audio_recorder.py                      ← domain: sounddevice capture
+├── audio_feedback.py                      ← domain: start/stop sounds
+├── clipboard_manager.py                   ← domain: paste delivery
+├── config_manager.py                      ← domain: yaml read/write
+├── history_manager.py                     ← domain: transcription history JSON
+├── hotkey_listener.py                     ← domain: global-hotkeys binding
+├── instance_manager.py                    ← domain: single-instance mutex
+├── model_mapping.py                       ← domain: registry of supported models
+├── inference_settings.py                  ← domain: per-model settings dataclasses
+├── resource_monitor.py                    ← domain: CPU/RAM/GPU sampler
+└── utils.py                               ← domain: cache/path helpers
+```
+
+### Layering rules
+
+- **`app/gui/`** is the only layer allowed to import Qt.  Everything
+  else (`backends/`, the domain modules at `app/`'s root) is plain
+  Python with no UI dependencies — they're easy to test in isolation
+  and swap engines without touching the UI.
+- **`app/backends/`** depends on `app.utils` and `app.inference_settings`
+  but knows nothing about Qt.  Cross-engine swaps go through
+  `RegistryBackend` which resolves the alias from `model_mapping`.
+- **Domain modules** at `app/`'s root depend on each other via
+  Protocols (`TranscriptionBackend`, etc.) — no circular imports, the
+  dependency graph fans inward toward `utils`.
+- **`AppController`** is mixin-composed: each side-feature (Storage,
+  Transcribe, Tray, History) lives in its own `_*_mixin.py` so the
+  orchestrator file stays focused on the model-load + recording loop.
 
 For file transcription, `OnnxAsrBackend.transcribe_file(path)` decodes
 the file via `soundfile` first; on failure it falls back to a bundled
 static `ffmpeg` from `imageio-ffmpeg` (raw PCM through stdout pipe — no
 temp files, the user's source file is never modified or copied).
+
+There's no splash screen — ONNX loads in 3–5 s with no GIL-blocking
+cold import, so the main window appears immediately and the model
+becomes ready in the background.
 
 ## Building a standalone executable
 

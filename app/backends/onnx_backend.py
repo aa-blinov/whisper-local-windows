@@ -39,7 +39,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from app.backends._progress import install_tqdm_progress, set_progress_callback
-from app.inference_settings import NemoInferenceSettings
+from app.inference_settings import ParakeetInferenceSettings
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ class OnnxAsrBackend:
         # blocked on a network read or ONNX init), but its result is
         # discarded at the publish step.  Reset on each fresh ``load()``.
         self._cancel_requested = False
-        self._inference_settings = NemoInferenceSettings()
+        self._inference_settings = ParakeetInferenceSettings()
 
     # ---- public API ---------------------------------------------------------
 
@@ -201,7 +201,7 @@ class OnnxAsrBackend:
             self._status = "stopped"
         self.load()
 
-    def update_inference_settings(self, settings: NemoInferenceSettings) -> None:
+    def update_inference_settings(self, settings: ParakeetInferenceSettings) -> None:
         """Apply a new settings bundle.  Effect is per-call: the next
         ``transcribe`` reads ``self._inference_settings``.  No reload."""
         with self._lock:
@@ -626,10 +626,3 @@ def _is_cuda_provider_error(exc: BaseException) -> bool:
     msg = str(exc).lower()
     keywords = ("cuda", "cudaexecutionprovider", "provider", "tensorrt")
     return any(k in msg for k in keywords)
-
-
-# ---- backwards-compat alias ------------------------------------------------
-# A short period after the rename, ``OnnxParakeetBackend`` still gets
-# imported from older revisions of model-mapping / tests.  Keeping the
-# alias avoids a breaking rename.
-OnnxParakeetBackend = OnnxAsrBackend

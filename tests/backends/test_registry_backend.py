@@ -1,6 +1,6 @@
-"""Tests for the RoutedBackend façade.
+"""Tests for the RegistryBackend façade.
 
-Now that the app is ONNX-only, RoutedBackend just builds an
+Now that the app is ONNX-only, RegistryBackend just builds an
 ``OnnxAsrBackend`` and forwards every method to it — but it still
 encapsulates registry lookups so callers don't have to.
 
@@ -77,7 +77,7 @@ class _FakeBackend:
 @pytest.fixture
 def patch_builder(monkeypatch):
     """Replace the inner-backend builder with a recording fake."""
-    from app.backends import routed_backend as mod
+    from app.backends import registry_backend as mod
 
     created: list[_FakeBackend] = []
 
@@ -94,7 +94,7 @@ def patch_builder(monkeypatch):
 def patch_registry(monkeypatch):
     """Replace ``get_model`` with a tiny fake registry covering every
     onnx_family."""
-    from app.backends import routed_backend as mod
+    from app.backends import registry_backend as mod
     from app.model_mapping import ModelInfo
 
     registry = {
@@ -157,19 +157,20 @@ def patch_registry(monkeypatch):
 # ---- Initial backend selection --------------------------------------------
 
 
-def test_initial_kind_is_onnx_asr(patch_builder, patch_registry):
-    """Single-engine app — current_kind() always reports ``onnx_asr``."""
-    from app.backends.routed_backend import RoutedBackend
+def test_initial_constructs_one_inner_backend(patch_builder, patch_registry):
+    """``RegistryBackend.__init__`` resolves the alias and builds
+    exactly one ``OnnxAsrBackend`` — no eager rebuilds, no double
+    instantiation from a stray ``change_model`` call inside __init__."""
+    from app.backends.registry_backend import RegistryBackend
 
-    backend = RoutedBackend(model="whisper-model")
-    assert backend.current_kind() == "onnx_asr"
+    RegistryBackend(model="whisper-model")
     assert len(patch_builder) == 1
 
 
 def test_initial_uses_canonical_from_registry(patch_builder, patch_registry):
-    from app.backends.routed_backend import RoutedBackend
+    from app.backends.registry_backend import RegistryBackend
 
-    backend = RoutedBackend(model="parakeet-model")
+    backend = RegistryBackend(model="parakeet-model")
     assert backend.current_model() == "istupakov/parakeet-tdt-0.6b-v3-onnx"
     assert patch_builder[0].kwargs.get("onnx_family") == "parakeet"
 
@@ -177,9 +178,9 @@ def test_initial_uses_canonical_from_registry(patch_builder, patch_registry):
 def test_unknown_model_falls_back_with_auto_family(patch_builder, patch_registry):
     """Unknown model id should still build a backend (with onnx_family='auto')
     so a power user pasting a bare HF id keeps working."""
-    from app.backends.routed_backend import RoutedBackend
+    from app.backends.registry_backend import RegistryBackend
 
-    RoutedBackend(model="some-bare-hf-id/repo")
+    RegistryBackend(model="some-bare-hf-id/repo")
     assert patch_builder[0].kwargs.get("onnx_family") == "auto"
     assert patch_builder[0].model == "some-bare-hf-id/repo"
 
@@ -188,9 +189,9 @@ def test_unknown_model_falls_back_with_auto_family(patch_builder, patch_registry
 
 
 def test_status_load_transcribe_shutdown_delegate(patch_builder, patch_registry):
-    from app.backends.routed_backend import RoutedBackend
+    from app.backends.registry_backend import RegistryBackend
 
-    backend = RoutedBackend(model="whisper-model")
+    backend = RegistryBackend(model="whisper-model")
     inner = patch_builder[0]
 
     backend.load()
@@ -212,7 +213,7 @@ def test_change_model_same_family_delegates_without_rebuild(
 ):
     """When the new model has the same onnx_family, just forward
     ``change_model`` to the existing inner — no rebuild."""
-    from app.backends.routed_backend import RoutedBackend
+    from app.backends.registry_backend import RegistryBackend
     from app.model_mapping import ModelInfo
 
     # Add a second whisper model so we can swap within the family.
@@ -229,7 +230,7 @@ def test_change_model_same_family_delegates_without_rebuild(
         onnx_family="whisper",
     )
 
-    backend = RoutedBackend(model="whisper-model")
+    backend = RegistryBackend(model="whisper-model")
     inner = patch_builder[0]
 
     backend.change_model("whisper-other", compute_type="int8")
@@ -246,9 +247,9 @@ def test_change_model_across_families_rebuilds_backend(
 ):
     """Switching from Whisper to GigaAM (different onnx_family) must
     shut down the old inner and build a new one with the right family."""
-    from app.backends.routed_backend import RoutedBackend
+    from app.backends.registry_backend import RegistryBackend
 
-    backend = RoutedBackend(model="whisper-model")
+    backend = RegistryBackend(model="whisper-model")
     whisper_inner = patch_builder[0]
 
     backend.change_model("gigaam-model")
@@ -263,9 +264,9 @@ def test_progress_callback_forwarded_to_new_backend(patch_builder, patch_registr
     """A progress callback registered on the routed backend should be
     re-applied to a freshly-built inner so HF download bars from the
     new model still feed the UI."""
-    from app.backends.routed_backend import RoutedBackend
+    from app.backends.registry_backend import RegistryBackend
 
-    backend = RoutedBackend(model="whisper-model")
+    backend = RegistryBackend(model="whisper-model")
     callback = MagicMock()
     backend.set_progress_callback(callback)
 
@@ -279,9 +280,9 @@ def test_progress_callback_forwarded_to_new_backend(patch_builder, patch_registr
 
 
 def test_cancel_load_forwards_to_inner(patch_builder, patch_registry):
-    from app.backends.routed_backend import RoutedBackend
+    from app.backends.registry_backend import RegistryBackend
 
-    backend = RoutedBackend(model="whisper-model")
+    backend = RegistryBackend(model="whisper-model")
     inner = patch_builder[0]
     inner._status = "loading"
 
@@ -292,7 +293,7 @@ def test_cancel_load_forwards_to_inner(patch_builder, patch_registry):
 def test_cancel_load_silent_when_inner_lacks_method(patch_builder, patch_registry):
     """Older fakes / partial test stubs might not implement ``cancel_load``
     — must not raise."""
-    from app.backends.routed_backend import RoutedBackend
+    from app.backends.registry_backend import RegistryBackend
 
     class _NoCancelBackend:
         def status(self) -> str:
@@ -316,7 +317,7 @@ def test_cancel_load_silent_when_inner_lacks_method(patch_builder, patch_registr
         def current_language(self):
             return None
 
-    backend = RoutedBackend(model="whisper-model")
+    backend = RegistryBackend(model="whisper-model")
     backend._inner = _NoCancelBackend()  # type: ignore[assignment]
     backend.cancel_load()  # must not raise
 
@@ -327,18 +328,18 @@ def test_cancel_load_silent_when_inner_lacks_method(patch_builder, patch_registr
 def test_compute_type_int8_maps_to_quantization_int8(patch_builder, patch_registry):
     """Legacy ``compute_type='int8'`` must map to onnx-asr's
     ``quantization='int8'``."""
-    from app.backends.routed_backend import RoutedBackend
+    from app.backends.registry_backend import RegistryBackend
 
-    RoutedBackend(model="whisper-model", compute_type="int8")
+    RegistryBackend(model="whisper-model", compute_type="int8")
     assert patch_builder[0].kwargs.get("quantization") == "int8"
 
 
 def test_compute_type_float16_maps_to_no_quantization(
     patch_builder, patch_registry,
 ):
-    from app.backends.routed_backend import RoutedBackend
+    from app.backends.registry_backend import RegistryBackend
 
-    RoutedBackend(model="whisper-model", compute_type="float16")
+    RegistryBackend(model="whisper-model", compute_type="float16")
     assert patch_builder[0].kwargs.get("quantization") is None
 
 
@@ -347,7 +348,7 @@ def test_compute_type_int8_float16_maps_to_int8_quantization(
 ):
     """Legacy CTranslate2 mode ``int8_float16`` collapses to plain
     ``int8`` for onnx-asr (closest valid match)."""
-    from app.backends.routed_backend import RoutedBackend
+    from app.backends.registry_backend import RegistryBackend
 
-    RoutedBackend(model="whisper-model", compute_type="int8_float16")
+    RegistryBackend(model="whisper-model", compute_type="int8_float16")
     assert patch_builder[0].kwargs.get("quantization") == "int8"

@@ -15,7 +15,7 @@ from typing import Tuple
 from app.audio_feedback import AudioFeedback
 from app.audio_recorder import AudioRecorder
 from app.backends.base import TranscriptionBackend
-from app.backends.routed_backend import RoutedBackend
+from app.backends.registry_backend import RegistryBackend
 from app.clipboard_manager import ClipboardManager
 from app.config_manager import ConfigManager
 from app.hotkey_listener import HotkeyListener
@@ -68,7 +68,7 @@ def build_recording_stack(
         preserve_clipboard=bool(clipboard_cfg.get("preserve_clipboard", False)),
     )
 
-    backend: TranscriptionBackend = RoutedBackend(
+    backend: TranscriptionBackend = RegistryBackend(
         model=raw_model,
         device=str(whisper_cfg.get("device", "auto")),
         compute_type=str(whisper_cfg.get("compute_type", "float16")),
@@ -103,9 +103,8 @@ def build_recording_stack(
     )
 
     log.info(
-        "Recording stack built: model=%s kind=%s device=%s compute_type=%s",
+        "Recording stack built: model=%s device=%s compute_type=%s",
         backend.current_model(),
-        backend.current_kind(),
         whisper_cfg.get("device", "auto"),
         whisper_cfg.get("compute_type", "float16"),
     )

@@ -1,25 +1,33 @@
-"""Backend façade.
+"""Registry-aware backend façade.
 
-The app is now ONNX-only — every model loads via ``OnnxAsrBackend``.
-The original purpose of this class was to route between heterogeneous
-engines (faster-whisper / GigaAM-Python / NeMo).  Now that all engines
-collapsed into one (onnx-asr), the class is a thin wrapper that
-preserves the public ``TranscriptionBackend`` shape while the rest of
-the app catches up.
+A thin wrapper around :class:`OnnxAsrBackend` that resolves model
+aliases through the application registry (``app.model_mapping``)
+before forwarding calls.  It exists so the rest of the app can pass
+human-friendly aliases (``parakeet-tdt-v3``, ``whisper-large-v3-turbo``,
+``t-one``) and stay agnostic of three details:
 
-Why keep it instead of using ``OnnxAsrBackend`` directly?
+- the actual HuggingFace canonical (``istupakov/parakeet-tdt-…-onnx``)
+- the onnx-asr load identifier when it differs from the canonical
+  (``nemo-parakeet-tdt-0.6b-v3`` short name, lowercase ``t-tech/t-one``,
+  ``gigaam-v3-e2e-rnnt`` decoder picker)
+- the family-specific runtime knobs (Whisper takes a ``language`` kwarg,
+  Parakeet doesn't, GigaAM is RU-only, etc.)
 
-- ``change_model`` looks up the new model's ``onnx_family`` from the
-  registry and rebuilds the inner backend with the correct family —
-  the bare backend has no way to know that.
-- It centralises construction kwargs (device, language, quantization)
-  so call sites that don't care about the registry can stay simple.
+Why a class and not just a free function: ``change_model`` needs to
+re-do the lookup for the *new* alias, and family transitions
+(Whisper → GigaAM) want to rebuild the inner backend so we don't carry
+stale family-specific state.  Keeping the inner reference in ``self``
+makes that bookkeeping cheap.
+
+The class also collapses the legacy ``compute_type`` knob (``int8`` /
+``int8_float16`` / ``float16`` / ``float32``) into onnx-asr's smaller
+``quantization`` vocabulary (``"int8"`` / ``None``) at one place, so
+config changes don't have to be plumbed through.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 from typing import Callable, Optional
 
 import numpy as np
@@ -55,7 +63,15 @@ def _build_onnx_asr(
     )
 
 
-class RoutedBackend:
+class RegistryBackend:
+    """Backend that looks up alias → ``(canonical, family, load_id)``
+    in the registry and forwards to an ``OnnxAsrBackend`` instance.
+
+    The class implements ``TranscriptionBackend`` Protocol verbatim;
+    callers that already have a canonical HF id can pass it through
+    unchanged (we fall back gracefully via ``canonical_for``).
+    """
+
     def __init__(
         self,
         model: str,
@@ -66,7 +82,6 @@ class RoutedBackend:
     ) -> None:
         del beam_size  # unused (no beam search knob in ONNX path)
 
-        self._lock = threading.Lock()
         # Resolve compute_type → quantization mapping for onnx-asr.
         quantization = _quantization_for(compute_type)
         self._kwargs = dict(
@@ -87,11 +102,6 @@ class RoutedBackend:
         )
 
     # ---- public API ---------------------------------------------------------
-
-    def current_kind(self) -> str:
-        # Single-engine app — always ``onnx_asr``.  Kept for callers
-        # that still inspect the kind (settings UI, telemetry).
-        return "onnx_asr"
 
     def status(self) -> str:
         return self._inner.status()
@@ -120,7 +130,7 @@ class RoutedBackend:
             )
             return
 
-        # Different model or different family — tear down, rebuild.
+        # Different family — tear down, rebuild.
         log.info(
             "Switching ONNX model: %s (family=%s) → %s (family=%s)",
             self._inner.current_model(), current_family,
@@ -148,9 +158,7 @@ class RoutedBackend:
                     "set_progress_callback on new backend raised: %s", exc,
                 )
 
-        with self._lock:
-            self._inner = new_inner
-
+        self._inner = new_inner
         new_inner.load()
 
     def current_model(self) -> str:

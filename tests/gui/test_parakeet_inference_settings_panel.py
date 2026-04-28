@@ -9,11 +9,11 @@ def test_panel_starts_with_unchecked_timestamps(qtbot):
     """Default state — no timestamps. Off-by-default keeps the
     common path fast (small but nonzero post-processing cost
     for word/segment alignment)."""
-    from app.gui.widgets.nemo_inference_settings_panel import (
-        NemoInferenceSettingsPanel,
+    from app.gui.widgets.parakeet_inference_settings_panel import (
+        ParakeetInferenceSettingsPanel,
     )
 
-    panel = NemoInferenceSettingsPanel()
+    panel = ParakeetInferenceSettingsPanel()
     qtbot.addWidget(panel)
     cb = panel.findChild(QCheckBox, "NemoTimestampsCheckbox")
     assert cb is not None
@@ -21,14 +21,14 @@ def test_panel_starts_with_unchecked_timestamps(qtbot):
 
 
 def test_set_settings_pre_fills_panel(qtbot):
-    from app.gui.widgets.nemo_inference_settings_panel import (
-        NemoInferenceSettingsPanel,
+    from app.gui.widgets.parakeet_inference_settings_panel import (
+        ParakeetInferenceSettingsPanel,
     )
-    from app.inference_settings import NemoInferenceSettings
+    from app.inference_settings import ParakeetInferenceSettings
 
-    panel = NemoInferenceSettingsPanel()
+    panel = ParakeetInferenceSettingsPanel()
     qtbot.addWidget(panel)
-    panel.set_settings(NemoInferenceSettings(timestamps=True))
+    panel.set_settings(ParakeetInferenceSettings(timestamps=True))
 
     cb = panel.findChild(QCheckBox, "NemoTimestampsCheckbox")
     assert cb.isChecked() is True
@@ -38,26 +38,26 @@ def test_set_settings_does_not_re_emit(qtbot):
     """Programmatic prefill must not echo a save back through the
     signal — would cause a feedback loop on init when the
     controller paints persisted overrides into the panel."""
-    from app.gui.widgets.nemo_inference_settings_panel import (
-        NemoInferenceSettingsPanel,
+    from app.gui.widgets.parakeet_inference_settings_panel import (
+        ParakeetInferenceSettingsPanel,
     )
-    from app.inference_settings import NemoInferenceSettings
+    from app.inference_settings import ParakeetInferenceSettings
 
-    panel = NemoInferenceSettingsPanel()
+    panel = ParakeetInferenceSettingsPanel()
     qtbot.addWidget(panel)
 
     emissions: list = []
     panel.settings_changed.connect(emissions.append)
-    panel.set_settings(NemoInferenceSettings(timestamps=True))
+    panel.set_settings(ParakeetInferenceSettings(timestamps=True))
     assert emissions == []
 
 
 def test_toggling_checkbox_emits_settings_changed(qtbot):
-    from app.gui.widgets.nemo_inference_settings_panel import (
-        NemoInferenceSettingsPanel,
+    from app.gui.widgets.parakeet_inference_settings_panel import (
+        ParakeetInferenceSettingsPanel,
     )
 
-    panel = NemoInferenceSettingsPanel()
+    panel = ParakeetInferenceSettingsPanel()
     qtbot.addWidget(panel)
     cb = panel.findChild(QCheckBox, "NemoTimestampsCheckbox")
 
@@ -69,11 +69,11 @@ def test_toggling_checkbox_emits_settings_changed(qtbot):
 
 
 def test_values_returns_current_state(qtbot):
-    from app.gui.widgets.nemo_inference_settings_panel import (
-        NemoInferenceSettingsPanel,
+    from app.gui.widgets.parakeet_inference_settings_panel import (
+        ParakeetInferenceSettingsPanel,
     )
 
-    panel = NemoInferenceSettingsPanel()
+    panel = ParakeetInferenceSettingsPanel()
     qtbot.addWidget(panel)
     cb = panel.findChild(QCheckBox, "NemoTimestampsCheckbox")
     cb.setChecked(True)

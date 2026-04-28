@@ -30,10 +30,10 @@ def _has_hf_token() -> bool:
 
 from app.gui.widgets.flow_layout import FlowLayout
 from app.gui.widgets.inference_settings_panel import InferenceSettingsPanel
-from app.gui.widgets.nemo_inference_settings_panel import (
-    NemoInferenceSettingsPanel,
+from app.gui.widgets.parakeet_inference_settings_panel import (
+    ParakeetInferenceSettingsPanel,
 )
-from app.inference_settings import InferenceSettings, NemoInferenceSettings
+from app.inference_settings import InferenceSettings, ParakeetInferenceSettings
 from app.model_mapping import ModelInfo, model_url
 
 
@@ -128,7 +128,7 @@ class ModelCard(QFrame):
     # Emitted when the user changes anything in the inline inference
     # settings panel. Args: ``(alias, settings_object)``. The settings
     # object is either ``InferenceSettings`` (faster-whisper cards)
-    # or ``NemoInferenceSettings`` (NeMo cards) — controller dispatches
+    # or ``ParakeetInferenceSettings`` (NeMo cards) — controller dispatches
     # on the alias's backend kind. Declared as ``object`` because
     # PySide signals can't express a sum type and the consumer only
     # uses duck-typed ``.to_mapping()``.
@@ -284,7 +284,7 @@ class ModelCard(QFrame):
         if onnx_family == "whisper":
             self._settings_panel = InferenceSettingsPanel(self)
         elif onnx_family == "parakeet":
-            self._settings_panel = NemoInferenceSettingsPanel(self)
+            self._settings_panel = ParakeetInferenceSettingsPanel(self)
         if self._settings_panel is not None:
             self._settings_panel.setVisible(False)
             self._settings_panel.settings_changed.connect(
@@ -385,7 +385,7 @@ class ModelCard(QFrame):
 
     def inference_settings(self):
         """Return the panel's current values (``InferenceSettings``
-        for Whisper, ``NemoInferenceSettings`` for NeMo) or ``None``
+        for Whisper, ``ParakeetInferenceSettings`` for NeMo) or ``None``
         on cards that don't have a panel."""
         if self._settings_panel is None:
             return None
