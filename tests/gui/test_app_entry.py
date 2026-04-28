@@ -342,12 +342,62 @@ def test_main_kicks_off_onnx_asr_preimport_before_window_show():
 
     src = inspect.getsource(app_module.main)
     preimport_idx = src.find("_preload_onnx_asr_async")
+    join_idx = src.find("_onnx_preload_t.join(")
     show_idx = src.find("window.show()")
     assert preimport_idx != -1, "main() should call _preload_onnx_asr_async"
+    assert join_idx != -1, (
+        "main() should join the preimport thread before window.show() "
+        "to guarantee DLL loader-lock acquisition is done first"
+    )
     assert show_idx != -1, "sanity: main() should call window.show()"
-    assert preimport_idx < show_idx, (
-        "preimport must be kicked off BEFORE window.show() so the heavy "
-        "import overlaps with Qt window construction"
+    assert preimport_idx < join_idx < show_idx, (
+        "order must be: kick off preimport → join (wait for DLL warmup) → "
+        "window.show() — that way DLL lock contention is absorbed before "
+        "the window becomes interactive"
+    )
+
+
+def test_preload_onnx_asr_warms_up_ort_providers():
+    """``_do_onnx_asr_preimport`` must create a dummy InferenceSession
+    so OnnxRuntime loads its execution-provider DLLs (DirectML, CUDA,
+    CPU) on this daemon thread.  The real symptom if this is skipped:
+    the first model load acquires the Win32 DLL loader-lock while the
+    Qt main thread also needs it — window cannot be moved / is marked
+    (Not responding).
+
+    We verify the side-effect: ``onnxruntime.InferenceSession`` must
+    have been called at least once after ``_do_onnx_asr_preimport``
+    runs.
+    """
+    import sys
+    from unittest.mock import MagicMock, patch
+
+    # Stub onnx_asr so we don't need the heavy install.
+    sys.modules.setdefault("onnx_asr", MagicMock())
+
+    import app.gui.app as app_module
+
+    session_calls: list = []
+
+    class _FakeSession:
+        def __init__(self, *_a, **_kw):
+            session_calls.append(True)
+
+        def run(self, *_a, **_kw):
+            return [None]
+
+    fake_ort = MagicMock()
+    fake_ort.InferenceSession = _FakeSession
+    fake_ort.SessionOptions.return_value = MagicMock()
+    # get_available_providers must return an iterable so the warmup loop runs.
+    fake_ort.get_available_providers.return_value = ["CPUExecutionProvider"]
+
+    with patch.dict(sys.modules, {"onnxruntime": fake_ort}):
+        app_module._do_onnx_asr_preimport()
+
+    assert session_calls, (
+        "_do_onnx_asr_preimport must create an InferenceSession "
+        "to force provider DLL loading"
     )
 
 

@@ -250,36 +250,98 @@ def _apply_storage_path(configured: Optional[str]) -> str:
     return root
 
 
+# Minimal valid ONNX model: float32[1] → Identity → float32[1].
+# Generated once with raw protobuf wire encoding; verified with
+# ``onnxruntime.InferenceSession(bytes, ...).run(...)``.
+# Used as a dummy graph to force OnnxRuntime to initialise its
+# execution-provider DLLs (DirectML, CUDA, CPU) at app startup so the
+# first real model load doesn't acquire the Win32 DLL loader-lock on
+# the main thread and freeze the window.
+_WARMUP_ONNX_BYTES: bytes = (
+    b'\x08\x08:4\n\x10\n\x01x\x12\x01y"\x08Identity'
+    b'Z\x0f\n\x01x\x12\n\n\x08\x08\x01\x12\x04\n\x02\x08\x01'
+    b'b\x0f\n\x01y\x12\n\n\x08\x08\x01\x12\x04\n\x02\x08\x01'
+    b'B\x04\n\x00\x10\x0b'
+)
+
+
 def _do_onnx_asr_preimport() -> None:
-    """Actually perform the eager ``import onnx_asr``.
+    """Import onnx_asr and warm up OnnxRuntime provider DLLs.
 
     Split out from ``_preload_onnx_asr_async`` so tests can monkeypatch
-    just the import call itself without having to fake
-    ``threading.Thread``.  This function is allowed to raise — the
-    surrounding worker wrapper turns any exception into a debug log so
-    the preimport stays a pure latency optimisation that never crashes
-    the app.
+    just this call without faking ``threading.Thread``.  Allowed to
+    raise — the surrounding wrapper in ``_preload_onnx_asr_async``
+    catches everything and logs at DEBUG level.
+
+    Why the warmup session matters
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    ``import onnx_asr`` loads the Python module but does *not* create
+    any ONNX InferenceSession.  The first ``InferenceSession(...)`` call
+    triggers OnnxRuntime to ``LoadLibrary`` its execution-provider DLLs
+    (``DirectML.dll``, ``onnxruntime_providers_shared.dll``, CUDA libs,
+    …).  Windows serialises all ``LoadLibrary`` calls through the
+    process-wide DLL loader-lock.  While a worker thread holds that
+    lock, the Qt main thread — which uses Win32 APIs for window
+    management and rendering — cannot move the window, paint, or process
+    any system messages.  The user sees "(Not responding)" and a frozen
+    title bar for the entire duration of that first session creation.
+
+    Creating a trivial 62-byte dummy session here, on a daemon thread
+    *before* ``window.show()``, absorbs the lock contention in the
+    background.  All subsequent ``InferenceSession`` calls (real model
+    loads) re-use already-loaded DLLs; ``LoadLibrary`` for a resident
+    DLL increments a ref-count in <1 ms and never parks the caller on
+    the loader-lock.
     """
-    import onnx_asr  # noqa: F401 — pure side-effect import
+    import onnx_asr  # noqa: F401 — pulls in onnxruntime
+
+    # Create throwaway InferenceSession(s) to force ORT provider DLLs
+    # to load now.  We iterate over every available provider so that
+    # CUDA (cublas/cuDNN), DirectML, TensorRT, etc. are each
+    # initialised on this daemon thread — not on the Qt main thread
+    # where they would hold the Win32 DLL loader-lock and freeze the
+    # window.
+    try:
+        import onnxruntime as _ort
+        import numpy as _np
+
+        _opts = _ort.SessionOptions()
+        _opts.log_severity_level = 4  # silence ORT — errors only
+        _x = _np.array([0.0], dtype=_np.float32)
+
+        for _provider in _ort.get_available_providers():
+            try:
+                _sess = _ort.InferenceSession(
+                    _WARMUP_ONNX_BYTES,
+                    sess_options=_opts,
+                    providers=[_provider, "CPUExecutionProvider"],
+                )
+                _sess.run(None, {"x": _x})
+                del _sess
+            except Exception:
+                pass  # provider DLL missing / not supported — skip
+    except Exception:
+        pass  # warmup is best-effort; real error path is inside _do_load
 
 
 def _preload_onnx_asr_async() -> "threading.Thread":
-    """Kick off ``import onnx_asr`` on a daemon worker thread.
+    """Kick off ``import onnx_asr`` + ORT provider warmup on a daemon thread.
 
-    Why this exists: on Windows, the first ``import onnx_asr`` pulls in
-    onnxruntime and its CUDA / DirectML provider DLLs, which acquire the
-    OS loader-lock for ~1-2 s.  If that happens on the main thread (or
-    if it happens after the window is shown but before Qt has finished
-    its event-loop warm-up), Windows decides the UI is hung and slaps
-    a "(Not responding)" badge on the title bar.  Pre-importing on a
-    daemon thread *before* ``window.show()`` overlaps the loader-lock
-    contention with QApplication construction so the UI is never the
-    one stuck waiting.
+    Why this exists: on Windows, the first OnnxRuntime ``InferenceSession``
+    creation acquires the Win32 DLL loader-lock while loading provider
+    DLLs (DirectML, CUDA, CPU).  That lock is process-wide and serialises
+    ALL Win32 DLL operations — including the ones Qt uses internally for
+    window management and rendering.  Result: the window cannot be moved
+    and is marked "(Not responding)" for the duration of the DLL load.
 
-    Returns the started ``Thread`` so callers can ``join()`` it during
-    teardown if they want — but ``main()`` doesn't, since the thread is
-    a daemon and dies with the interpreter.  Returning it is also what
-    the test suite uses to assert daemon-ness and naming.
+    Starting this warmup on a daemon thread *before* ``window.show()``
+    absorbs the contention in the background.  Real model loads after that
+    re-use already-resident DLLs and skip the heavy lock.
+
+    Returns the started ``Thread`` so callers can ``join()`` it when
+    needed — ``main()`` joins it just before ``window.show()`` (the join
+    is nearly instantaneous because the thread finishes during
+    ``build_recording_stack``).
     """
     import logging
     import threading
@@ -439,7 +501,7 @@ def main() -> int:
     # title bar marked "(Not responding)" until the import finishes.
     # Started after the single-instance gate so a second copy of the
     # app exits without paying the import cost.
-    _preload_onnx_asr_async()
+    _onnx_preload_t = _preload_onnx_asr_async()
 
     # Set up the logging pipeline BEFORE building the recording stack so the
     # HotkeyListener / model-load messages from build_recording_stack reach
@@ -501,6 +563,15 @@ def main() -> int:
             state_manager=state_manager,
             hotkey_listener=hotkey_listener,
         )
+
+    # Block until the preimport + ORT provider warmup finishes.
+    # Normally the thread completes during build_recording_stack (~1-2 s),
+    # so this join returns immediately.  The timeout is a safety net:
+    # if ORT hangs on a pathological install we don't block the user
+    # indefinitely — they'll see the first model load freeze instead,
+    # which is the pre-existing behaviour.  15 s is generous; the real
+    # warmup session takes <2 s on this dev box.
+    _onnx_preload_t.join(timeout=15)
 
     _autoload_persisted_model(backend)
 
