@@ -109,6 +109,68 @@ banner confirms in the bottom-right.
 To transcribe an audio or video file instead, switch to the **Transcribe**
 tab, drop a file (or click Browse), and watch the result appear.
 
+## Run from anywhere (PowerShell shortcut)
+
+Don't want to build an installer just to launch the app from outside
+the repo directory? Drop a few helper functions into your PowerShell
+profile and call `lazy` from any working directory. Faster to set up
+than [`build-exe.ps1`](#building-a-standalone-executable) +
+[install-locally](#installing-locally), and the launcher stays in sync
+with the repo automatically (no rebuild after a `git pull`).
+
+1. **Edit your PowerShell profile** (created if missing):
+
+   ```powershell
+   if (-not (Test-Path $PROFILE)) {
+       New-Item -ItemType File -Path $PROFILE -Force | Out-Null
+   }
+   notepad $PROFILE
+   ```
+
+2. **Paste this** at the bottom — change the first line to wherever
+   you cloned the repo:
+
+   ```powershell
+   $LazyToTextRoot = 'C:\path\to\lazy-to-text'
+
+   function lazy {
+       Start-Process `
+           -FilePath (Join-Path $LazyToTextRoot '.venv\Scripts\pythonw.exe') `
+           -ArgumentList @('-m', 'app.gui.app') `
+           -WorkingDirectory $LazyToTextRoot
+   }
+
+   function lazy-debug {
+       Push-Location $LazyToTextRoot
+       try { & .venv\Scripts\python.exe -m app.gui.app } finally { Pop-Location }
+   }
+
+   function lazy-log {
+       Get-Content (Join-Path $LazyToTextRoot 'logs\app.log') -Tail 30 -Wait
+   }
+   ```
+
+3. **Allow profile scripts** (one-time per user — leaves signed-by-
+   unknown-publisher scripts blocked, only your own profile runs):
+
+   ```powershell
+   Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+   ```
+
+4. **Reload** the profile (or open a fresh PowerShell window):
+
+   ```powershell
+   . $PROFILE
+   ```
+
+Now from any directory:
+
+| Command       | What it does                                                       |
+|---------------|--------------------------------------------------------------------|
+| `lazy`        | Launch the app in the background (windowed, no console)            |
+| `lazy-debug`  | Launch with attached console — handy for inspecting startup errors |
+| `lazy-log`    | Tail `logs\app.log` in real time (`Ctrl+C` to stop)                |
+
 ## Screenshots
 
 | Models | Transcribe |
