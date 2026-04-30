@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QMainWindow,
     QStackedWidget,
@@ -114,6 +115,11 @@ class MainWindow(QMainWindow):
             sc.activated.connect(lambda k=key: self._activate_nav(k))
             self._shortcuts.append(sc)
 
+        # Standard "App / About / Settings / Quit" menu — visible
+        # under the Apple logo on macOS, in a regular top menu bar
+        # on Windows / Linux.
+        self._install_app_menu()
+
     def get_view(self, key: str) -> QWidget:
         if key not in self._views:
             raise KeyError(key)
@@ -159,3 +165,121 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.Resize and watched is self.centralWidget():
             self.toast.parentResized()
         return super().eventFilter(watched, event)
+
+    def _install_app_menu(self) -> None:
+        """Wire the standard ``About / Settings / Quit`` menu items.
+
+        On macOS, Qt promotes any QAction whose ``MenuRole`` is set
+        to ``AboutRole / PreferencesRole / QuitRole`` into the global
+        Application menu (the one under the Apple logo) regardless
+        of which submenu we attach them to — so the host menu's
+        title is irrelevant on Mac. On Windows / Linux the same
+        actions live in a regular ``Lazy to Text`` top-menu.
+
+        ``Ctrl+,`` and ``Ctrl+Q`` are auto-translated to ``Cmd+,``
+        and ``Cmd+Q`` on macOS by Qt's portable key sequence layer
+        — matching what every other Mac app shows next to those
+        menu items.
+        """
+        menu_bar = self.menuBar()
+        app_menu = menu_bar.addMenu("&Lazy to Text")
+
+        about_action = QAction("&About Lazy to Text", self)
+        about_action.setMenuRole(QAction.MenuRole.AboutRole)
+        about_action.triggered.connect(self._show_about_dialog)
+        app_menu.addAction(about_action)
+
+        app_menu.addSeparator()
+
+        settings_action = QAction("&Settings…", self)
+        # Ctrl+, → Cmd+, on macOS via Qt's portable key sequence
+        # layer.  ``ApplicationShortcut`` so the binding works even
+        # when focus is in a child widget (e.g. log search box).
+        settings_action.setShortcut(QKeySequence("Ctrl+,"))
+        settings_action.setShortcutContext(Qt.ApplicationShortcut)
+        settings_action.setMenuRole(QAction.MenuRole.PreferencesRole)
+        settings_action.triggered.connect(self._open_settings_view)
+        app_menu.addAction(settings_action)
+
+        app_menu.addSeparator()
+
+        quit_action = QAction("&Quit Lazy to Text", self)
+        quit_action.setShortcut(QKeySequence("Ctrl+Q"))
+        quit_action.setShortcutContext(Qt.ApplicationShortcut)
+        quit_action.setMenuRole(QAction.MenuRole.QuitRole)
+        quit_action.triggered.connect(self._quit_application)
+        app_menu.addAction(quit_action)
+
+    def _open_settings_view(self) -> None:
+        """Bring the Settings tab to the front.
+
+        Maps to the sidebar's ``shortcuts`` nav key — the historical
+        name from when the view only held hotkey bindings; it has
+        since grown into the full settings surface (storage, HF
+        token, audio feedback, …) but we kept the key stable to
+        avoid migrating the persisted ``Sidebar.active_key`` for
+        existing users.
+
+        If the window was hidden to tray when ``Cmd+,`` fires, we
+        un-hide and raise it so the user actually sees what they
+        opened.
+        """
+        if not self.isVisible():
+            self.show()
+        self.raise_()
+        self.activateWindow()
+        self._activate_nav("shortcuts")
+
+    def _quit_application(self) -> None:
+        """``Cmd+Q`` / menu ``Quit`` — full app exit, bypassing tray.
+
+        Mirrors what the tray's Quit menu does (see
+        ``_tray_mixin._on_tray_quit``): mark the next window close
+        as a real quit (so ``closeEvent`` doesn't fall back to
+        hide-to-tray), then drop out of Qt's event loop. Without
+        the explicit ``app.quit()`` we'd just hide the window —
+        ``setQuitOnLastWindowClosed(False)`` is set when the tray
+        is alive, so closing the last window doesn't end the
+        process by itself.
+        """
+        self.request_quit()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
+    def _show_about_dialog(self) -> None:
+        """``About Lazy to Text`` info dialog (app icon + version).
+
+        Pulls the version string from the installed package
+        metadata when possible — when running from a wheel /
+        ``pip install -e .`` install ``importlib.metadata`` knows
+        the canonical version.  Falls back to a hardcoded string
+        when running from a raw checkout where no distribution
+        metadata exists yet.
+        """
+        from app.gui.widgets.dialogs import notify
+
+        try:
+            from importlib.metadata import PackageNotFoundError
+            from importlib.metadata import version as _pkg_version
+
+            try:
+                version = _pkg_version("lazy-to-text")
+            except PackageNotFoundError:
+                version = "0.0.1"
+        except Exception:
+            version = "0.0.1"
+
+        notify(
+            self,
+            "About Lazy to Text",
+            (
+                f"Lazy to Text {version}\n\n"
+                "Local-first speech-to-text — Whisper / Parakeet / GigaAM\n"
+                "via ONNX Runtime.  Apple Silicon goes through CoreML\n"
+                "(Neural Engine + GPU); NVIDIA goes through CUDA / "
+                "TensorRT.\n\n"
+                "https://github.com/aa-blinov/lazy-to-text"
+            ),
+            kind="info",
+        )
