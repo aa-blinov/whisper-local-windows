@@ -83,6 +83,23 @@ def test_lone_modifier_rejected() -> None:
     assert "modifier" in (validate_hotkey("ctrl") or "").lower()
 
 
+@pytest.mark.parametrize("key", ["space", "enter", "esc", "tab", "left"])
+def test_lone_named_key_rejected(key: str) -> None:
+    """Named keys like ``space`` or ``enter`` are too "hot" to
+    register as a global hotkey on their own — would block normal
+    typing in every other app. Only F1..F24 are exempt."""
+    err = validate_hotkey(key)
+    assert err is not None, f"expected lone {key!r} to fail"
+    assert "modifier" in err.lower() or "alone" in err.lower()
+
+
+@pytest.mark.parametrize(
+    "combo", ["alt+space", "ctrl+enter", "shift+tab", "cmd+left"],
+)
+def test_named_key_with_modifier_accepted(combo: str) -> None:
+    assert validate_hotkey(combo) is None
+
+
 # ---- Cross-field conflicts -----------------------------------------------
 
 

@@ -98,12 +98,17 @@ def validate_hotkey(text: str, *, allow_empty: bool = False) -> Optional[str]:
     ):
         return f"{key!r} is not a recognised key"
 
-    # Letters / digits without a modifier would intercept normal
-    # typing globally — almost never what the user wants.
-    if not mods and (_is_letter(key) or _is_digit(key)):
+    # Anything other than an F-key without a modifier would
+    # intercept normal typing globally.  ``space`` would block
+    # every space character system-wide; ``a`` would block every
+    # letter ``a``; ``enter`` would block submit-on-Enter
+    # everywhere.  F1..F24 are the only keys exempt — they're
+    # essentially never used in plain text input.
+    if not mods and not _is_function_key(key):
         return (
-            "Add at least one modifier (ctrl, alt, shift, cmd) — a "
-            "lone letter / digit would steal every keystroke"
+            "Add a modifier (ctrl, alt, shift, cmd) — a lone key "
+            "would be intercepted every time you press it in any "
+            "app. Only F1..F24 may be used alone."
         )
 
     return None
