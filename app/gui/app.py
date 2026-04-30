@@ -516,6 +516,18 @@ def _autoload_persisted_model(backend) -> None:
 
 def main() -> int:
     import logging
+    import multiprocessing
+
+    # Frozen / py2app builds re-exec the bundle's launcher when
+    # ``multiprocessing.spawn`` starts a worker.  Without
+    # ``freeze_support`` that re-exec re-enters ``main()`` instead
+    # of the worker's target, leaks dozens of half-started Qt
+    # windows, and our ``Subprocess init failed: Worker pipe
+    # closed before init`` warning fires because the worker
+    # never made it to the ``init`` ack.  Calling here is a no-op
+    # in dev (``uv run``) — it only takes effect when ``sys.frozen``
+    # is set, which py2app does inside the bundle.
+    multiprocessing.freeze_support()
 
     # Read the configured ``storage.models_dir`` (may be empty for
     # 'use the default') from config.yaml, then plant ``HF_HOME``

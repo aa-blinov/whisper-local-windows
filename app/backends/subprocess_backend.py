@@ -80,12 +80,31 @@ class SubprocessBackend:
     """
 
     def __init__(self, **kwargs: Any) -> None:
-        # Spawn-mode is the only viable start method on Windows.
-        # ``set_start_method`` raises RuntimeError if a different
-        # method has already been chosen — swallow that so we don't
-        # crash when the host app (or a test) configured it earlier.
+        # Start-method choice:
+        #   - **Windows** must use ``spawn`` (fork unavailable).
+        #   - **macOS dev (uv run)** uses ``spawn`` too — that's the
+        #     OS default and it works against ``sys.executable`` =
+        #     ``.venv/bin/python``.
+        #   - **macOS frozen (.app via py2app)** must use ``fork``:
+        #     ``sys.executable`` inside the bundle is the py2app
+        #     launcher binary (``Contents/MacOS/Lazy to Text``),
+        #     not a Python interpreter, so ``spawn`` fails with
+        #     ``Worker pipe closed before init`` — the launcher
+        #     can't handle the bootstrap argv multiprocessing
+        #     passes to a Python child.  Fork inherits the
+        #     already-imported runtime instead of re-execing, side-
+        #     stepping the launcher entirely.  Apple deprecated
+        #     fork-safety guarantees but our worker stays single-
+        #     threaded until ``onnx_asr.load_model``, by which
+        #     point the duplicated state is harmless.
+        import sys as _sys
+
+        if _sys.platform == "darwin" and getattr(_sys, "frozen", False):
+            method = "fork"
+        else:
+            method = "spawn"
         try:
-            multiprocessing.set_start_method("spawn", force=False)
+            multiprocessing.set_start_method(method, force=False)
         except (RuntimeError, AssertionError):
             pass
 
