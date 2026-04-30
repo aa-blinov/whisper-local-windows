@@ -18,9 +18,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QWidget
 
 
 _APP_ICON_PIXMAP_SIZE = QSize(64, 64)
@@ -119,6 +119,8 @@ def notify(
     text: str,
     *,
     kind: str = "info",
+    informative: Optional[str] = None,
+    rich_text: bool = False,
 ) -> None:
     """Drop-in for ``QMessageBox.information`` / ``.warning``.
 
@@ -126,10 +128,34 @@ def notify(
     we always paint the app icon, but the value lets future
     callers theme the OK button or trigger different system
     sounds without touching every callsite.
+
+    ``informative`` is the secondary "body" text (lighter weight,
+    smaller).  ``setText`` in ``QMessageBox`` is rendered bold
+    by design — it's the dialog's headline — so multi-line bodies
+    look like one giant bold blob unless they go through
+    ``setInformativeText`` instead.
+
+    ``rich_text=True`` switches both fields to HTML rendering and
+    enables ``<a href="…">`` link activation (Qt opens the URL via
+    the platform browser).  Without it, HTML tags render as
+    literal text.
     """
     msg = QMessageBox(parent)
     msg.setWindowTitle(title)
+    if rich_text:
+        msg.setTextFormat(Qt.RichText)
     msg.setText(text)
+    if informative:
+        msg.setInformativeText(informative)
+    if rich_text:
+        # ``setOpenExternalLinks`` lives on the inner QLabel(s),
+        # not on QMessageBox itself — without it, ``<a href="…">``
+        # clicks just emit ``linkActivated`` and nothing happens.
+        # Mirror what ``QMessageBox.about()`` does internally so
+        # links work the same way users expect everywhere else
+        # in the app.
+        for label in msg.findChildren(QLabel):
+            label.setOpenExternalLinks(True)
     msg.setStandardButtons(QMessageBox.Ok)
     msg.setDefaultButton(QMessageBox.Ok)
     _stamp_app_icon(msg)

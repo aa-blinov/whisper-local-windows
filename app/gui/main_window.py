@@ -273,13 +273,15 @@ class MainWindow(QMainWindow):
         notify(
             self,
             "About Lazy to Text",
-            (
-                f"Lazy to Text {version}\n\n"
-                "Local-first speech-to-text — Whisper / Parakeet / GigaAM\n"
-                "via ONNX Runtime.  Apple Silicon goes through CoreML\n"
-                "(Neural Engine + GPU); NVIDIA goes through CUDA / "
-                "TensorRT.\n\n"
-                "https://github.com/aa-blinov/lazy-to-text"
+            f"Lazy to Text {version}",
+            informative=(
+                "<p>Local-first speech-to-text — Whisper / Parakeet "
+                "/ GigaAM via ONNX Runtime. Apple Silicon goes through "
+                "CoreML (Neural Engine + GPU); NVIDIA goes through "
+                "CUDA / TensorRT.</p>"
+                '<p><a href="https://github.com/aa-blinov/lazy-to-text">'
+                "github.com/aa-blinov/lazy-to-text</a></p>"
             ),
             kind="info",
+            rich_text=True,
         )
