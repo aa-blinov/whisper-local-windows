@@ -132,6 +132,19 @@ class AppController(
         self._loading_timer = QTimer(self)
         self._loading_timer.setInterval(1000)
         self._loading_timer.timeout.connect(self._on_loading_tick)
+        # Engine pill follows the backend's ``active_provider()`` —
+        # the SubprocessBackend caches it from a push-based
+        # ``provider_change`` message so this is a cheap dict read,
+        # not an IPC round-trip.  We poll on a slow timer (500 ms)
+        # rather than only on ``state_changed`` because the worker's
+        # ``status_change`` and ``provider_change`` push events can
+        # arrive in either order — a sole ``state_changed`` listener
+        # would sometimes read a stale (still-``None``) cache for one
+        # tick after the model goes ready.
+        self._engine_pill_timer = QTimer(self)
+        self._engine_pill_timer.setInterval(500)
+        self._engine_pill_timer.timeout.connect(self._refresh_engine_pill)
+        self._engine_pill_timer.start()
         # Mic test worker bookkeeping.
         self._mic_test_in_progress = False
         self._mic_test_completed.connect(self._on_mic_test_completed)
@@ -311,7 +324,13 @@ class AppController(
                 log.warning("request_model_change raised: %s", exc)
 
     def _sync_topbar_model(self, info) -> None:
-        self._window.topbar.set_active_model(info.display_name if info else None)
+        # Use ``alias`` for the topbar pill — ``display_name``
+        # carries the marketing parenthetical (e.g.
+        # "T-One (Russian, telephony-tuned)") which crowds the
+        # engine / cancel widgets on the same row. Aliases are
+        # already short (``t-one``, ``vosk-ru``, ``parakeet-tdt-v3``,
+        # ``whisper-large-v3-turbo``) and unique per model.
+        self._window.topbar.set_active_model(info.alias if info else None)
 
     def _on_model_delete_requested(self, alias: str) -> None:
         """Confirm with the user, then drop the cached weights for
@@ -762,6 +781,13 @@ class AppController(
                 self._window.sidebar.recording_status.set_input_level(0.0)
             except Exception:  # pragma: no cover — defensive
                 pass
+
+        # Engine pill follows the backend's actual EP — clear while
+        # loading, populate once the model goes ready (or back to
+        # unloaded after a model swap / error).  ``active_provider``
+        # is push-cached on the SubprocessBackend side so this is a
+        # cheap dict read, not an IPC round-trip.
+        self._refresh_engine_pill()
         # Block destructive interactions while not idle.
         self._window.models_view.set_locked(state != "idle")
         # Reflect the model-loading state on the active card's pill so it
@@ -819,6 +845,39 @@ class AppController(
         # doesn't render it.
         try:
             self._window.topbar.set_loading_elapsed(self._loading_elapsed_s)
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+    def _refresh_engine_pill(self) -> None:
+        """Pull the current EP from the backend (via ``RecordingController.active_provider``)
+        and push it into the sidebar's engine pill.  Idempotent —
+        safe to call from any state transition or timer tick.
+        ``None`` clears the pill back to its empty / muted state.
+        """
+        sidebar = getattr(self._window, "sidebar", None)
+        target = (
+            getattr(sidebar.recording_status, "set_active_provider", None)
+            if sidebar is not None else None
+        )
+        if not callable(target):
+            return
+
+        recording = self._recording
+        if recording is None:
+            try:
+                target(None)
+            except Exception:  # pragma: no cover — defensive
+                pass
+            return
+        getter = getattr(recording, "active_provider", None)
+        provider = None
+        if callable(getter):
+            try:
+                provider = getter()
+            except Exception:  # pragma: no cover — defensive
+                provider = None
+        try:
+            target(provider)
         except Exception:  # pragma: no cover — defensive
             pass
 

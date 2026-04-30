@@ -135,6 +135,24 @@ class RecordingController(QObject):
             return None
         return recorder.set_device(raw)
 
+    def active_provider(self) -> Optional[str]:
+        """Pretty-printed ONNX Runtime EP that the loaded model is
+        actually using (e.g. ``"CoreML"``, ``"CUDA"``, ``"CPU"``), or
+        ``None`` while the model is unloaded / loading / errored.
+        Proxies the inner backend so the UI can stay agnostic of
+        which transport (subprocess vs in-process) is wired up.
+        """
+        backend = getattr(self._state_manager, "backend", None)
+        if backend is None:
+            return None
+        getter = getattr(backend, "active_provider", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter()
+        except Exception:  # pragma: no cover — defensive
+            return None
+
     def transcribe_file_async(self, path: str) -> None:
         """Run ``backend.transcribe_file(path)`` on a worker thread and
         emit ``file_transcribed`` / ``file_transcription_failed`` with

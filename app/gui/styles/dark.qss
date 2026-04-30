@@ -381,6 +381,32 @@ QLabel[role="model-pill"][state="loading"] {
     border: 1px solid {{color.warning}};
 }
 
+/* Engine pill — ONNX Runtime EP (CoreML / CUDA / CPU / …).  Mirrors
+   model-pill geometry but with its own colour states so the user can
+   immediately tell whether the loaded model is on the accelerator
+   (success / accent) or fell back to CPU (muted). */
+QLabel[role="engine-pill"] {
+    background-color: #14331f;
+    color: #7fe0a3;
+    border: 1px solid #1f5234;
+    border-radius: {{radius.sm}};
+    padding: 4px {{space.md}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+}
+
+QLabel[role="engine-pill"][state="empty"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_muted}};
+    border: 1px solid {{color.border}};
+}
+
+QLabel[role="engine-pill"][state="cpu"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_secondary}};
+    border: 1px solid {{color.border}};
+}
+
 QLabel[role="recording-pill"] {
     border-radius: {{radius.sm}};
     padding: 3px {{space.md}};
@@ -585,6 +611,16 @@ QPlainTextEdit:focus,
 QTextEdit:focus,
 QComboBox:focus {
     border-color: {{color.accent}};
+}
+
+/* Visually mark a QLineEdit that is mirroring another field (e.g.
+   the Stop hotkey field while "Use one hotkey for both" is on).
+   Muted background + muted text reads as "tracking, not editable"
+   without being completely invisible like a disabled widget. */
+QLineEdit[muted="true"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_muted}};
+    border-color: {{color.border}};
 }
 
 /* Replace the native ``::drop-down`` rendering — Qt's default

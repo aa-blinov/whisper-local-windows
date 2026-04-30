@@ -88,6 +88,14 @@ class ShortcutsView(QWidget):
         # programmatically (e.g. controller prefilling from config).
         self._suspend_emit = False
 
+        # Snapshot of the user's Stop hotkey taken just before we
+        # mirror the Start value over it on toggle-mode entry, so
+        # un-ticking can restore exactly what was there before.
+        # Only set on user-driven toggle (``_on_toggle_mode_changed``)
+        # — ``set_values`` skips it because the values come from
+        # config and don't need a "previous" copy.
+        self._previous_stop_hotkey: Optional[str] = None
+
         # Outer layout = top hint pinned + scrollable card stack.
         # Without the scroll area Qt tried to fit every card into
         # whatever vertical space the window had; once we pushed
@@ -187,10 +195,34 @@ class ShortcutsView(QWidget):
         # ---- Hotkeys card -----------------------------------------------
         hotkeys_card, hotkeys_form = _make_section_card("Hotkeys", self)
 
+        # Toggle-mode switch: when checked, the Start hotkey doubles
+        # as the Stop hotkey — pressing it again stops the recording.
+        # The HotkeyListener already supports this when start == stop,
+        # but exposing it as an explicit checkbox is much friendlier
+        # than asking the user to type the same combination into two
+        # fields. Cancel is greyed out in this mode too — the toggle
+        # flow is "one key, one job", and an extra cancel binding
+        # adds friction without earning its keep.
+        self._toggle_mode_cb = QCheckBox(
+            "One hotkey for recording — press once to start, again to stop",
+            hotkeys_card,
+        )
+        self._toggle_mode_cb.setObjectName("ToggleHotkeyCheckbox")
+        self._toggle_mode_cb.setToolTip(
+            "When on, the same hotkey starts and stops a recording. "
+            "Stop and Cancel fields below become read-only — only the "
+            "Start field is in use."
+        )
+        self._toggle_mode_cb.toggled.connect(self._on_toggle_mode_changed)
+        hotkeys_form.addRow("", self._toggle_mode_cb)
+
         self._start_edit = QLineEdit(hotkeys_card)
         self._start_edit.setObjectName("StartHotkeyEdit")
         self._start_edit.setPlaceholderText("e.g. ctrl+f2")
         self._start_edit.editingFinished.connect(self._emit_save)
+        # While toggle-mode is on, the Stop field mirrors Start —
+        # listen for live edits to keep them in sync visually.
+        self._start_edit.textChanged.connect(self._mirror_start_into_stop)
         hotkeys_form.addRow("Start recording", self._start_edit)
 
         self._stop_edit = QLineEdit(hotkeys_card)
@@ -465,6 +497,17 @@ class ShortcutsView(QWidget):
             self._stop_edit.setText(stop_hotkey)
             self._auto_paste_cb.setChecked(bool(auto_paste))
             self._cancel_edit.setText(cancel_hotkey or "")
+            # If the persisted config has the same combination for
+            # start and stop, the user is implicitly in toggle mode —
+            # tick the checkbox so the UI matches.  Empty start ==
+            # empty stop should NOT auto-tick (that's "no hotkey
+            # configured at all", not toggle).
+            same = bool(
+                start_hotkey
+                and start_hotkey.strip().lower() == stop_hotkey.strip().lower()
+            )
+            self._toggle_mode_cb.setChecked(same)
+            self._apply_toggle_mode(same)
         finally:
             self._suspend_emit = False
 
@@ -495,9 +538,24 @@ class ShortcutsView(QWidget):
         return self._start_edit.text().strip()
 
     def stop_hotkey(self) -> str:
+        # In toggle-mode the stop combo is implicitly the start
+        # combo — return it so the persisted config keeps both
+        # fields in sync (HotkeyListener relies on equality to
+        # decide whether to bind a single toggle handler).
+        if self._toggle_mode_cb.isChecked():
+            return self._start_edit.text().strip()
         return self._stop_edit.text().strip()
 
     def cancel_hotkey(self) -> str:
+        # Toggle-mode disables Cancel functionally — the user wanted
+        # a "one key, one job" recording flow. Returning an empty
+        # string here propagates through ``values()`` /
+        # ``save_requested`` so the persisted config drops the
+        # binding and the HotkeyListener stops registering it. The
+        # field text itself is preserved on screen so un-ticking
+        # restores the previous value transparently.
+        if self._toggle_mode_cb.isChecked():
+            return ""
         return self._cancel_edit.text().strip()
 
     def auto_paste(self) -> bool:
@@ -566,6 +624,70 @@ class ShortcutsView(QWidget):
 
     def _on_auto_paste_toggled(self, _checked: bool) -> None:
         self._emit_save()
+
+    def _on_toggle_mode_changed(self, checked: bool) -> None:
+        """User flipped 'Use one hotkey for both start and stop'.
+
+        Mirror Start into Stop and lock the Stop / Cancel fields,
+        but snapshot Stop's original text first so un-ticking
+        restores the user's previous binding instead of leaving
+        Stop frozen at the Start value. Cancel doesn't need this —
+        we never overwrite its text in toggle mode, only ignore it
+        in ``cancel_hotkey()``.
+        """
+        if checked:
+            # Capture the value the user had before we mirror Start
+            # in.  Skipped if we're already in toggle mode (would
+            # snapshot a value that's already a mirror of Start).
+            if self._previous_stop_hotkey is None:
+                self._previous_stop_hotkey = self._stop_edit.text()
+        else:
+            if self._previous_stop_hotkey is not None:
+                self._stop_edit.setText(self._previous_stop_hotkey)
+                self._previous_stop_hotkey = None
+        self._apply_toggle_mode(checked)
+        self._emit_save()
+
+    def _apply_toggle_mode(self, checked: bool) -> None:
+        """Lock / unlock the Stop and Cancel fields per ``checked``.
+        Pure UI shuffle — no signal emission.
+
+        Read-only (rather than disabled) makes it obvious that the
+        fields are *deactivated by toggle-mode*, not broken. The
+        ``muted="true"`` Qt property switches the field's QSS to
+        ``color.bg_elevated`` background + ``text_muted`` foreground
+        so the visual reads as "currently inactive" rather than a
+        normal editable input.
+
+        - **Stop** mirrors the Start value live (so the user sees
+          which hotkey actually stops a recording in toggle mode).
+        - **Cancel** keeps its previously-configured value so a
+          later un-tick restores it, but is muted — toggle mode is a
+          "one key for everything recording" UX and the cancel
+          escape hatch would muddy that.
+        """
+        for field in (self._stop_edit, self._cancel_edit):
+            field.setReadOnly(checked)
+            field.setProperty("muted", checked)
+            # ``setProperty`` on a styled widget needs an
+            # unpolish/polish cycle before Qt picks up the new
+            # selector match.
+            field.style().unpolish(field)
+            field.style().polish(field)
+        if checked:
+            self._stop_edit.setText(self._start_edit.text())
+
+    def _mirror_start_into_stop(self, new_text: str) -> None:
+        """Keep the Stop field synced with Start while toggle-mode
+        is on. No-op when toggle-mode is off — that's the regular
+        two-independent-fields path.
+
+        Bypasses ``_suspend_emit`` because this is a UI mirror, not
+        a programmatic load — we explicitly want the user's keystroke
+        in Start to ripple through and persist.
+        """
+        if self._toggle_mode_cb.isChecked():
+            self._stop_edit.setText(new_text)
 
     def _on_device_changed(self, _idx: int) -> None:
         self._emit_save()

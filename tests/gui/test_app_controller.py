@@ -348,7 +348,10 @@ def test_controller_syncs_topbar_model_on_init(qtbot):
 
     AppController(config=config, window=window)
 
-    assert "Large v3" in window.topbar._model_pill.text()
+    # Topbar pill shows the alias (compact) rather than the verbose
+    # ``display_name`` — keeps the pill from crowding the engine /
+    # cancel widgets on the same row.
+    assert "whisper-large-v3" in window.topbar._model_pill.text()
 
 
 def test_controller_updates_topbar_on_model_select(qtbot):
@@ -362,7 +365,7 @@ def test_controller_updates_topbar_on_model_select(qtbot):
     AppController(config=config, window=window)
     window.models_view.model_selected.emit("vosk-ru-small")
 
-    assert "Vosk" in window.topbar._model_pill.text()
+    assert "vosk-ru-small" in window.topbar._model_pill.text()
 
 
 def test_controller_clears_topbar_model_when_unknown(qtbot):

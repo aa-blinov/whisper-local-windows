@@ -18,6 +18,11 @@ text and bar fill change with state:
 - ``processing``    — value '● Processing' (accent), bar at 0
 - ``model_loading`` — same look as idle (the topbar's model pill
   already shows the load state; we don't compete)
+
+A second row above the STATUS line carries the active ONNX Runtime
+EP (``Engine: CoreML / CUDA / CPU``) so the user sees both
+"backend lifecycle" signals — what's running and on what — in one
+cluster instead of having to glance at the topbar separately.
 """
 
 from __future__ import annotations
@@ -53,9 +58,20 @@ _PILL_VARIANTS = {
     "processing": "processing",
 }
 
+# Engine-pill defaults (no model loaded yet).
+_NO_ENGINE_TEXT = "Engine: —"
+# Provider names that count as "real" hardware acceleration. CPU
+# is the muted fallback variant; everything else (including
+# DirectML / ROCm / Azure for forward-compatibility) gets the
+# accent green.
+_ACCELERATOR_PROVIDERS = frozenset({
+    "CUDA", "CoreML", "TensorRT", "DirectML", "ROCm", "Azure",
+})
+
 # Fixed height for the whole chip — matches the visual weight of
-# ResourceWidget's 32-px chip plus a row for the VU bar.
-_CHIP_HEIGHT_PX = 48
+# ResourceWidget's 32-px chip plus a row for the VU bar plus the
+# engine row above STATUS.
+_CHIP_HEIGHT_PX = 72
 
 
 class RecordingStatusWidget(QWidget):
@@ -69,28 +85,55 @@ class RecordingStatusWidget(QWidget):
         outer.setContentsMargins(10, 6, 10, 6)
         outer.setSpacing(4)
 
-        # Top row — STATUS label on the left, state value on the right.
-        # Mirrors how ResourceWidget paints "CPU  12%".
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
+        # Top row — ENGINE label on the left, EP pill on the right.
+        # Mirrors how ResourceWidget paints "CPU  12%".  Sits above
+        # STATUS so the two backend signals (what's running, on
+        # what) cluster together.
+        engine_row = QHBoxLayout()
+        engine_row.setContentsMargins(0, 0, 0, 0)
+        engine_row.setSpacing(8)
+
+        self._engine_label = QLabel("ENGINE", self)
+        self._engine_label.setObjectName("EngineLabel")
+        self._engine_label.setProperty("role", "chip-label")
+        engine_row.addWidget(self._engine_label)
+        engine_row.addStretch(1)
+
+        # Same ``role="chip-value"`` as the STATUS pill below so the
+        # two read as visually paired — just plain coloured text on
+        # the chip background, no extra border / pill rectangle.
+        self._engine_pill = QLabel("—", self)
+        self._engine_pill.setObjectName("EnginePill")
+        self._engine_pill.setProperty("role", "chip-value")
+        self._engine_pill.setProperty("state", "idle")
+        self._engine_pill.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._engine_pill.setToolTip(
+            "ONNX Runtime execution provider used by the loaded model"
+        )
+        engine_row.addWidget(self._engine_pill)
+        outer.addLayout(engine_row)
+
+        # Middle row — STATUS label + recording-state pill.
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(8)
 
         self._label = QLabel("STATUS", self)
         self._label.setObjectName("RecordingStatusLabel")
         self._label.setProperty("role", "chip-label")
-        row.addWidget(self._label)
-        row.addStretch(1)
+        status_row.addWidget(self._label)
+        status_row.addStretch(1)
 
         self._pill = QLabel(_PILL_LABELS["idle"], self)
         self._pill.setObjectName("RecordingStatusPill")
         self._pill.setProperty("role", "chip-value")
         self._pill.setProperty("state", "idle")
         self._pill.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        row.addWidget(self._pill)
+        status_row.addWidget(self._pill)
 
-        outer.addLayout(row)
+        outer.addLayout(status_row)
 
-        # VU meter sits below the row, full width of the chip.
+        # VU meter sits below the rows, full width of the chip.
         self._vu_meter = VUMeter(self)
         outer.addWidget(self._vu_meter)
 
@@ -115,3 +158,36 @@ class RecordingStatusWidget(QWidget):
     def set_input_level(self, level: float) -> None:
         """Push a fresh amplitude reading into the VU meter."""
         self._vu_meter.set_level(level)
+
+    def set_active_provider(self, provider: Optional[str]) -> None:
+        """Update the engine pill with the EP currently backing the
+        loaded model.  ``None`` (no model loaded yet) renders the
+        muted ``● —`` placeholder.  Accelerator names (CoreML /
+        CUDA / TensorRT / …) render in the accent green so a
+        fallback to CPU is immediately visible to the user.
+
+        Reuses the ``chip-value`` QSS role so the pill matches the
+        STATUS pill's geometry — same font weight, same plain
+        coloured text, no extra border.  Prefixes the provider name
+        with the same ``●`` glyph the STATUS pill uses for visual
+        rhythm: at the small font size, all-caps "CPU" reads taller
+        than title-case "Idle" without the bullet so the rows look
+        unbalanced; matching the bullet-prefix puts both rows on the
+        same baseline.
+        """
+        if not provider:
+            text = "● —"
+            state = "idle"
+        else:
+            text = f"● {provider}"
+            if provider in _ACCELERATOR_PROVIDERS:
+                # Re-use the existing ``processing`` accent shade —
+                # it's the closest match to "actively using the
+                # accelerator" from the values already in dark.qss.
+                state = "processing"
+            else:
+                state = "idle"
+        self._engine_pill.setText(text)
+        self._engine_pill.setProperty("state", state)
+        self._engine_pill.style().unpolish(self._engine_pill)
+        self._engine_pill.style().polish(self._engine_pill)

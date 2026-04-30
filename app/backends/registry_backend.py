@@ -141,6 +141,16 @@ class RegistryBackend:
     def health_check(self) -> bool:
         return self._inner.health_check()
 
+    def active_provider(self) -> Optional[str]:
+        # Pass-through; the inner OnnxAsrBackend exposes the EP that
+        # its loaded model is actually using (post-fallback). Returns
+        # ``None`` when no model is loaded or the inner backend
+        # doesn't surface the field (older fakes in unit tests).
+        getter = getattr(self._inner, "active_provider", None)
+        if callable(getter):
+            return getter()
+        return None
+
     def load(self) -> None:
         self._inner.load()
 

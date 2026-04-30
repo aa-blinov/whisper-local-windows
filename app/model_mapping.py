@@ -64,6 +64,18 @@ class ModelInfo:
     compute_type: str = "float16"
     backend_kind: str = "onnx_asr"
     family: str = "Whisper"
+    # Some models are known to fail on CoreMLExecutionProvider /
+    # CUDAExecutionProvider with op-level errors that ORT's session-
+    # create takes a long time to surface (e.g. Istupakov's
+    # GigaAM-v3 / T-One / Vosk all fail with
+    # ``HandleNegativeAxis ... axis 2 is not in valid range`` after
+    # ~75 s of CoreML compilation).  Setting this flag tells the
+    # backend to skip the accelerator entirely for the model and
+    # load straight into CPU, removing the wait without changing
+    # the eventual outcome (the backend would have retried on CPU
+    # anyway after the timeout).  Only mark a model True after
+    # confirming the failure empirically.
+    prefer_cpu_provider: bool = False
     # Which onnx-asr family adapter to use.  Drives backend behaviour
     # (language passing, language reporting).  Independent of the UI
     # ``family`` label which is purely cosmetic.
@@ -167,6 +179,11 @@ MODELS: Tuple[ModelInfo, ...] = (
         # The ``-e2e-`` variant emits text already punctuated and
         # normalised — no separate punctuator needed for our paste flow.
         onnx_load_id="gigaam-v3-e2e-ctc",
+        # CoreML EP fails at session-create with
+        # ``HandleNegativeAxis ... axis 2 is not in valid range``
+        # — same op pattern as T-One / Vosk.  Skip the 75 s
+        # CoreML compile attempt, go straight to CPU.
+        prefer_cpu_provider=True,
     ),
     ModelInfo(
         alias="gigaam-v3-rnnt",
@@ -185,6 +202,8 @@ MODELS: Tuple[ModelInfo, ...] = (
         family="GigaAM",
         onnx_family="gigaam",
         onnx_load_id="gigaam-v3-e2e-rnnt",
+        # See gigaam-v3-ctc — same shape-inference incompatibility.
+        prefer_cpu_provider=True,
     ),
     # ---- Parakeet TDT v3 (NVIDIA, multilingual, ONNX) ----------------------
     ModelInfo(

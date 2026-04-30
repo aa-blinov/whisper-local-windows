@@ -7,7 +7,19 @@ import sys
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-from PySide6.QtGui import QIcon
+import math
+
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import (
+    QColor,
+    QIcon,
+    QImageReader,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPixmap,
+)
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication
 
 from app.gui.controllers.app_controller import AppController
@@ -17,15 +29,215 @@ from app.gui.theme import apply_theme, load_bundled_fonts
 from app.utils import is_cached_for_info, is_model_cached, resolve_asset_path
 
 
-def _load_app_icon() -> QIcon:
-    """Build a QIcon that includes both the multi-size .ico and the .png so
-    the platform window manager can pick the right resolution for the
-    title bar, taskbar, and Alt-Tab switcher."""
+def _add_ico_frames(icon: QIcon, ico_path: str) -> int:
+    """Add every embedded frame of a Windows ICO file to ``icon``.
+
+    Why we can't just ``QIcon.addFile(path.ico)``: Qt's ICO plugin on
+    macOS only loads the file's *first* frame.  Our ``tray_idle.ico``
+    bundles 7 sizes from 16 × 16 up to 256 × 256, but QIcon ends up
+    holding the 16 × 16 entry only — so the macOS Dock (which wants
+    128 × 128) up-scales it from 16 px and the user sees a blurry
+    blob instead of the real logo.
+
+    Iterating frames via ``QImageReader.jumpToImage`` lets us pull
+    every embedded size into the QIcon's pixmap cache, and macOS
+    then picks the closest match to the requested rendering size.
+
+    Returns the number of frames successfully added.
+    """
+    reader = QImageReader(ico_path)
+    if not reader.canRead():
+        return 0
+    frame_count = reader.imageCount() or 1
+    added = 0
+    for i in range(frame_count):
+        if not reader.jumpToImage(i):
+            break
+        image = reader.read()
+        if image.isNull():
+            continue
+        icon.addPixmap(QPixmap.fromImage(image))
+        added += 1
+    return added
+
+
+# Accent gradient for the squircle Dock icon — matches the
+# ``TOKENS.colors.accent`` / ``accent_hover`` pair from
+# ``app.gui.theme``.  Vertical top-to-bottom gradient gives a subtle
+# sheen that reads as "modern app" without overpromising depth.
+_DOCK_GRADIENT_TOP = QColor("#5b8cff")
+_DOCK_GRADIENT_BOTTOM = QColor("#7aa2ff")
+# Apple's iOS / macOS app-icon shape is a *superellipse* (Lamé curve
+# ``|x|^n + |y|^n = 1``), not a rounded rectangle: rounded rects
+# join straight edges to circular corners with a visible curvature
+# discontinuity (G1 only), while a superellipse has a smooth
+# curvature derivative all the way around (G2).  ``n ≈ 4`` is the
+# closest single-exponent superellipse to Apple's actual app-icon
+# silhouette — slightly rounder than ``n = 5``, less square at the
+# corners, and visually matches what shows up next to it in the
+# Dock (Steam, Music, Calculator, …).
+_DOCK_SUPERELLIPSE_N = 4.0
+# Apple's app-icon design grid leaves a margin around the squircle.
+# The published content area is 824 / 1024 ≈ 80 %, but the visible
+# squircle in shipped system apps (Steam, Music, Calculator, …)
+# sits at ~75 % of the canvas — eyeballed against neighbours in
+# the Dock until ours matched their footprint.
+_DOCK_ICON_OCCUPANCY = 0.75
+# Heroicons microphone-solid is rendered at ~50 % of the icon width
+# so it sits centred with comfortable padding — the proportion most
+# Mac apps with single-glyph logos (Slack mic, Zoom mic, etc.) use.
+_DOCK_FOREGROUND_RATIO = 0.50
+
+
+def _build_superellipse_path(size: float, n: float = _DOCK_SUPERELLIPSE_N) -> QPainterPath:
+    """Build a superellipse (Lamé curve) path inscribed in a
+    ``size × size`` square — the actual macOS / iOS app-icon shape.
+
+    Parametric form (centred on origin, half-width = a):
+        x(t) = sgn(cos t) · a · |cos t|^(2/n)
+        y(t) = sgn(sin t) · a · |sin t|^(2/n)
+
+    n = 2  → a regular ellipse (circle when a = b)
+    n = 4  → classic squircle, a touch boxier
+    n = 5  → close to Apple's actual app-icon shape
+    n = 6+ → approaches a square
+
+    A 240-segment polyline is more than enough for the antialiased
+    Dock thumbnail; the eye can't tell apart from a true G2 curve
+    at any Dock size.
+    """
+    cx = size / 2.0
+    cy = size / 2.0
+    a = size / 2.0
+
+    path = QPainterPath()
+    steps = 240
+    exp = 2.0 / n
+    for i in range(steps + 1):
+        t = 2.0 * math.pi * i / steps
+        ct = math.cos(t)
+        st = math.sin(t)
+        x = cx + a * math.copysign(abs(ct) ** exp, ct)
+        y = cy + a * math.copysign(abs(st) ** exp, st)
+        if i == 0:
+            path.moveTo(QPointF(x, y))
+        else:
+            path.lineTo(QPointF(x, y))
+    path.closeSubpath()
+    return path
+
+
+def _render_white_glyph(svg_path: str, size: int) -> Optional[QPixmap]:
+    """Rasterise a monochromatic SVG into a white-on-transparent
+    pixmap suitable for compositing onto a coloured Dock background.
+
+    The SVGs we ship (Heroicons) declare ``fill="currentColor"`` /
+    ``stroke="currentColor"``, so ``QSvgRenderer`` paints them in
+    whatever pen colour is active — black by default. We render
+    once, then replace the result's black pixels with white via the
+    ``CompositionMode_SourceIn`` trick: filling a rect over the
+    rasterised glyph keeps only pixels where the original alpha
+    channel was non-zero, so the glyph silhouette becomes a solid
+    white shape.
+    """
+    if not svg_path or not os.path.isfile(svg_path):
+        return None
+    renderer = QSvgRenderer(svg_path)
+    if not renderer.isValid():
+        return None
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    try:
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        renderer.render(painter, QRectF(0, 0, size, size))
+        painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        painter.fillRect(pixmap.rect(), QColor(255, 255, 255))
+    finally:
+        painter.end()
+    return pixmap
+
+
+def _render_dock_icon_at(size: int) -> QPixmap:
+    """Render the Dock-style squircle app icon at ``size × size`` px.
+
+    Layers (bottom-up):
+      1. Transparent margin matching Apple's 824/1024 design grid
+         so the visible squircle sits at ~80 % of the canvas — same
+         occupancy as system apps (Music, Calculator, Photo Booth).
+      2. Superellipse (G2 squircle) filled with the accent gradient.
+      3. Heroicons ``microphone-solid`` glyph in white, centred at
+         ~50 % of the squircle width.
+    """
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    try:
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        inner_size = size * _DOCK_ICON_OCCUPANCY
+        offset = (size - inner_size) / 2.0
+
+        # Background squircle (true superellipse, not a rounded rect),
+        # translated by ``offset`` so it sits centred inside the
+        # design-grid margin.
+        path = _build_superellipse_path(inner_size)
+        path.translate(offset, offset)
+        gradient = QLinearGradient(0, offset, 0, offset + inner_size)
+        gradient.setColorAt(0.0, _DOCK_GRADIENT_TOP)
+        gradient.setColorAt(1.0, _DOCK_GRADIENT_BOTTOM)
+        painter.fillPath(path, gradient)
+
+        # Foreground microphone glyph, sized relative to the inner
+        # squircle (not the full canvas) so it stays at the visual
+        # 50 % proportion users see in other Dock icons.
+        glyph_size = int(inner_size * _DOCK_FOREGROUND_RATIO)
+        glyph = _render_white_glyph(
+            resolve_asset_path("gui/styles/icons/microphone-solid.svg"),
+            glyph_size,
+        )
+        if glyph is not None:
+            glyph_offset = (size - glyph_size) // 2
+            painter.setClipPath(path)
+            painter.drawPixmap(glyph_offset, glyph_offset, glyph)
+    finally:
+        painter.end()
+    return pixmap
+
+
+def _build_macos_dock_icon() -> QIcon:
+    """Programmatically assemble a Mac-native Dock app icon.
+
+    Renders the squircle + microphone composite at every Dock size
+    macOS asks for (16 / 32 / 64 / 128 / 256 / 512 / 1024) so the
+    same QIcon answers crisply on @1x and @2x density displays
+    without re-rasterising on demand.
+    """
     icon = QIcon()
-    for asset in ("assets/tray_idle.ico", "assets/tray_idle.png"):
-        path = resolve_asset_path(asset)
-        if path and os.path.isfile(path):
-            icon.addFile(path)
+    for size in (16, 32, 64, 128, 256, 512, 1024):
+        icon.addPixmap(_render_dock_icon_at(size))
+    return icon
+
+
+def _load_app_icon() -> QIcon:
+    """Build the QIcon used for the app's window / taskbar / Dock.
+
+    macOS gets a procedurally-rendered squircle (gradient + Heroicons
+    microphone) so the Dock and Cmd-Tab show a sharp, on-brand icon
+    at every size the system asks for. Other platforms fall back to
+    the bundled multi-resolution ICO + PNG so taskbar / Alt-Tab pick
+    the right embedded size.
+    """
+    if sys.platform == "darwin":
+        return _build_macos_dock_icon()
+
+    icon = QIcon()
+    ico_path = resolve_asset_path("assets/tray_idle.ico")
+    if ico_path and os.path.isfile(ico_path):
+        _add_ico_frames(icon, ico_path)
+    png_path = resolve_asset_path("assets/tray_idle.png")
+    if png_path and os.path.isfile(png_path):
+        icon.addFile(png_path)
     return icon
 
 
@@ -485,6 +697,32 @@ def main() -> int:
     resource_monitor.start()
 
     window.show()
+
+    # macOS Dock-click handling: when the user clicks the app's Dock
+    # icon while the main window is hidden (close button → tray
+    # path), Qt fires ``applicationStateChanged(ApplicationActive)``
+    # but does NOT restore the window for us.  Listen for the
+    # transition and unhide / raise / activate the window so the
+    # Dock icon behaves like every other Mac app.  Skip on
+    # Windows / Linux — the tray icon is the canonical restore
+    # affordance there, not the taskbar / launcher button.
+    if sys.platform == "darwin":
+        from PySide6.QtCore import Qt as _Qt
+
+        def _on_application_state_changed(state) -> None:
+            if state != _Qt.ApplicationState.ApplicationActive:
+                return
+            if window.isVisible():
+                # User just brought the existing window back to
+                # focus — nothing to restore. Still raise it to
+                # make sure it's not under another app's window.
+                window.raise_()
+                return
+            window.showNormal()
+            window.raise_()
+            window.activateWindow()
+
+        app.applicationStateChanged.connect(_on_application_state_changed)
 
     # Run the persisted-model autoload on a daemon thread so the Qt
     # main thread isn't blocked if the worker process is still finishing

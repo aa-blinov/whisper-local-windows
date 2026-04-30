@@ -287,9 +287,13 @@ def test_load_coreml_explicit_passes_provider_options(monkeypatch):
     providers = kwargs.get("providers")
     assert providers is not None and len(providers) == 2
     assert providers[0][0] == "CoreMLExecutionProvider"
-    assert providers[0][1] == {
-        "ModelFormat": "MLProgram", "MLComputeUnits": "ALL",
-    }
+    options = providers[0][1]
+    assert options["ModelFormat"] == "MLProgram"
+    assert options["MLComputeUnits"] == "ALL"
+    # Defensive defaults pinned to today's ORT defaults so a future
+    # version flip doesn't change behaviour silently.
+    assert options["RequireStaticInputShapes"] == "0"
+    assert options["EnableOnSubgraphs"] == "0"
     assert providers[1] == "CPUExecutionProvider"
 
 
@@ -304,6 +308,141 @@ def test_load_failure_transitions_to_error(monkeypatch):
     backend.load()
     assert _wait(lambda: backend.status() == "error")
     assert backend.health_check() is False
+
+
+# ---- active_provider() reporting ------------------------------------------
+
+
+def _install_fake_onnx_asr_with_session(
+    monkeypatch, provider_name: str, session_attr: str = "_encoder",
+):
+    """Install a fake ``onnx_asr`` whose ``load_model`` returns a model
+    object exposing ``<session_attr>.get_providers()`` — exactly the
+    layout ``_detect_active_provider`` probes for in real onnx-asr
+    models (encoder/decoder split or single ``_model`` attribute).
+    """
+    fake_session = MagicMock()
+    fake_session.get_providers.return_value = [provider_name, "CPUExecutionProvider"]
+
+    fake_model = MagicMock(spec=[session_attr, "recognize", "with_timestamps"])
+    setattr(fake_model, session_attr, fake_session)
+    fake_model.recognize.return_value = "fake transcription"
+
+    fake_module = types.ModuleType("onnx_asr")
+    fake_module.load_model = MagicMock(return_value=fake_model)
+    monkeypatch.setitem(sys.modules, "onnx_asr", fake_module)
+    return fake_module, fake_model
+
+
+def test_active_provider_is_none_before_load():
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x")
+    assert backend.active_provider() is None
+
+
+def test_active_provider_reports_coreml_when_session_picks_it(monkeypatch):
+    """Real-world Mac path: requested ``[CoreML, CPU]``, ORT bound the
+    session to CoreML — ``active_provider()`` reports the pretty form."""
+    _install_fake_onnx_asr_with_session(monkeypatch, "CoreMLExecutionProvider")
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="coreml")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    assert backend.active_provider() == "CoreML"
+
+
+def test_active_provider_reports_cuda(monkeypatch):
+    _install_fake_onnx_asr_with_session(monkeypatch, "CUDAExecutionProvider")
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="cuda")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    assert backend.active_provider() == "CUDA"
+
+
+def test_active_provider_probes_single_model_attribute(monkeypatch):
+    """CTC-family models (whisper-CTC, gigaam-CTC, t-one, silero,
+    pyannote, wespeaker) keep a single ``_model`` session instead of
+    encoder/decoder. The probe should fall back to that attribute."""
+    _install_fake_onnx_asr_with_session(
+        monkeypatch, "CPUExecutionProvider", session_attr="_model",
+    )
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="cpu")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    assert backend.active_provider() == "CPU"
+
+
+def test_active_provider_stamps_cpu_after_accelerator_retry(monkeypatch):
+    """First ``load_model`` raises a CUDA-style provider error, second
+    one (forced ``[CPU]``) succeeds — ``active_provider`` must report
+    ``"CPU"`` even though the first request was ``cuda``, so the UI
+    pill reflects the actual fallback rather than the original
+    request."""
+    fake_session = MagicMock()
+    fake_session.get_providers.return_value = ["CPUExecutionProvider"]
+    fake_model = MagicMock(spec=["_encoder", "recognize"])
+    fake_model._encoder = fake_session
+    fake_model.recognize.return_value = ""
+
+    fake_module = types.ModuleType("onnx_asr")
+    # First call raises a CUDA-flavoured error so the backend's retry
+    # branch fires; second call (with providers=[CPUExecutionProvider])
+    # returns the fake model.
+    fake_module.load_model = MagicMock(side_effect=[
+        RuntimeError("CUDAExecutionProvider not available"),
+        fake_model,
+    ])
+    monkeypatch.setitem(sys.modules, "onnx_asr", fake_module)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="cuda")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    assert backend.active_provider() == "CPU"
+    # Sanity: load_model called twice — the original CUDA attempt and
+    # the CPU retry.
+    assert fake_module.load_model.call_count == 2
+
+
+def test_active_provider_is_cleared_on_change_model(monkeypatch):
+    """Switching models drops the cached EP back to ``None`` so the
+    UI pill empties out while the new model loads (and gets
+    re-stamped once the new session binds)."""
+    _install_fake_onnx_asr_with_session(monkeypatch, "CoreMLExecutionProvider")
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="coreml")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    assert backend.active_provider() == "CoreML"
+
+    backend.change_model("y")
+    # ``change_model`` clears the field synchronously before the new
+    # load thread starts; we don't have to wait for the next ``ready``.
+    assert backend.active_provider() in (None, "CoreML")
+
+
+def test_active_provider_is_cleared_on_shutdown(monkeypatch):
+    _install_fake_onnx_asr_with_session(monkeypatch, "CoreMLExecutionProvider")
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="coreml")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    backend.shutdown()
+    assert backend.active_provider() is None
 
 
 def test_import_error_transitions_to_error(monkeypatch):

@@ -115,6 +115,13 @@ class SubprocessBackend:
         self._status_cache: str = "stopped"
         self._status_cache_lock = threading.Lock()
 
+        # Active-EP cache populated by ``provider_change`` push
+        # messages from the worker — see ``active_provider``. ``None``
+        # means either no model is loaded yet or the underlying
+        # backend doesn't surface the field.
+        self._provider_cache: Optional[str] = None
+        self._provider_cache_lock = threading.Lock()
+
         # Async init: don't block the caller waiting for the worker
         # to come up.  ``__init__`` returns immediately; the reader
         # thread captures the init ack into ``_init_event`` and any
@@ -188,6 +195,20 @@ class SubprocessBackend:
                     continue
                 with self._status_cache_lock:
                     self._status_cache = new_status
+            elif msg[0] == "provider_change":
+                # Worker pushes the EP that ``onnx_asr.load_model`` is
+                # actually using as soon as it knows (after the
+                # session is built, including any retry-on-CPU
+                # fallback). ``None`` is a valid value — model was
+                # unloaded or never bound to a session.
+                try:
+                    new_provider = msg[1]
+                except Exception:  # pragma: no cover — defensive
+                    continue
+                if new_provider is not None:
+                    new_provider = str(new_provider)
+                with self._provider_cache_lock:
+                    self._provider_cache = new_provider
             elif msg[0] == "log":
                 # Re-emit worker log records through the parent's
                 # logging system so they land in app.log + Logs view.
@@ -259,6 +280,15 @@ class SubprocessBackend:
     def health_check(self) -> bool:
         # Same fast-path as ``status()`` — no IPC.
         return self.status() == "ready"
+
+    def active_provider(self) -> Optional[str]:
+        # Served from the local cache populated by ``provider_change``
+        # push messages from the worker; no IPC.  ``None`` means
+        # either no model is loaded yet (worker hasn't sent the first
+        # ``provider_change`` since startup) or the inner backend
+        # doesn't expose the field (legacy / fake doubles in tests).
+        with self._provider_cache_lock:
+            return self._provider_cache
 
     def current_model(self) -> str:
         return self._send_cmd(("current_model",), timeout=_FAST_TIMEOUT)
