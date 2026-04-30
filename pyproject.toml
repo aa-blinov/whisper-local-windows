@@ -82,6 +82,7 @@ include = ["app*"]
 
 [dependency-groups]
 dev = [
+    "py2app>=0.28.10",
     "pytest>=9.0.3",
     "pytest-qt>=4.5.0",
 ]

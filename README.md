@@ -135,10 +135,40 @@ features:
 - **Accessibility** — required by `pynput` for global hotkeys and by
   `pyautogui` for the auto-paste keystroke. macOS won't prompt for
   this automatically; open *System Settings → Privacy & Security →
-  Accessibility* and add the binary you launch (`Terminal`, `iTerm`,
-  or your IDE — whichever process invokes `uv run`). Without it the
-  hotkeys log a one-time warning at startup and the dictation flow
-  stays inactive; the file-transcribe tab still works.
+  Accessibility* and add the binary you launch.
+
+  Recommended path: build the proper `.app` bundle (next section)
+  and add **`Lazy to Text.app`** instead of trying to whitelist
+  `python3.12` from inside the venv — `.app` gives you a clean
+  identity in the Accessibility list, persistent permissions
+  across sessions, and a real Cmd-Tab title.
+
+### Run as a macOS .app (recommended on Mac)
+
+```bash
+./scripts/build-macos.sh             # alias / dev (5–10 s)
+open "dist/Lazy to Text.app"
+```
+
+The script invokes [`py2app`](https://py2app.readthedocs.io) in
+**alias mode**: the `.app` is a thin shell that symlinks back into
+the project's venv, so each build takes seconds and source edits
+in `app/` are picked up on the next launch with no rebuild. The
+host process now reports as **Lazy to Text** (not `python3.12`),
+microphone / Accessibility prompts use the bundle identifier
+`ai.eora.lazytotext`, and the bundled icon is the same squircle
+the in-app code paints.
+
+When you're ready to distribute:
+
+```bash
+./scripts/build-macos.sh --release   # full bundle, 5–10 minutes
+```
+
+…produces a self-contained `.app` (no venv dependency) under
+`dist/`. Code signing is ad-hoc only; pair with an Apple Developer
+ID + `xcrun notarytool submit` if you want to ship outside the
+Mac App Store without Gatekeeper warnings.
 
 ## Screenshots
 
