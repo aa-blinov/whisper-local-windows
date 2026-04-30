@@ -460,26 +460,31 @@ def _preload_onnx_asr_async() -> "threading.Thread":
     return t
 
 
-def _autoload_persisted_model(backend) -> None:
-    """Kick off the persisted model load if its weights are already on disk.
+def _autoload_persisted_model(backend, config=None) -> None:
+    """Kick off a model load on startup, picking the best
+    candidate available on disk.
 
-    Called once at startup, after the recording stack is built but
-    before the main window is shown.  Returns immediately — the
-    backend's ``load()`` spawns a daemon thread internally and the
-    UI paints the loading state from the model card / topbar polling
-    machinery.
+    Called once at startup, after the recording stack is built
+    but before the main window is shown.  Returns immediately —
+    the backend's ``load()`` spawns a daemon thread internally
+    and the UI paints the loading state from the model card /
+    topbar polling machinery.
 
-    Behaviour:
+    Selection order:
 
-    - ``backend is None``        → no-op (early shutdown / tests).
-    - Model in registry, cached  → log + ``backend.load()``.
-    - Model in registry, NOT     → log "skipping auto-load"; user has
-      cached                       to click Download deliberately so
-                                   they see the progress bar (a silent
-                                   1.5 GB transfer would feel like a
-                                   hang).
-    - Unknown model id (raw HF   → fall back to the lenient HF cache
-      path the user pasted)        check; load if anything's on disk.
+    1. If the persisted model from ``config.yaml`` is cached →
+       load that.  Honours the user's last explicit pick.
+    2. Otherwise pick the first cached model in registry display
+       order.  Avoids the "fresh restart, recording does
+       nothing" pothole when ``config.yaml`` points at a model
+       the user removed (or never downloaded — e.g. the default
+       ``parakeet-tdt-v3`` on a Mac that's been working with
+       ``gigaam-v3-ctc``).  We log the swap so the Logs view
+       explains why a different model came up than what
+       Settings currently reads.
+    3. Nothing on disk at all → log "skipping auto-load" so
+       Settings shows an empty state instead of pretending to
+       load something that isn't there.
     """
     import logging
 
@@ -487,7 +492,7 @@ def _autoload_persisted_model(backend) -> None:
     if backend is None:
         return
 
-    from app.model_mapping import alias_for, get_model
+    from app.model_mapping import MODELS, alias_for, get_model
 
     canonical = backend.current_model()
     try:
@@ -498,20 +503,63 @@ def _autoload_persisted_model(backend) -> None:
     else:
         cached = is_cached_for_info(info)
 
-    if not cached:
+    if cached:
+        display = info.display_name if info is not None else canonical
         log.info(
-            "Persisted model %s is not cached — skipping auto-load. "
-            "Waiting for the user to pick a model.",
-            canonical,
+            "Persisted model %s is cached — kicking off background load.",
+            display,
         )
+        backend.load()
         return
 
-    display = info.display_name if info is not None else canonical
+    # Persisted model isn't cached — look for any cached fallback
+    # in registry order so the app still comes up with a working
+    # backend instead of an idle "click Download" placeholder.
+    for candidate in MODELS:
+        if not is_cached_for_info(candidate):
+            continue
+        log.info(
+            "Persisted model %s is not cached — falling back to "
+            "cached %s (%s).  Pick a different model in Settings to "
+            "override.",
+            canonical, candidate.display_name, candidate.alias,
+        )
+        change = getattr(backend, "change_model", None)
+        if callable(change):
+            try:
+                change(candidate.canonical)
+            except Exception as exc:  # pragma: no cover — defensive
+                log.warning("change_model fallback raised: %s", exc)
+                return
+        # Persist the fallback into config.yaml too — otherwise
+        # ``_get_active_alias`` in the controller still reads the
+        # uncached pick from disk and the Models tab paints the
+        # wrong card as Active. ``config`` is optional so ad-hoc
+        # callers (tests, future scripts) don't have to wire it.
+        if config is not None:
+            try:
+                config.update_user_setting(
+                    "whisper", "model", candidate.alias,
+                )
+                if candidate.compute_type:
+                    config.update_user_setting(
+                        "whisper", "compute_type",
+                        candidate.compute_type,
+                    )
+            except Exception as exc:  # pragma: no cover — defensive
+                log.warning(
+                    "Failed to persist fallback model into config: %s",
+                    exc,
+                )
+        backend.load()
+        return
+
     log.info(
-        "Persisted model %s is cached — kicking off background load.",
-        display,
+        "Persisted model %s is not cached and no other model is "
+        "downloaded — skipping auto-load. Waiting for the user to "
+        "pick a model.",
+        canonical,
     )
-    backend.load()
 
 
 def main() -> int:
@@ -768,7 +816,7 @@ def main() -> int:
 
     _threading.Thread(
         target=_autoload_persisted_model,
-        args=(backend,),
+        args=(backend, config),
         daemon=True,
         name="autoload-model",
     ).start()
