@@ -43,17 +43,21 @@ from app.gui.widgets.vu_meter import VUMeter
 
 _RECORDING_STATES = ("idle", "recording", "processing", "model_loading")
 
-# Pill text per active state — model_loading collapses onto the
-# idle look so we don't compete with the topbar's loading pill.
+# Pill text per active state.  ``model_loading`` used to collapse
+# onto the idle label back when the topbar carried the only
+# loading indicator; with the engine pill living in this widget
+# now, the user needs an explicit "model is loading" cue here too
+# so the pressed-hotkey rejections ("Model is not ready yet")
+# correlate with what the chip shows.
 _PILL_LABELS = {
     "idle": "● Idle",
-    "model_loading": "● Idle",
+    "model_loading": "● Loading model…",
     "recording": "● Recording",
     "processing": "● Processing",
 }
 _PILL_VARIANTS = {
     "idle": "idle",
-    "model_loading": "idle",
+    "model_loading": "processing",  # accent shade — same as transcribe
     "recording": "recording",
     "processing": "processing",
 }

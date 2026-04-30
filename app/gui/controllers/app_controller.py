@@ -911,6 +911,13 @@ class AppController(
         and push it into the sidebar's engine pill.  Idempotent —
         safe to call from any state transition or timer tick.
         ``None`` clears the pill back to its empty / muted state.
+
+        While the recording stack is in ``model_loading``, the
+        backend's active_provider is still ``None`` (the EP is
+        bound by ``onnx_asr.load_model`` only after the load
+        finishes).  Render the pill as "Loading…" in that window
+        so the chip doesn't sit at ``—`` for the entire compile
+        time and contradict the STATUS pill right below it.
         """
         sidebar = getattr(self._window, "sidebar", None)
         target = (
@@ -927,6 +934,24 @@ class AppController(
             except Exception:  # pragma: no cover — defensive
                 pass
             return
+
+        # Loading-priority: show "Loading…" while the backend is
+        # bringing a model up.  Once the load completes, fall
+        # through to ``active_provider`` which has the real EP.
+        current_state_getter = getattr(recording, "current_state", None)
+        current_state = None
+        if callable(current_state_getter):
+            try:
+                current_state = current_state_getter()
+            except Exception:  # pragma: no cover — defensive
+                current_state = None
+        if current_state == "model_loading":
+            try:
+                target("Loading…")
+            except Exception:  # pragma: no cover — defensive
+                pass
+            return
+
         getter = getattr(recording, "active_provider", None)
         provider = None
         if callable(getter):
