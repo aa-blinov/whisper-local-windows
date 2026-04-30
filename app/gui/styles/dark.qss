@@ -623,6 +623,18 @@ QLineEdit[muted="true"] {
     border-color: {{color.border}};
 }
 
+/* Validation feedback: red border when the user typed an
+   unparseable hotkey combination.  Tooltip on the same widget
+   carries the human-readable reason ("ctrl required for letter
+   shortcuts", "f25 is not a valid key", etc.). */
+QLineEdit[invalid="true"] {
+    border-color: {{color.danger}};
+}
+
+QLineEdit[invalid="true"]:focus {
+    border-color: {{color.danger}};
+}
+
 /* Replace the native ``::drop-down`` rendering — Qt's default
    sub-control draws its own background on top of our rounded
    border, so the chevron looks like it's sitting in a square

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.gui.smooth_scroll import apply_smooth_scroll
+from app.gui.views._hotkey_validation import validate_all
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -510,6 +511,11 @@ class ShortcutsView(QWidget):
             self._apply_toggle_mode(same)
         finally:
             self._suspend_emit = False
+        # Run validation once the suspend flag is back down so the
+        # invalid-border / tooltip state matches the freshly-loaded
+        # values.  Doing it inside the suspend block would skip the
+        # repaint triggered by the property change.
+        self._refresh_hotkey_validation()
 
     def set_devices(
         self,
@@ -620,7 +626,39 @@ class ShortcutsView(QWidget):
     def _emit_save(self) -> None:
         if self._suspend_emit:
             return
+        # Run validation alongside every save so red-border / tooltip
+        # state stays in sync with whatever's currently typed.  We
+        # still emit ``save_requested`` even when fields are invalid
+        # — backend writes a warning to the Logs view, the UI
+        # carries the visual feedback, and the user can keep typing
+        # to fix it without the controller getting stuck on a
+        # partial edit.
+        self._refresh_hotkey_validation()
         self.save_requested.emit(self.values())
+
+    def _refresh_hotkey_validation(self) -> None:
+        """Run :func:`validate_all` over the current field values
+        and toggle the ``invalid`` Qt property + tooltip on each
+        QLineEdit. Pure UI shuffle — no signals."""
+        errors = validate_all(
+            start=self._start_edit.text(),
+            stop=self._stop_edit.text(),
+            cancel=self._cancel_edit.text(),
+            toggle_mode=self._toggle_mode_cb.isChecked(),
+        )
+        for field_name, edit in (
+            ("start", self._start_edit),
+            ("stop", self._stop_edit),
+            ("cancel", self._cancel_edit),
+        ):
+            err = errors.get(field_name)
+            edit.setProperty("invalid", bool(err))
+            edit.setToolTip(err or "")
+            # ``setProperty`` on a styled widget needs an
+            # unpolish/polish cycle for Qt to repaint with the new
+            # selector match.
+            edit.style().unpolish(edit)
+            edit.style().polish(edit)
 
     def _on_auto_paste_toggled(self, _checked: bool) -> None:
         self._emit_save()
