@@ -24,6 +24,8 @@ import logging
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
+from app.gui.widgets.dialogs import confirm, notify
+
 
 log = logging.getLogger(__name__)
 
@@ -47,14 +49,11 @@ class HistoryMixin:
         entries = self._history.get_entries()
         if not entries:
             return
-        answer = QMessageBox.question(
+        if not confirm(
             self._window,
             "Clear history?",
             f"Delete all {len(entries)} transcriptions? This cannot be undone.",
-            QMessageBox.Yes | QMessageBox.Cancel,
-            QMessageBox.Cancel,
-        )
-        if answer != QMessageBox.Yes:
+        ):
             return
         self._history.clear_history()
         self._window.history_view.set_entries(self._history.get_entries())
@@ -64,7 +63,7 @@ class HistoryMixin:
             return
         entries = self._history.get_entries()
         if not entries:
-            QMessageBox.information(
+            notify(
                 self._window,
                 "Nothing to export",
                 "Your history is empty — record a transcription first.",
@@ -84,17 +83,18 @@ class HistoryMixin:
             log.warning("History export raised: %s", exc)
             ok = False
         if ok:
-            QMessageBox.information(
+            notify(
                 self._window,
                 "History exported",
                 f"Saved {len(entries)} transcriptions to:\n{path}",
             )
         else:
-            QMessageBox.warning(
+            notify(
                 self._window,
                 "Export failed",
                 "Could not write the history file. Check the destination "
                 "path and permissions.",
+                kind="warning",
             )
 
     def _on_history_copy(self, text: str) -> None:

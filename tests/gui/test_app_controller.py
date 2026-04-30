@@ -431,9 +431,12 @@ def test_controller_populates_history_view_from_manager(qtbot):
 
 
 def test_controller_clears_history_through_manager(qtbot, monkeypatch):
-    """Clear is destructive — confirm via QMessageBox before
-    forwarding to the manager. The test simulates clicking Yes."""
-    from PySide6.QtWidgets import QMessageBox
+    """Clear is destructive — confirm dialog must approve before the
+    manager is invoked.  The test patches our ``confirm`` helper to
+    simulate clicking the Yes button (we used to monkeypatch
+    ``QMessageBox.question`` directly; the helper replaced it so the
+    Mac alert shows the app icon instead of the system "?")."""
+    import app.gui.controllers._history_mixin as history_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
 
@@ -442,10 +445,7 @@ def test_controller_clears_history_through_manager(qtbot, monkeypatch):
     config = FakeConfig()
     history = FakeHistory([FakeHistoryEntry("a")])
 
-    monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda *a, **kw: QMessageBox.Yes,
-    )
+    monkeypatch.setattr(history_module, "confirm", lambda *a, **kw: True)
 
     AppController(config=config, window=window, history=history)
     window.history_view.clear_requested.emit()
@@ -458,7 +458,6 @@ def test_controller_deletes_cached_model_after_confirm(qtbot, monkeypatch):
     """Yes on the confirmation dialog → delete is called with the
     matching ModelInfo, then ``refresh_cache_state`` is invoked so the
     Download/Select label and the Delete-button visibility update."""
-    from PySide6.QtWidgets import QMessageBox
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
@@ -467,7 +466,7 @@ def test_controller_deletes_cached_model_after_confirm(qtbot, monkeypatch):
     qtbot.addWidget(window)
     config = FakeConfig()
 
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.Yes)
+    monkeypatch.setattr(controller_module, "confirm", lambda *a, **kw: True)
 
     deleted: list = []
 
@@ -494,7 +493,6 @@ def test_controller_deletes_cached_model_after_confirm(qtbot, monkeypatch):
 def test_controller_does_not_delete_when_user_cancels(qtbot, monkeypatch):
     """Cancel on the confirmation dialog → cache stays put and no
     refresh fires (UI was already correct)."""
-    from PySide6.QtWidgets import QMessageBox
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
@@ -503,7 +501,7 @@ def test_controller_does_not_delete_when_user_cancels(qtbot, monkeypatch):
     qtbot.addWidget(window)
     config = FakeConfig()
 
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.Cancel)
+    monkeypatch.setattr(controller_module, "confirm", lambda *a, **kw: False)
 
     deleted: list = []
     monkeypatch.setattr(
@@ -524,7 +522,6 @@ def test_controller_delete_dialog_warns_about_shared_canonical(qtbot, monkeypatc
     both decoders.  The confirm-dialog text must mention the sibling
     so the user isn't surprised when the other card flips back to
     'Download'."""
-    from PySide6.QtWidgets import QMessageBox
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
@@ -535,12 +532,12 @@ def test_controller_delete_dialog_warns_about_shared_canonical(qtbot, monkeypatc
 
     captured: dict = {}
 
-    def fake_question(parent, title, text, *args, **kwargs):
+    def fake_confirm(parent, title, text, **kwargs):
         captured["title"] = title
         captured["text"] = text
-        return QMessageBox.Cancel
+        return False
 
-    monkeypatch.setattr(QMessageBox, "question", fake_question)
+    monkeypatch.setattr(controller_module, "confirm", fake_confirm)
     monkeypatch.setattr(
         controller_module, "delete_cached_for_info", lambda info: True
     )
@@ -642,7 +639,7 @@ def test_controller_storage_change_writes_config_and_updates_env(
     )
     info_calls: list = []
     monkeypatch.setattr(
-        QMessageBox, "information",
+        "app.gui.controllers._storage_mixin.notify",
         lambda *a, **kw: info_calls.append((a, kw)),
     )
 
@@ -655,7 +652,7 @@ def test_controller_storage_change_writes_config_and_updates_env(
     assert os.environ.get("HF_HOME") == chosen
     # Info dialog body must NOT mention restart/next-launch — that
     # wording is now a lie since the change applies live.
-    assert info_calls, "expected QMessageBox.information to fire after change"
+    assert info_calls, "expected notify() to fire after change"
     args, _kwargs = info_calls[0]
     body_text = " ".join(str(a) for a in args).lower()
     assert "restart" not in body_text
@@ -730,13 +727,15 @@ def test_controller_storage_change_offers_migration_when_old_has_weights(
         QFileDialog, "getExistingDirectory",
         lambda *a, **kw: str(new_root),
     )
-    # User clicks Yes on the migration prompt.
+    # User clicks Move on the migration prompt — the
+    # confirm_three_way helper resolves to "yes" so the cache
+    # actually relocates.  ``notify`` (post-migration info dialog)
+    # is already stubbed by the autouse ``stub_modal_dialogs``
+    # fixture so we don't need to silence it here.
     monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda *a, **kw: QMessageBox.Yes,
+        "app.gui.controllers._storage_mixin.confirm_three_way",
+        lambda *a, **kw: "yes",
     )
-    # Swallow the post-migration restart info dialog.
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
     moves: list = []
     real_move = controller_module.move_cached_dir
@@ -791,12 +790,14 @@ def test_controller_storage_change_no_prompt_when_old_root_is_empty(
 
     question_calls: list = []
 
-    def fake_question(*args, **kwargs):
+    def fake_confirm_three_way(*args, **kwargs):
         question_calls.append(args)
-        return QMessageBox.Yes  # would say Yes if asked
+        return "yes"  # would say "yes" if asked
 
-    monkeypatch.setattr(QMessageBox, "question", fake_question)
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "app.gui.controllers._storage_mixin.confirm_three_way",
+        fake_confirm_three_way,
+    )
 
     AppController(config=config, window=window)
     window.shortcuts_view.storage_path_change_requested.emit()
@@ -845,7 +846,6 @@ def test_controller_storage_change_no_on_migration_writes_config_only(
         QMessageBox, "question",
         lambda *a, **kw: QMessageBox.No,
     )
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
     moves: list = []
     monkeypatch.setattr(
@@ -896,10 +896,9 @@ def test_controller_storage_change_cancel_on_migration_aborts(
         lambda *a, **kw: str(new_root),
     )
     monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda *a, **kw: QMessageBox.Cancel,
+        "app.gui.controllers._storage_mixin.confirm_three_way",
+        lambda *a, **kw: "cancel",
     )
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
     AppController(config=config, window=window)
     window.shortcuts_view.storage_path_change_requested.emit()
@@ -933,7 +932,6 @@ def test_controller_storage_change_refreshes_model_card_cache_state(
         QFileDialog, "getExistingDirectory",
         lambda *a, **kw: chosen,
     )
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
     refresh_calls: list = []
     monkeypatch.setattr(
@@ -969,7 +967,6 @@ def test_controller_storage_reset_refreshes_model_card_cache_state(
     monkeypatch.setattr(
         controller_module, "get_models_root", lambda v: v or "C:/default"
     )
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
     refresh_calls: list = []
     monkeypatch.setattr(
@@ -1275,7 +1272,7 @@ def test_controller_storage_reset_clears_config_and_updates_env(
     )
     info_calls: list = []
     monkeypatch.setattr(
-        QMessageBox, "information",
+        "app.gui.controllers._storage_mixin.notify",
         lambda *a, **kw: info_calls.append(a),
     )
 
@@ -1301,8 +1298,8 @@ def test_controller_clear_cancelled_keeps_entries(qtbot, monkeypatch):
     history = FakeHistory([FakeHistoryEntry("a"), FakeHistoryEntry("b")])
 
     monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda *a, **kw: QMessageBox.Cancel,
+        "app.gui.controllers._history_mixin.confirm",
+        lambda *a, **kw: False,
     )
 
     AppController(config=config, window=window, history=history)
@@ -1329,7 +1326,6 @@ def test_controller_export_writes_through_manager(qtbot, monkeypatch):
         QFileDialog, "getSaveFileName",
         lambda *a, **kw: (chosen_path, "Text files (*.txt)"),
     )
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
     AppController(config=config, window=window, history=history)
     window.history_view.export_requested.emit()
@@ -1377,7 +1373,7 @@ def test_controller_export_with_empty_history_skips_dialog(qtbot, monkeypatch):
     )
     info_called = []
     monkeypatch.setattr(
-        QMessageBox, "information",
+        "app.gui.controllers._history_mixin.notify",
         lambda *a, **kw: info_called.append(True),
     )
 

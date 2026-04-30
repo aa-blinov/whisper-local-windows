@@ -36,6 +36,8 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt, QRunnable, QThreadPool
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
+from app.gui.widgets.dialogs import confirm_three_way, notify
+
 if TYPE_CHECKING:  # pragma: no cover — typing only
     from PySide6.QtCore import Signal
 
@@ -175,10 +177,11 @@ class StorageMixin:
                 subprocess.Popen(["xdg-open", resolved])
         except Exception as exc:
             log.warning("Failed to open storage dir %s: %s", resolved, exc)
-            QMessageBox.warning(
+            notify(
                 self._window,
                 "Open folder",
                 f"Could not open the folder:\n{resolved}\n\n{exc}",
+                kind="warning",
             )
 
     def _on_storage_path_change(self) -> None:
@@ -220,26 +223,26 @@ class StorageMixin:
         move_outcomes: list[tuple[str, dict]] = []
 
         if old_size > 0:
-            answer = QMessageBox.question(
+            answer = confirm_three_way(
                 self._window,
                 "Move existing weights?",
                 (
                     f"You have {_human_size(old_size)} of cached models at:\n"
                     f"{old_root}\n\n"
                     f"Move them to the new location?\n{chosen}\n\n"
-                    "Yes — relocate now (intra-drive is instant; "
+                    "Move — relocate now (intra-drive is instant; "
                     "across drives can take several minutes for large "
                     "caches).\n"
-                    "No  — leave them in place; new downloads go to "
+                    "Leave — leave them in place; new downloads go to "
                     "the new folder.\n"
                     "Cancel — go back without changing anything."
                 ),
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                QMessageBox.Cancel,
+                yes_label="Move",
+                no_label="Leave",
             )
-            if answer == QMessageBox.Cancel:
+            if answer == "cancel":
                 return  # Bail without writing config.
-            if answer == QMessageBox.Yes:
+            if answer == "yes":
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 try:
                     # Single-engine app — only the HF hub subtree
@@ -294,7 +297,7 @@ class StorageMixin:
             "New downloads will land at the new location immediately."
         )
 
-        QMessageBox.information(
+        notify(
             self._window,
             "Models folder updated",
             "\n".join(summary_lines),
@@ -308,7 +311,7 @@ class StorageMixin:
         self._refresh_storage_path()
         self._refresh_storage_size()
         self._window.models_view.refresh_cache_state()
-        QMessageBox.information(
+        notify(
             self._window,
             "Models folder reset",
             (

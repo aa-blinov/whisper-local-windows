@@ -12,6 +12,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
+from app.gui.widgets.dialogs import confirm
+
 # QApplication is imported above for the clipboard helper; reuse it for
 # explicit ``quit()`` calls from tray actions.
 
@@ -361,7 +363,7 @@ class AppController(
                 f"{', '.join(siblings)}."
             )
 
-        answer = QMessageBox.question(
+        if not confirm(
             self._window,
             "Delete cached model?",
             (
@@ -371,10 +373,8 @@ class AppController(
                 "this model is selected."
                 f"{sibling_note}"
             ),
-            QMessageBox.Yes | QMessageBox.Cancel,
-            QMessageBox.Cancel,
-        )
-        if answer != QMessageBox.Yes:
+            yes_label="Delete",
+        ):
             return
 
         if delete_cached_for_info(info):
