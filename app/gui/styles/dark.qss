@@ -635,6 +635,35 @@ QLineEdit[invalid="true"]:focus {
     border-color: {{color.danger}};
 }
 
+/* Inline warning banner used by the Settings → Hotkeys card to
+   surface "macOS hasn't granted Accessibility access yet". Soft
+   amber tint that draws the eye without alarming red of an error,
+   plus an inline "Open Accessibility settings" button that uses
+   the same QPushButton role styling as elsewhere. */
+QFrame[role="warning-banner"] {
+    background-color: rgba(245, 158, 11, 22);
+    border: 1px solid {{color.warning}};
+    border-radius: {{radius.sm}};
+}
+
+QLabel[role="warning-banner-text"] {
+    color: {{color.text_primary}};
+    background: transparent;
+}
+
+QFrame[role="warning-banner"] QPushButton {
+    background-color: {{color.warning}};
+    color: {{color.bg_primary}};
+    border: none;
+    border-radius: {{radius.sm}};
+    padding: 6px 14px;
+    font-weight: 600;
+}
+
+QFrame[role="warning-banner"] QPushButton:hover {
+    background-color: #fbbf24;
+}
+
 /* Replace the native ``::drop-down`` rendering — Qt's default
    sub-control draws its own background on top of our rounded
    border, so the chevron looks like it's sitting in a square

@@ -12,6 +12,10 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.gui.smooth_scroll import apply_smooth_scroll
+from app.gui.views._accessibility_check import (
+    is_accessibility_trusted,
+    open_accessibility_settings,
+)
 from app.gui.views._hotkey_validation import validate_all
 
 from PySide6.QtCore import Qt, Signal
@@ -195,6 +199,49 @@ class ShortcutsView(QWidget):
 
         # ---- Hotkeys card -----------------------------------------------
         hotkeys_card, hotkeys_form = _make_section_card("Hotkeys", self)
+
+        # macOS-only: warn the user when the process hasn't been
+        # added to System Settings → Privacy & Security →
+        # Accessibility. Without that, ``pynput``'s CGEventTap
+        # silently returns no events at all and hotkeys "don't
+        # work" with no on-screen explanation. Banner sits at the
+        # top of the Hotkeys card so it's seen the moment the user
+        # looks at hotkey settings; ``_refresh_accessibility_banner``
+        # toggles it visible / hidden based on the current trusted
+        # state.
+        self._accessibility_banner = QFrame(hotkeys_card)
+        self._accessibility_banner.setObjectName("AccessibilityWarningBanner")
+        self._accessibility_banner.setProperty("role", "warning-banner")
+        banner_layout = QHBoxLayout(self._accessibility_banner)
+        banner_layout.setContentsMargins(12, 10, 12, 10)
+        banner_layout.setSpacing(12)
+        banner_text = QLabel(
+            "macOS hasn't granted Accessibility access yet — global "
+            "hotkeys won't fire until you add this app's terminal / "
+            "IDE under System Settings → Privacy & Security → "
+            "Accessibility, then restart it.",
+            self._accessibility_banner,
+        )
+        banner_text.setWordWrap(True)
+        banner_text.setProperty("role", "warning-banner-text")
+        banner_layout.addWidget(banner_text, 1)
+        self._open_accessibility_btn = QPushButton(
+            "Open Accessibility settings", self._accessibility_banner,
+        )
+        self._open_accessibility_btn.setObjectName("OpenAccessibilityButton")
+        self._open_accessibility_btn.setFocusPolicy(Qt.NoFocus)
+        self._open_accessibility_btn.clicked.connect(open_accessibility_settings)
+        banner_layout.addWidget(self._open_accessibility_btn, 0)
+        self._accessibility_banner.setVisible(False)
+        # The form's row spans both columns — the banner runs full
+        # card width, not nested under the field column.
+        hotkeys_form.addRow(self._accessibility_banner)
+        # Re-check at every paint of the Settings tab; permissions
+        # don't update live anyway (Mac requires a relaunch), but a
+        # quick refresh here covers the case where the user clicked
+        # the button, granted access, came back without restarting,
+        # and we still flag it correctly.
+        self._refresh_accessibility_banner()
 
         # Toggle-mode switch: when checked, the Start hotkey doubles
         # as the Stop hotkey — pressing it again stops the recording.
@@ -662,6 +709,29 @@ class ShortcutsView(QWidget):
 
     def _on_auto_paste_toggled(self, _checked: bool) -> None:
         self._emit_save()
+
+    def _refresh_accessibility_banner(self) -> None:
+        """Show / hide the macOS Accessibility warning banner based
+        on whether the current process can read global keyboard
+        events. ``None`` (non-macOS) keeps it hidden — Win / Linux
+        don't have the equivalent permission gate.
+        """
+        trusted = is_accessibility_trusted()
+        # ``True``  → permission granted, hide banner.
+        # ``False`` → not granted, show banner.
+        # ``None``  → not on macOS, banner irrelevant.
+        self._accessibility_banner.setVisible(trusted is False)
+
+    def showEvent(self, event):  # noqa: N802 — Qt naming
+        """Re-check Accessibility every time the Settings tab
+        becomes visible. Permission changes need a process restart
+        to take effect on Mac, but a fresh ``AXIsProcessTrusted``
+        call is cheap and covers the case where the user opened
+        Settings, hit the Accessibility button, granted access,
+        and is now back in our window without an app restart —
+        the banner can at least disappear."""
+        super().showEvent(event)
+        self._refresh_accessibility_banner()
 
     def _on_toggle_mode_changed(self, checked: bool) -> None:
         """User flipped 'Use one hotkey for both start and stop'.
