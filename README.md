@@ -159,6 +159,11 @@ microphone / Accessibility prompts use the bundle identifier
 `ai.eora.lazytotext`, and the bundled icon is the same squircle
 the in-app code paints.
 
+The bundle ships the standard macOS App menu (under the Apple
+logo): *About Lazy to Text*, *Settings…* (`Cmd+,`), and *Quit
+Lazy to Text* (`Cmd+Q`). Window-close hides to the menu-bar tray;
+`Cmd+Q` is the explicit full-quit path.
+
 When you're ready to distribute:
 
 ```bash
@@ -169,6 +174,26 @@ When you're ready to distribute:
 `dist/`. Code signing is ad-hoc only; pair with an Apple Developer
 ID + `xcrun notarytool submit` if you want to ship outside the
 Mac App Store without Gatekeeper warnings.
+
+#### Where the bundle stores user data
+
+When `sys.frozen` is set (any time the app runs from `.app`,
+including alias-mode), the project follows Apple's File System
+Programming Guide and writes user data to per-user `~/Library`
+directories instead of the project root:
+
+| Data | Path | Why this dir |
+| --- | --- | --- |
+| `config.yaml` | `~/Library/Application Support/LazyToText/` | user-tunable settings, persists across reinstalls |
+| `app.log` + history | `~/Library/Logs/LazyToText/` | `Console.app` reads `~/Library/Logs` natively |
+| Model weights (HF hub) | `~/Library/Caches/LazyToText/models/` | regenerable; Time Machine skips it; OS may purge under disk pressure (we redownload from Hugging Face) |
+
+`uv run lazy-to-text-ui` (dev mode) keeps the legacy paths
+(`<project>/config.yaml`, `<project>/logs`, `<project>/models`)
+so iterating on source doesn't pollute Library. The Storage card
+in Settings can still override `models/` to any path — `HF_HOME`
+is updated live, so the next download lands in the new dir
+without a restart.
 
 ## Screenshots
 
@@ -186,13 +211,22 @@ Mac App Store without Gatekeeper warnings.
 
 ## Hotkeys
 
-| Action | Default | Configurable |
-| --- | --- | --- |
-| Start recording | `Ctrl+F2` | yes — Settings tab |
-| Stop recording + transcribe | `Ctrl+F3` | yes — Settings tab |
-| Cancel current recording | `Ctrl+F6` | yes — Settings tab |
-| Switch tab (Models / Transcribe / History / Logs / Settings) | `Ctrl+1..5` | no |
-| Hide / show window | close button / tray click | no |
+| Action | Default — Windows / Linux | Default — macOS | Configurable |
+| --- | --- | --- | --- |
+| Start recording | `Ctrl+F2` | `Ctrl+F8` | yes — Settings tab |
+| Stop recording + transcribe | `Ctrl+F3` | `Ctrl+F9` | yes — Settings tab |
+| Cancel current recording | `Ctrl+F6` | `Ctrl+F10` | yes — Settings tab |
+| Switch tab (Models / Transcribe / History / Logs / Settings) | `Ctrl+1..5` | `Ctrl+1..5` | no |
+| Open Settings | — | `Cmd+,` | no — App menu |
+| Quit application | tray menu | `Cmd+Q` | no — App menu |
+| Hide / show window | close button / tray click | close button / menu-bar click | no |
+
+macOS reserves `Ctrl+F1`..`Ctrl+F7` for system-wide keyboard
+navigation (focus → menu bar / Dock / window / toolbar / floating
+window / next window / status menu). `pynput` never sees the
+events because the OS captures them first, so we ship higher
+F-keys as the per-platform defaults. Both sets are still freely
+re-bindable.
 
 Hotkey edits in the Settings tab persist immediately on focus loss; no Save
 button. The auto-paste toggle behaves the same way and is also pushed live
@@ -216,9 +250,12 @@ Every model is an ONNX export downloaded from Hugging Face on first use.
 
 ## Configuration
 
-`config.yaml` lives in the project root (resolved by walking up from
-the working directory to the nearest `pyproject.toml`). Most fields
-are exposed in the UI; the file is the source of truth.
+`config.yaml` lives in the project root in dev mode (resolved by
+walking up from the working directory to the nearest
+`pyproject.toml`); when running from the `.app` bundle on macOS it
+moves to `~/Library/Application Support/LazyToText/config.yaml`
+(see *Where the bundle stores user data* above). Most fields are
+exposed in the UI; the file is the source of truth.
 
 ```yaml
 whisper:
@@ -246,6 +283,10 @@ model_overrides:
   gigaam-v3-rnnt: {}            # GigaAM ignores all of these (end-to-end)
 
 hotkey:
+  # Defaults differ per platform — see the Hotkeys section above
+  # for why macOS uses higher F-keys.
+  #   Windows / Linux: ctrl+f2 / ctrl+f3 / ctrl+f6
+  #   macOS:           ctrl+f8 / ctrl+f9 / ctrl+f10
   start_recording_hotkey: ctrl+f2
   stop_recording_hotkey: ctrl+f3
   cancel_recording_hotkey: ctrl+f6
@@ -270,8 +311,9 @@ audio_feedback:
 
 storage:
   models_dir: ""                # empty = use default
-                                # (<project>/models — created on
-                                # first model download).
+                                #   dev:  <project>/models
+                                #   .app: ~/Library/Caches/LazyToText/models
+                                # — both created on first model download.
 
 history:
   enabled: true
