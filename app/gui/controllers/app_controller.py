@@ -416,6 +416,7 @@ class AppController(
         view.hotkeys_reset_requested.connect(self._on_hotkeys_reset)
         view.hf_token_reset_requested.connect(self._on_hf_token_reset)
         view.test_mic_requested.connect(self._on_test_mic_requested)
+        view.restart_requested.connect(self._on_restart_requested)
 
         # Storage card — connect signals + paint resolved path / size.
         # The whole behaviour lives in ``StorageMixin``; calling
@@ -623,6 +624,54 @@ class AppController(
         if sm is None:
             return None
         return getattr(sm, "clipboard_manager", None)
+
+    def _on_restart_requested(self) -> None:
+        """Clean-shutdown + relaunch the process.
+
+        Used by the macOS Accessibility banner: once the user has
+        added the host process to the Accessibility allow-list,
+        ``pynput``'s already-installed event tap is still bound to
+        the old (untrusted) state and won't pick up new events
+        without a restart.
+
+        We tear down the recording stack synchronously (so the
+        worker process exits, audio device is released, etc.),
+        then ``os.execv`` swaps the running process for a fresh
+        copy with the same argv — Qt's event loop is replaced in
+        place, no double-start, no orphaned widgets.
+        """
+        import os
+        import sys
+
+        log.info("Restart requested — relaunching")
+        # Best-effort teardown of recording-side resources.  A
+        # failure here shouldn't block the relaunch; the new
+        # process will recreate them anyway.
+        if self._recording is not None:
+            shutdown = getattr(self._recording, "shutdown", None)
+            if callable(shutdown):
+                try:
+                    shutdown()
+                except Exception as exc:  # pragma: no cover — defensive
+                    log.warning("recording shutdown raised on restart: %s", exc)
+        # Drop the single-instance lock file the parent process
+        # holds so the relaunched copy can take it.  ``QApplication``
+        # stores the handle on itself in ``app.py::main``.
+        try:
+            qt_app = QApplication.instance()
+            if qt_app is not None:
+                handle = getattr(qt_app, "_instance_mutex", None)
+                if handle is not None and hasattr(handle, "release"):
+                    handle.release()
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning("instance lock release raised on restart: %s", exc)
+        # ``execv`` replaces the current process image — never
+        # returns on success.  ``sys.executable`` + ``sys.argv``
+        # gives us the same launch line uv used originally.
+        try:
+            os.execv(sys.executable, [sys.executable, *sys.argv])
+        except OSError as exc:
+            log.error("os.execv failed on restart: %s", exc)
 
     def _on_hotkeys_reset(self) -> None:
         """Reset only the three hotkey fields to their built-in

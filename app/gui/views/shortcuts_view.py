@@ -84,6 +84,11 @@ class ShortcutsView(QWidget):
     # Hugging Face card — fired on focus loss after the user edits
     # the token field. Controller persists + applies to env.
     hf_token_changed = Signal(str)
+    # macOS-only — the user clicked "Restart now" on the
+    # Accessibility-permission banner after granting access.  The
+    # controller is responsible for the actual relaunch (clean
+    # backend shutdown + ``os.execv`` swap).
+    restart_requested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -204,43 +209,57 @@ class ShortcutsView(QWidget):
         # added to System Settings → Privacy & Security →
         # Accessibility. Without that, ``pynput``'s CGEventTap
         # silently returns no events at all and hotkeys "don't
-        # work" with no on-screen explanation. Banner sits at the
-        # top of the Hotkeys card so it's seen the moment the user
-        # looks at hotkey settings; ``_refresh_accessibility_banner``
-        # toggles it visible / hidden based on the current trusted
-        # state.
+        # work" with no on-screen explanation.
+        #
+        # The banner has two states.  At startup the process is
+        # either trusted (banner hidden) or untrusted (banner
+        # shows the "grant access" text + "Open Accessibility
+        # settings" button).  After the user grants access the
+        # ``AXIsProcessTrusted()`` call starts returning True, but
+        # ``pynput``'s already-installed event tap was attached
+        # under the old untrusted state and won't pick up new
+        # events without a relaunch — so we flip the banner to a
+        # "Restart now" prompt rather than hiding it.  Hiding the
+        # banner the moment the API says trusted would mislead the
+        # user into thinking hotkeys work when they actually still
+        # silently fail.
+        self._accessibility_was_untrusted_at_start = (
+            is_accessibility_trusted() is False
+        )
         self._accessibility_banner = QFrame(hotkeys_card)
         self._accessibility_banner.setObjectName("AccessibilityWarningBanner")
         self._accessibility_banner.setProperty("role", "warning-banner")
         banner_layout = QHBoxLayout(self._accessibility_banner)
         banner_layout.setContentsMargins(12, 10, 12, 10)
         banner_layout.setSpacing(12)
-        banner_text = QLabel(
-            "macOS hasn't granted Accessibility access yet — global "
-            "hotkeys won't fire until you add this app's terminal / "
-            "IDE under System Settings → Privacy & Security → "
-            "Accessibility, then restart it.",
-            self._accessibility_banner,
+        self._accessibility_banner_text = QLabel(
+            "", self._accessibility_banner,
         )
-        banner_text.setWordWrap(True)
-        banner_text.setProperty("role", "warning-banner-text")
-        banner_layout.addWidget(banner_text, 1)
-        self._open_accessibility_btn = QPushButton(
-            "Open Accessibility settings", self._accessibility_banner,
+        self._accessibility_banner_text.setWordWrap(True)
+        self._accessibility_banner_text.setProperty(
+            "role", "warning-banner-text",
         )
-        self._open_accessibility_btn.setObjectName("OpenAccessibilityButton")
-        self._open_accessibility_btn.setFocusPolicy(Qt.NoFocus)
-        self._open_accessibility_btn.clicked.connect(open_accessibility_settings)
-        banner_layout.addWidget(self._open_accessibility_btn, 0)
+        banner_layout.addWidget(self._accessibility_banner_text, 1)
+        self._accessibility_banner_button = QPushButton(
+            "", self._accessibility_banner,
+        )
+        self._accessibility_banner_button.setObjectName(
+            "AccessibilityActionButton",
+        )
+        self._accessibility_banner_button.setFocusPolicy(Qt.NoFocus)
+        # Click handler swaps based on banner state — set in
+        # ``_refresh_accessibility_banner``.
+        self._accessibility_banner_button.clicked.connect(
+            self._on_accessibility_banner_clicked,
+        )
+        banner_layout.addWidget(self._accessibility_banner_button, 0)
         self._accessibility_banner.setVisible(False)
         # The form's row spans both columns — the banner runs full
         # card width, not nested under the field column.
         hotkeys_form.addRow(self._accessibility_banner)
-        # Re-check at every paint of the Settings tab; permissions
-        # don't update live anyway (Mac requires a relaunch), but a
-        # quick refresh here covers the case where the user clicked
-        # the button, granted access, came back without restarting,
-        # and we still flag it correctly.
+        # State machine: ``"untrusted"`` (Open Accessibility
+        # settings) / ``"granted"`` (Restart now) / ``"hidden"``.
+        self._accessibility_state = "hidden"
         self._refresh_accessibility_banner()
 
         # Toggle-mode switch: when checked, the Start hotkey doubles
@@ -711,16 +730,65 @@ class ShortcutsView(QWidget):
         self._emit_save()
 
     def _refresh_accessibility_banner(self) -> None:
-        """Show / hide the macOS Accessibility warning banner based
-        on whether the current process can read global keyboard
-        events. ``None`` (non-macOS) keeps it hidden — Win / Linux
-        don't have the equivalent permission gate.
+        """Update the macOS Accessibility banner based on current
+        permission state and whether we started this session as
+        untrusted.
+
+        State transitions:
+
+        - ``trusted is None``                                       → hidden
+          (non-macOS — no permission gate to worry about)
+        - ``trusted is False``                                      → "untrusted"
+          ("Open Accessibility settings" button)
+        - ``trusted is True`` AND ``_accessibility_was_untrusted_at_start`` → "granted"
+          ("Restart now" button — pynput's event tap is still
+          stuck under the old untrusted state and needs a
+          process relaunch to pick up the new permission)
+        - ``trusted is True`` AND ``not _accessibility_was_untrusted_at_start``
+                                                                    → hidden
+          (started this session already trusted — nothing to
+          surface)
         """
         trusted = is_accessibility_trusted()
-        # ``True``  → permission granted, hide banner.
-        # ``False`` → not granted, show banner.
-        # ``None``  → not on macOS, banner irrelevant.
-        self._accessibility_banner.setVisible(trusted is False)
+        if trusted is None:
+            self._accessibility_state = "hidden"
+            self._accessibility_banner.setVisible(False)
+            return
+        if trusted is False:
+            self._accessibility_state = "untrusted"
+            self._accessibility_banner_text.setText(
+                "macOS hasn't granted Accessibility access yet — global "
+                "hotkeys won't fire until you add this app's terminal / "
+                "IDE under System Settings → Privacy & Security → "
+                "Accessibility, then restart it."
+            )
+            self._accessibility_banner_button.setText("Open Accessibility settings")
+            self._accessibility_banner.setVisible(True)
+            return
+        # trusted is True
+        if self._accessibility_was_untrusted_at_start:
+            self._accessibility_state = "granted"
+            self._accessibility_banner_text.setText(
+                "Accessibility access granted. Restart Lazy to Text to "
+                "let global hotkeys start firing — pynput's event tap "
+                "was attached before the permission and can't pick it up "
+                "live."
+            )
+            self._accessibility_banner_button.setText("Restart now")
+            self._accessibility_banner.setVisible(True)
+            return
+        self._accessibility_state = "hidden"
+        self._accessibility_banner.setVisible(False)
+
+    def _on_accessibility_banner_clicked(self) -> None:
+        """Banner button dispatch — opens System Settings while
+        untrusted, asks the controller to relaunch the process
+        once permission has been granted."""
+        if self._accessibility_state == "untrusted":
+            open_accessibility_settings()
+            return
+        if self._accessibility_state == "granted":
+            self.restart_requested.emit()
 
     def showEvent(self, event):  # noqa: N802 — Qt naming
         """Re-check Accessibility every time the Settings tab
