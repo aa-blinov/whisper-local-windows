@@ -80,36 +80,50 @@ class SubprocessBackend:
     """
 
     def __init__(self, **kwargs: Any) -> None:
-        # Start-method choice:
-        #   - **Windows** must use ``spawn`` (fork unavailable).
-        #   - **macOS dev (uv run)** uses ``spawn`` too — that's the
-        #     OS default and it works against ``sys.executable`` =
-        #     ``.venv/bin/python``.
-        #   - **macOS frozen (.app via py2app)** must use ``fork``:
-        #     ``sys.executable`` inside the bundle is the py2app
-        #     launcher binary (``Contents/MacOS/Lazy to Text``),
-        #     not a Python interpreter, so ``spawn`` fails with
-        #     ``Worker pipe closed before init`` — the launcher
-        #     can't handle the bootstrap argv multiprocessing
-        #     passes to a Python child.  Fork inherits the
-        #     already-imported runtime instead of re-execing, side-
-        #     stepping the launcher entirely.  Apple deprecated
-        #     fork-safety guarantees but our worker stays single-
-        #     threaded until ``onnx_asr.load_model``, by which
-        #     point the duplicated state is harmless.
+        # Use an explicit ``spawn`` context rather than the global
+        # default.  Two reasons:
+        #
+        # 1. ``spawn`` is the only viable start method on Windows
+        #    (fork unavailable) and the safest on macOS — Apple's
+        #    CoreFoundation / Cocoa stack deprecated fork-safety,
+        #    so a fork from a Qt-initialised parent hangs deep
+        #    inside CoreText / CoreServices.
+        # 2. py2app .app bundles need a real Python interpreter
+        #    for the spawn child.  ``sys.executable`` inside the
+        #    bundle is the py2app launcher binary
+        #    (``Contents/MacOS/Lazy to Text``), not a Python
+        #    interpreter — feeding it multiprocessing's bootstrap
+        #    argv produces the cryptic ``Worker pipe closed
+        #    before init`` failure.  py2app symlinks the venv's
+        #    Python at ``Contents/MacOS/python`` in alias mode;
+        #    pointing the spawn context at that path keeps the
+        #    rest of multiprocessing intact.  Setting it on the
+        #    ``ctx`` instead of the global keeps the override
+        #    local to our worker — anything else in-process that
+        #    spawns a child stays on the default executable.
         import sys as _sys
 
+        ctx = multiprocessing.get_context("spawn")
         if _sys.platform == "darwin" and getattr(_sys, "frozen", False):
-            method = "fork"
-        else:
-            method = "spawn"
-        try:
-            multiprocessing.set_start_method(method, force=False)
-        except (RuntimeError, AssertionError):
-            pass
+            from pathlib import Path as _Path
 
-        self._parent_conn, child_conn = multiprocessing.Pipe(duplex=True)
-        self._proc = multiprocessing.Process(
+            bundle_python = _Path(_sys.executable).parent / "python"
+            if bundle_python.exists():
+                ctx.set_executable(str(bundle_python))
+                log.info(
+                    "SubprocessBackend: spawn executable redirected "
+                    "to %s (bundle alias mode)", bundle_python,
+                )
+            else:
+                log.warning(
+                    "SubprocessBackend: bundle python symlink missing "
+                    "at %s — spawn will use sys.executable=%s and "
+                    "almost certainly fail",
+                    bundle_python, _sys.executable,
+                )
+
+        self._parent_conn, child_conn = ctx.Pipe(duplex=True)
+        self._proc = ctx.Process(
             target=_worker_main,
             args=(child_conn,),
             name="onnx-worker",

@@ -604,8 +604,20 @@ def main() -> int:
     # child process is started + the init command has been written to
     # the pipe; the worker's ack is consumed by the reader thread and
     # any later ``_send_cmd`` blocks on the init event until ready.
-    from app.backends.subprocess_backend import SubprocessBackend
-
+    #
+    # Inside a py2app .app on macOS we skip the subprocess entirely
+    # and use the in-process ``RegistryBackend`` instead.  The
+    # subprocess design exists to dodge Windows' DLL-loader-lock
+    # while ``onnx_asr`` initialises ORT providers — that lock
+    # doesn't exist on macOS, so the only thing we'd buy by
+    # spawning a worker is a portable code path.  Spawning is also
+    # the part that doesn't survive py2app: the spawn child re-execs
+    # the bundle's launcher binary instead of a Python interpreter,
+    # ``init_main_from_path`` then tries to ``runpy.run_path`` a
+    # bootstrap path that isn't a script, and the worker dies
+    # before its init ack with the cryptic ``Worker pipe closed
+    # before init`` we kept seeing.  In-process is simpler, faster
+    # to start, and entirely sufficient on macOS.
     _whisper_cfg = _early_config.get_whisper_config()
     _backend_kwargs = dict(
         model=_whisper_cfg.get("model") or "whisper-large-v3-turbo",
@@ -614,7 +626,14 @@ def main() -> int:
         language=_whisper_cfg.get("language") or None,
         beam_size=int(_whisper_cfg.get("beam_size", 5)),
     )
-    _early_backend = SubprocessBackend(**_backend_kwargs)
+    if sys.platform == "darwin" and getattr(sys, "frozen", False):
+        from app.backends.registry_backend import RegistryBackend
+
+        _early_backend = RegistryBackend(**_backend_kwargs)
+    else:
+        from app.backends.subprocess_backend import SubprocessBackend
+
+        _early_backend = SubprocessBackend(**_backend_kwargs)
 
     # Set up the logging pipeline BEFORE building the recording stack so the
     # HotkeyListener / model-load messages from build_recording_stack reach
