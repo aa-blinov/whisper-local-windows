@@ -312,6 +312,15 @@ class AppController(
         # Loading. The state poll's later set_loading(True) is
         # idempotent.
         self._window.models_view.set_loading(True)
+        # Same race for the topbar pill: ``request_model_change``
+        # below kicks off an async load and the
+        # ``state_changed("model_loading")`` signal arrives a tick
+        # later — without an immediate flip the topbar would briefly
+        # render the new model as Active.  Push ``model_loading``
+        # before ``_sync_topbar_model`` so the new alias goes
+        # straight into the yellow loading pill instead of flashing
+        # green for a frame.
+        self._window.topbar.set_recording_state("model_loading")
         # Push this card's persisted inference overrides into the
         # live backend so the first transcription on the new model
         # honours the saved values.
