@@ -1,10 +1,15 @@
 import logging
 import os
 import struct
+import sys
 import threading
-import winsound
 
 from app.utils import resolve_asset_path
+
+if sys.platform == "win32":
+    import winsound
+else:
+    winsound = None  # type: ignore[assignment]
 
 
 def _build_silent_wav() -> bytes:
@@ -47,7 +52,7 @@ def _build_silent_wav() -> bytes:
     return header + silence
 
 
-_SILENT_WAV = _build_silent_wav()
+_SILENT_WAV = _build_silent_wav() if sys.platform == "win32" else b""
 
 
 class AudioFeedback:
@@ -74,9 +79,11 @@ class AudioFeedback:
         Windows releases an idle audio device after a few seconds.  The
         initial call happens at construction time; call this again whenever a
         long pause (e.g. model loading) may have caused the device to close.
-        No-ops immediately if audio feedback is disabled.
+        No-ops immediately if audio feedback is disabled, and on
+        non-Windows platforms (``playsound3`` opens the device on
+        every call without the silent-drop pathology).
         """
-        if not self.enabled:
+        if not self.enabled or sys.platform != "win32":
             return
 
         def warm():
@@ -103,11 +110,11 @@ class AudioFeedback:
     def _play_sound_file_async(self, file_path: str):
         """Play ``file_path`` on a daemon thread.
 
-        We deliberately do NOT pass ``winsound.SND_ASYNC``.  With
-        ``SND_ASYNC``, ``PlaySound`` returns immediately and Windows
-        plays the buffer from a system worker — but if the calling
-        thread exits before Windows finishes setting up that play,
-        the sound is dropped silently.  We've seen this happen
+        Windows: we deliberately do NOT pass ``winsound.SND_ASYNC``.
+        With ``SND_ASYNC``, ``PlaySound`` returns immediately and
+        Windows plays the buffer from a system worker — but if the
+        calling thread exits before Windows finishes setting up that
+        play, the sound is dropped silently.  We've seen this happen
         intermittently when the start sound fires right before the
         microphone stream opens (the recorder grabbing the audio
         device disrupts the still-pending async play).
@@ -118,18 +125,33 @@ class AudioFeedback:
         latency is identical: the start sound still kicks off in
         parallel with everything else, just without the racy
         Windows-side queue.
+
+        macOS / Linux: delegates to ``playsound3.playsound`` with
+        ``block=True`` on the daemon thread (same rationale — keep
+        the play synchronous to avoid any interpreter-shutdown race
+        on the underlying backend).
         """
         if not file_path:
             return
 
-        def play_sound():
-            try:
-                # Synchronous play in a daemon thread — see docstring.
-                winsound.PlaySound(file_path, winsound.SND_FILENAME)
-            except Exception as e:
-                self.logger.warning(
-                    f"Failed to play sound file {file_path}: {e}"
-                )
+        if sys.platform == "win32":
+            def play_sound():
+                try:
+                    winsound.PlaySound(file_path, winsound.SND_FILENAME)
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to play sound file {file_path}: {e}"
+                    )
+        else:
+            def play_sound():
+                try:
+                    from playsound3 import playsound
+
+                    playsound(file_path, block=True)
+                except Exception as e:
+                    self.logger.warning(
+                        f"Failed to play sound file {file_path}: {e}"
+                    )
 
         sound_thread = threading.Thread(target=play_sound, daemon=True)
         sound_thread.start()

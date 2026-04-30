@@ -1,10 +1,10 @@
 """Unified ONNX inference backend for every supported ASR model family.
 
-Uses ``onnx-asr`` (``pip install "onnx-asr[gpu,hub]"``) with ONNX-exported
-weights from HuggingFace.  One backend class drives Whisper, GigaAM v3
-and Parakeet TDT v3 by switching a small ``family`` parameter; ONNX
-Runtime handles everything below — no NeMo, PyTorch, Lightning, or
-CTranslate2 in the dependency tree.
+Uses ``onnx-asr`` with ONNX-exported weights from HuggingFace.  One
+backend class drives Whisper, GigaAM v3 and Parakeet TDT v3 by
+switching a small ``family`` parameter; ONNX Runtime handles
+everything below — no NeMo, PyTorch, Lightning, or CTranslate2 in
+the dependency tree.
 
 Supported families
 ------------------
@@ -22,17 +22,22 @@ Lifecycle
 
 Provider selection
 ------------------
-``device='auto'`` (default) lets ONNX Runtime pick.  ``device='cuda'``
-explicitly requests CUDA with a CPU fallback in the providers list,
-plus a runtime retry-on-CPU if the first load fails with a CUDA-related
-error (handles the case where ``onnxruntime-gpu`` is installed but no
-NVIDIA driver is present).  ``device='cpu'`` pins to CPU.
+``device='auto'`` (default) is platform-aware: on macOS it stages
+``CoreMLExecutionProvider`` (Neural Engine + GPU) ahead of CPU; on
+Windows / Linux it leaves the choice to onnx-asr / ORT (which picks
+CUDA when ``onnxruntime-gpu`` is installed).  ``device='cuda'`` and
+``device='coreml'`` are explicit overrides — both come with a CPU
+fallback baked into the providers list, plus a runtime retry on CPU
+if the accelerator fails at session-create time (handles the case
+where the GPU library is installed but the driver / hardware is
+missing). ``device='cpu'`` pins to CPU.
 """
 
 from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 import threading
 from typing import Callable, Optional
 
@@ -362,18 +367,30 @@ class OnnxAsrBackend:
             kwargs["providers"] = providers
         return kwargs
 
-    def _resolve_providers(self) -> Optional[list[str]]:
+    def _resolve_providers(self) -> Optional[list]:
         """Map ``self._device`` to an ONNX Runtime providers list.
 
-        ``auto`` returns None so onnx-asr / ORT pick from what's installed.
+        Returns a list that ``onnx_asr.load_model`` accepts directly
+        (``Sequence[str | tuple[str, dict]]``).  CPU is appended as a
+        fallback after every accelerator entry so ORT can still build
+        the session if the primary provider's session-create fails
+        (driver missing, unsupported op for this model, etc.).
+        Returning ``None`` lets onnx-asr / ORT pick from whatever is
+        registered in the installed ``onnxruntime`` wheel.
         """
         if self._device == "cuda":
-            # CPU is a fallback if CUDA fails at session-create time
-            # (e.g. driver missing) — ORT will use the first viable
-            # provider in the list.
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        if self._device == "coreml":
+            return [_coreml_provider_entry(), "CPUExecutionProvider"]
         if self._device == "cpu":
             return ["CPUExecutionProvider"]
+        # ``auto``: prefer CoreML on Apple Silicon (it is the only
+        # accelerator path that actually exercises the Neural Engine
+        # / GPU on macOS); on Windows / Linux let ORT pick — it will
+        # use CUDA if ``onnxruntime-gpu`` is installed and a working
+        # NVIDIA driver is present, otherwise CPU.
+        if sys.platform == "darwin":
+            return [_coreml_provider_entry(), "CPUExecutionProvider"]
         return None
 
     def _do_load(self, model_name: str) -> None:
@@ -383,10 +400,13 @@ class OnnxAsrBackend:
         try:
             import onnx_asr  # type: ignore[import]
         except ImportError as exc:
+            extras = (
+                "[gpu,hub]" if sys.platform == "win32" else "[cpu,hub]"
+            )
             log.error(
                 "onnx-asr is not installed: %s\n"
-                "Install it with:  pip install \"onnx-asr[gpu,hub]\"",
-                exc,
+                "Install it with:  pip install \"onnx-asr%s\"",
+                exc, extras,
             )
             with self._lock:
                 if not self._shutdown and self._model_name == model_name:
@@ -404,17 +424,21 @@ class OnnxAsrBackend:
                 load_id, **self._build_load_kwargs(providers)
             )
         except Exception as exc:
-            # Fallback path: user asked for CUDA but the CUDA provider
-            # isn't actually available.  Retry with CPU only so the user
+            # Fallback path: an accelerator provider (CUDA / CoreML)
+            # was requested or auto-selected but failed at
+            # session-create time — retry with CPU only so the user
             # ends up with a working backend instead of an error pill.
+            wants_accelerator = self._device in ("cuda", "coreml") or (
+                self._device == "auto" and sys.platform == "darwin"
+            )
             if (
-                self._device == "cuda"
-                and _is_cuda_provider_error(exc)
+                wants_accelerator
+                and _is_accelerator_provider_error(exc)
                 and not self._shutdown
                 and not self._cancel_requested
             ):
                 log.warning(
-                    "CUDA provider unavailable (%s) — retrying on CPU",
+                    "Accelerator provider unavailable (%s) — retrying on CPU",
                     exc,
                 )
                 try:
@@ -637,14 +661,41 @@ def _resample(
         ).astype(np.float32)
 
 
-def _is_cuda_provider_error(exc: BaseException) -> bool:
-    """Heuristic: does the exception text suggest a CUDA-provider issue?
+def _coreml_provider_entry() -> tuple[str, dict]:
+    """CoreML provider entry tuned for Apple Silicon.
 
-    onnx_asr.load_model raises plain ``RuntimeError`` with messages like
-    ``[E:onnxruntime] CUDAExecutionProvider not available …`` when the
-    requested provider isn't loadable.  We use a string match because
-    ORT doesn't expose a typed exception for this case.
+    - ``ModelFormat='MLProgram'`` — the modern CoreML container; ORT
+      1.18+ uses it by default but pinning makes the choice explicit
+      and avoids surprises if a future ORT changes the default back
+      to the legacy ``NeuralNetwork`` format.
+    - ``MLComputeUnits='ALL'`` — let CoreML pick between CPU, GPU and
+      Neural Engine per-op.  This is the Apple recommendation for
+      mixed-workload models like ASR; the dispatcher will route
+      compatible ops to the ANE and fall back to GPU / CPU per op
+      automatically.
+    """
+    return (
+        "CoreMLExecutionProvider",
+        {"ModelFormat": "MLProgram", "MLComputeUnits": "ALL"},
+    )
+
+
+def _is_accelerator_provider_error(exc: BaseException) -> bool:
+    """Heuristic: does the exception text suggest an accelerator-provider
+    issue (CUDA, CoreML, TensorRT, DirectML)?
+
+    onnx_asr.load_model raises plain ``RuntimeError`` with messages
+    like ``[E:onnxruntime] CUDAExecutionProvider not available …``
+    or ``CoreML EP failed to compile model`` when the requested
+    provider isn't loadable / can't compile the model.  We use a
+    string match because ORT doesn't expose a typed exception for
+    this case.
     """
     msg = str(exc).lower()
-    keywords = ("cuda", "cudaexecutionprovider", "provider", "tensorrt")
+    keywords = (
+        "cuda", "cudaexecutionprovider",
+        "coreml", "coremlexecutionprovider",
+        "tensorrt", "directml",
+        "provider",
+    )
     return any(k in msg for k in keywords)

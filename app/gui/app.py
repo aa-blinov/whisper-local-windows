@@ -13,149 +13,20 @@ from PySide6.QtWidgets import QApplication
 from app.gui.controllers.app_controller import AppController
 from app.gui.log_bridge import QtLogBridge
 from app.gui.main_window import MainWindow
-from app.gui.theme import apply_theme
+from app.gui.theme import apply_theme, load_bundled_fonts
 from app.utils import is_cached_for_info, is_model_cached, resolve_asset_path
 
 
 def _load_app_icon() -> QIcon:
     """Build a QIcon that includes both the multi-size .ico and the .png so
-    Windows can pick the right resolution for the title bar, taskbar, and
-    Alt-Tab switcher."""
+    the platform window manager can pick the right resolution for the
+    title bar, taskbar, and Alt-Tab switcher."""
     icon = QIcon()
     for asset in ("assets/tray_idle.ico", "assets/tray_idle.png"):
         path = resolve_asset_path(asset)
         if path and os.path.isfile(path):
             icon.addFile(path)
     return icon
-
-
-def _force_window_icon(hwnd: int, ico_path: str) -> bool:
-    """Bypass Qt and tell Windows directly which icon to use for this hWnd.
-
-    Qt's setWindowIcon often fails to translate into a real WM_SETICON, so
-    the taskbar / Alt-Tab keep the python.exe icon. We load the .ico via
-    LoadImageW and push it through both WM_SETICON (per-window) AND
-    SetClassLongPtr (per-window-class) so taskbar, Alt-Tab, and the title
-    bar all pick up the same icon.
-    """
-    if sys.platform != "win32" or not hwnd or not ico_path:
-        return False
-    try:
-        import ctypes
-        from ctypes import c_void_p, c_wchar_p
-
-        IMAGE_ICON = 1
-        LR_LOADFROMFILE = 0x00000010
-        WM_SETICON = 0x0080
-        ICON_SMALL = 0
-        ICON_BIG = 1
-        GCLP_HICON = -14
-        GCLP_HICONSM = -34
-
-        user32 = ctypes.windll.user32
-
-        # Set up types only for return values that cross 32/64 bits — keep
-        # parameters as Python ints to avoid sign-extension surprises.
-        user32.LoadImageW.restype = c_void_p
-        user32.SendMessageW.restype = c_void_p
-        user32.SetClassLongPtrW.restype = c_void_p
-
-        def load(size: int) -> int:
-            return user32.LoadImageW(
-                None,
-                c_wchar_p(ico_path),
-                IMAGE_ICON,
-                size,
-                size,
-                LR_LOADFROMFILE,
-            ) or 0
-
-        h_small = load(16)
-        h_big = load(32)
-        if not (h_small or h_big):
-            return False
-
-        if h_small:
-            user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, h_small)
-            user32.SetClassLongPtrW(hwnd, GCLP_HICONSM, h_small)
-        if h_big:
-            user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, h_big)
-            user32.SetClassLongPtrW(hwnd, GCLP_HICON, h_big)
-        return True
-    except Exception:
-        return False
-
-
-def _register_aumid_icon(app_id: str = "LazyToText.App") -> None:
-    """Bind a real icon to our AppUserModelID in the user's registry.
-
-    Without an ``HKCU\\Software\\Classes\\AppUserModelId\\<id>`` entry
-    pointing at the actual executable, Windows falls back to a generic
-    document icon for taskbar / Alt-Tab entries grouped under our
-    AppUserModelID — even though the .exe itself carries the proper
-    icon resource and ``setWindowIcon`` was called on the Qt window.
-    Confirmed empirically on a fresh ``%LOCALAPPDATA%\\Programs\\...``
-    install: blank icon stayed blank across explorer restarts and
-    icon-cache flushes until this registry entry was written.
-
-    Frozen-only: source-run dev path uses python.exe as the host
-    process and shouldn't fight Windows for that icon binding.
-    Idempotent — overwrites stale values cheerfully on every launch
-    so a moved install picks up the new path next time. Failures
-    (locked HKCU under Group Policy, e.g.) are swallowed; falling
-    back to a generic icon is annoying but not fatal.
-    """
-    if sys.platform != "win32":
-        return
-    if not getattr(sys, "frozen", False):
-        return
-    try:
-        import winreg
-    except ImportError:  # pragma: no cover — winreg is std-lib on Windows
-        return
-    exe_path = sys.executable
-    try:
-        with winreg.CreateKeyEx(
-            winreg.HKEY_CURRENT_USER,
-            f"Software\\Classes\\AppUserModelId\\{app_id}",
-            0,
-            winreg.KEY_SET_VALUE,
-        ) as key:
-            winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "Lazy to Text")
-            winreg.SetValueEx(
-                key, "IconResource", 0, winreg.REG_EXPAND_SZ, f"{exe_path},0",
-            )
-            winreg.SetValueEx(
-                key, "IconUri", 0, winreg.REG_EXPAND_SZ, exe_path,
-            )
-    except OSError:
-        # Locked HKCU / Group Policy — fall through with the generic
-        # icon. Not worth crashing the app over.
-        return
-
-
-def _set_app_user_model_id(app_id: str = "LazyToText.App") -> int:
-    """Tell Windows this process is its own app, not a hosted Python script.
-
-    Without this, the taskbar / Alt-Tab / system tray group everything under
-    Python's default AppUserModelID and use the Python interpreter's icon
-    instead of the one we set via setWindowIcon. This must run before any
-    window or QApplication is created.
-
-    Returns the HRESULT from the Win32 call (0 on success, non-zero on
-    failure), or -1 on platforms / pythons where the API is unavailable.
-    """
-    if sys.platform != "win32":
-        return -1
-    try:
-        import ctypes
-
-        hr = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
-        return int(hr) if hr is not None else 0
-    except Exception:
-        # Old Windows / missing API — non-fatal, the taskbar just stays
-        # grouped under Python.
-        return -1
 
 
 def build_application(
@@ -433,13 +304,6 @@ def _autoload_persisted_model(backend) -> None:
 
 def main() -> int:
     import logging
-    import multiprocessing
-
-    # PyInstaller / cx_Freeze frozen builds require ``freeze_support``
-    # at the start of ``main`` so that ``multiprocessing.Process``
-    # spawn children correctly re-enter their target instead of
-    # re-running ``main`` recursively.  No-op outside frozen builds.
-    multiprocessing.freeze_support()
 
     # Read the configured ``storage.models_dir`` (may be empty for
     # 'use the default') from config.yaml, then plant ``HF_HOME``
@@ -459,22 +323,20 @@ def main() -> int:
     from app.instance_manager import try_acquire_single_instance
     from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 
-    # Distinct AppUserModelID before any window is created so Windows uses
-    # our icon in the taskbar instead of the Python interpreter's.
-    _set_app_user_model_id()
-    # Bind the AppUserModelID to our exe's icon resource in the user's
-    # registry — without this Windows shows a generic document icon
-    # for taskbar entries grouped under this AUMID on fresh installs.
-    _register_aumid_icon()
-
     instance_handle = try_acquire_single_instance("LazyToTextQt")
 
     # Bring up QApplication regardless of branch — both the primary path
     # and the duplicate-warning dialog need our app icon to show in
-    # taskbar / Alt-Tab instead of python.exe's snake.
+    # taskbar / Alt-Tab instead of the Python interpreter's icon.
     from PySide6.QtWidgets import QMessageBox
 
     qt_app = QApplication.instance() or QApplication(sys.argv)
+    # Register the bundled Inter font as early as possible so any QFont
+    # resolution further down in the stack (icons, message boxes,
+    # tooltips spun up before ``apply_theme`` runs) doesn't trigger the
+    # ``qt.qpa.fonts: Replace uses of missing font family "Inter"``
+    # warning. Idempotent if called again from ``apply_theme``.
+    load_bundled_fonts()
     _early_icon = _load_app_icon()
     if not _early_icon.isNull():
         qt_app.setWindowIcon(_early_icon)
@@ -494,10 +356,6 @@ def main() -> int:
                 "Use its system tray icon to bring it back, or quit it first."
             )
             msg.setStandardButtons(QMessageBox.Ok)
-            msg.show()
-            ico_path = resolve_asset_path("assets/tray_idle.ico")
-            if ico_path and os.path.isfile(ico_path):
-                _force_window_icon(int(msg.winId()), ico_path)
             msg.exec()
         except Exception:
             print(
@@ -506,7 +364,7 @@ def main() -> int:
             )
         return 0
 
-    # We are the primary instance — bind the mutex handle so it survives.
+    # We are the primary instance — bind the lock handle so it survives.
     qt_app._instance_mutex = instance_handle  # type: ignore[attr-defined]
 
     # Spawn the inference worker as the very first thing after the
@@ -627,14 +485,6 @@ def main() -> int:
     resource_monitor.start()
 
     window.show()
-
-    # Qt's setWindowIcon doesn't reliably translate into Win32 WM_SETICON,
-    # which means the taskbar and Alt-Tab fall back to python.exe's icon.
-    # Push the icon explicitly via SendMessage(WM_SETICON) once the window
-    # has its native handle.
-    ico_path = resolve_asset_path("assets/tray_idle.ico")
-    if ico_path and os.path.isfile(ico_path):
-        _force_window_icon(int(window.winId()), ico_path)
 
     # Run the persisted-model autoload on a daemon thread so the Qt
     # main thread isn't blocked if the worker process is still finishing

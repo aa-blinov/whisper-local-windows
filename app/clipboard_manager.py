@@ -1,11 +1,18 @@
 import logging
+import sys
 import time
 from typing import Optional
 
 import pyperclip
-import win32gui
-import win32api
-import win32con
+
+if sys.platform == "win32":
+    import win32api
+    import win32con
+    import win32gui
+else:
+    win32api = None  # type: ignore[assignment]
+    win32con = None  # type: ignore[assignment]
+    win32gui = None  # type: ignore[assignment]
 
 class ClipboardManager:    
     def __init__(self, key_simulation_delay, auto_paste, preserve_clipboard):
@@ -80,6 +87,13 @@ class ClipboardManager:
             return False
     
     def get_active_window_handle(self) -> Optional[int]:
+        if sys.platform != "win32":
+            # macOS / Linux don't expose a process-friendly window
+            # handle here — focus tracking would need NSWorkspace /
+            # X11 calls and isn't load-bearing for paste delivery
+            # (the OS routes synthetic key events to the focused
+            # window directly).
+            return None
         try:
             hwnd = win32gui.GetForegroundWindow()
             if hwnd:
@@ -90,9 +104,9 @@ class ClipboardManager:
                 return None
         except Exception as e:
             self.logger.error(f"Failed to get active window handle: {e}")
-            return None       
+            return None
     
-    def execute_auto_paste(self, text: str, preserve_clipboard: bool) -> bool:              
+    def execute_auto_paste(self, text: str, preserve_clipboard: bool) -> bool:
         try:
             original_content = None
             if preserve_clipboard:
@@ -102,15 +116,21 @@ class ClipboardManager:
                 return False
             time.sleep(max(0.02, self.key_simulation_delay))
 
-            try:
-                hwnd = win32gui.GetForegroundWindow()
-                if hwnd:
-                    self.logger.debug(f"Auto-paste target window: '{win32gui.GetWindowText(hwnd)}' ({hwnd})")
-            except Exception:
-                pass
+            if sys.platform == "win32":
+                try:
+                    hwnd = win32gui.GetForegroundWindow()
+                    if hwnd:
+                        self.logger.debug(
+                            f"Auto-paste target window: "
+                            f"'{win32gui.GetWindowText(hwnd)}' ({hwnd})"
+                        )
+                except Exception:
+                    pass
 
-            self._send_ctrl_v()
-            self.logger.info("Auto-pasted via Win32 key simulation", extra={'user_message': True})
+            self._send_paste_combo()
+            self.logger.info(
+                "Auto-pasted via key simulation", extra={'user_message': True}
+            )
 
             if original_content is not None:
                 restore_delay = max(0.15, self.key_simulation_delay * 3)
@@ -120,7 +140,7 @@ class ClipboardManager:
                 time.sleep(self.key_simulation_delay)
 
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Failed to simulate paste keypress: {e}")
             return False
@@ -129,10 +149,12 @@ class ClipboardManager:
         try:
             self.logger.info("Sending ENTER key to active application")
             self._send_enter()
-            self.logger.info("Text submitted with ENTER (Win32)!", extra={'user_message': True})
+            self.logger.info(
+                "Text submitted with ENTER!", extra={'user_message': True}
+            )
 
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Failed to send ENTER key: {e}")
             return False
@@ -179,24 +201,54 @@ class ClipboardManager:
         except Exception as e:
             self.logger.error(f"key_up failed for vk={vk_code}: {e}")
 
-    def _send_ctrl_v(self):
+    def _send_paste_combo(self):
+        """Send the paste hotkey to the focused window.
+
+        Windows: raw ``win32api.keybd_event`` Ctrl+V — works against
+        every Win32 app, no permission prompts. macOS: ``pyautogui``
+        Cmd+V; requires the user to grant Accessibility permission
+        once in System Settings → Privacy & Security → Accessibility.
+        Linux: ``pyautogui`` Ctrl+V via the X11 / Wayland backend.
+        """
+        if sys.platform == "win32":
+            try:
+                self._key_down(win32con.VK_CONTROL)
+                time.sleep(0.01)
+                self._key_down(ord('V'))
+                time.sleep(0.01)
+                self._key_up(ord('V'))
+                time.sleep(0.005)
+                self._key_up(win32con.VK_CONTROL)
+                time.sleep(max(0.02, self.key_simulation_delay))
+            except Exception as e:
+                self.logger.error(f"Failed to send Ctrl+V: {e}")
+            return
+
+        # macOS uses Cmd as the paste modifier; Linux uses Ctrl.
+        modifier = "command" if sys.platform == "darwin" else "ctrl"
         try:
-            self._key_down(win32con.VK_CONTROL)
-            time.sleep(0.01)
-            self._key_down(ord('V'))
-            time.sleep(0.01)
-            self._key_up(ord('V'))
-            time.sleep(0.005)
-            self._key_up(win32con.VK_CONTROL)
+            import pyautogui
+
+            pyautogui.hotkey(modifier, "v")
             time.sleep(max(0.02, self.key_simulation_delay))
         except Exception as e:
-            self.logger.error(f"Failed to send Ctrl+V: {e}")
+            self.logger.error(f"Failed to send {modifier}+V: {e}")
 
     def _send_enter(self):
+        if sys.platform == "win32":
+            try:
+                self._key_down(win32con.VK_RETURN)
+                time.sleep(0.01)
+                self._key_up(win32con.VK_RETURN)
+                time.sleep(max(0.02, self.key_simulation_delay))
+            except Exception as e:
+                self.logger.error(f"Failed to send ENTER: {e}")
+            return
+
         try:
-            self._key_down(win32con.VK_RETURN)
-            time.sleep(0.01)
-            self._key_up(win32con.VK_RETURN)
+            import pyautogui
+
+            pyautogui.press("enter")
             time.sleep(max(0.02, self.key_simulation_delay))
         except Exception as e:
             self.logger.error(f"Failed to send ENTER: {e}")

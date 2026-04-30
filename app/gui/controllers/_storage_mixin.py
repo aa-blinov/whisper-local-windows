@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -150,11 +152,13 @@ class StorageMixin:
     def _on_storage_open(self) -> None:
         """Open the resolved models directory in the OS file manager.
 
-        On Windows uses ``os.startfile`` which honours the user's
-        default explorer.  Creates the directory first if it doesn't
-        exist (might happen on a brand-new install before any model
-        has been downloaded) so the user doesn't get a 'path not
-        found' error popup.
+        Windows uses ``os.startfile`` which honours the user's default
+        Explorer; macOS uses ``open`` (Finder); Linux uses
+        ``xdg-open`` (whatever the desktop environment registers as
+        the file-manager handler). Creates the directory first if it
+        doesn't exist (might happen on a brand-new install before any
+        model has been downloaded) so the user doesn't get a 'path
+        not found' error popup.
         """
         configured = self._config.get_setting("storage", "models_dir")
         resolved = _ctrl_module().get_models_root(configured)
@@ -163,7 +167,12 @@ class StorageMixin:
         except OSError as exc:
             log.warning("Failed to create storage dir for open: %s", exc)
         try:
-            os.startfile(resolved)  # type: ignore[attr-defined]
+            if sys.platform == "win32":
+                os.startfile(resolved)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", resolved])
+            else:
+                subprocess.Popen(["xdg-open", resolved])
         except Exception as exc:
             log.warning("Failed to open storage dir %s: %s", resolved, exc)
             QMessageBox.warning(

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lazy-to-text"
 version = "0.0.1"
-description = "Hotkey STT client for remote faster-whisper backend (Windows)"
+description = "Local ONNX speech-to-text desktop client with global-hotkey dictation and file transcription (Windows + macOS)"
 readme = "README.md"
 authors = [
     {name = "Alexander Blinov", email = "iam@blinovcorp.ru"}
@@ -15,13 +15,17 @@ urls = { Homepage = "https://github.com/aa-blinov/lazy-to-text" }
 dependencies = [
     "numpy>=2.4.4",
     "sounddevice>=0.5.5",
+    # Windows-only global-hotkeys library (RegisterHotKey).  On
+    # macOS / Linux the listener uses ``pynput`` instead.
     "global-hotkeys>=0.1.7; platform_system=='Windows'",
     "pyperclip>=1.11.0",
     "pywin32>=311; platform_system=='Windows'",
-    "pyautogui>=0.9.54; platform_system=='Windows'",
+    # Cross-platform now: used for auto-paste hotkey simulation on
+    # macOS (Cmd+V) and Linux (Ctrl+V).  Windows path keeps its
+    # native ``win32api.keybd_event`` route via ``pywin32``.
+    "pyautogui>=0.9.54",
     "requests>=2.33.1",
     "pyyaml>=6.0.3",
-    "pyinstaller>=6.20.0",
     "pyside6>=6.11.0",
     "scipy>=1.11",
     # libsndfile bindings — fast in-process decoder for the
@@ -37,15 +41,33 @@ dependencies = [
     # install ffmpeg system-wide.
     "imageio-ffmpeg>=0.5",
     "psutil>=6.0",
-    # GPU monitoring in the topbar (NVML).  Falls back gracefully on
-    # machines without an NVIDIA driver.
-    "nvidia-ml-py>=12.0",
+    # GPU monitoring in the topbar (NVML).  Windows-only — Apple
+    # Silicon has no NVIDIA path, and the Mac topbar shows CPU/RAM
+    # only.
+    "nvidia-ml-py>=12.0; platform_system=='Windows'",
     # The single ASR backend.  ``onnx-asr`` covers Whisper, GigaAM v3
     # and Parakeet TDT v3 via ONNX Runtime — no PyTorch, no NeMo, no
-    # CTranslate2.  ``[gpu,hub]`` pulls in ``onnxruntime-gpu`` (CUDA
-    # acceleration) and ``huggingface-hub`` (model downloads).  Drops
-    # the install size from ~4 GB (with torch + NeMo) to ~700 MB.
-    "onnx-asr[gpu,hub]>=0.11.0",
+    # CTranslate2.  ``[gpu,hub]`` pulls ``onnxruntime-gpu`` (CUDA) on
+    # Windows; ``[cpu,hub]`` pulls plain ``onnxruntime`` (which on
+    # macOS auto-includes the CoreMLExecutionProvider) on every
+    # other platform.  Both drop install size from ~4 GB (torch +
+    # NeMo) to ~700 MB.
+    "onnx-asr[gpu,hub]>=0.11.0; platform_system=='Windows'",
+    "onnx-asr[cpu,hub]>=0.11.0; platform_system!='Windows'",
+    # Cross-platform XDG / ~/Library / %LOCALAPPDATA% resolver —
+    # replaces the hand-rolled ``_user_local_data_dir`` helper.
+    "platformdirs>=4.0",
+    # Cross-platform single-instance lock (replaces win32event
+    # named-mutex on non-Windows).
+    "filelock>=3.13",
+    # Cross-platform global hotkey listener for non-Windows
+    # platforms.  Windows keeps ``global-hotkeys`` for backward
+    # compatibility with the existing native binding.
+    "pynput>=1.7; platform_system!='Windows'",
+    # Cross-platform sound playback for non-Windows platforms
+    # (Windows keeps ``winsound`` from stdlib).  Uses AppKit on
+    # macOS, GStreamer / aplay on Linux.
+    "playsound3>=3.2; platform_system!='Windows'",
 ]
 
 [project.scripts]

@@ -1157,13 +1157,38 @@ def test_controller_hf_token_clear_button_wipes_config_and_env(
     assert window.shortcuts_view.hf_token() == ""
 
 
-def test_controller_open_storage_folder_uses_os_startfile(qtbot, monkeypatch):
-    """Clicking ``Open folder`` must call ``os.startfile`` with the
-    resolved storage path.  Regression test for a NameError that
-    crashed the click because ``os`` wasn't imported in
-    ``app_controller.py``."""
-    import os as _os
+def _patch_open_folder(monkeypatch, captured: list) -> None:
+    """Capture whichever platform-specific call ``_on_storage_open``
+    issues to launch the OS file manager.
 
+    Windows uses ``os.startfile`` (which doesn't exist as an attribute
+    on macOS / Linux — hence ``raising=False`` so the setattr creates
+    it on the fly when the test runs on a non-Windows host); macOS /
+    Linux use ``subprocess.Popen([...])``.
+    """
+    import os as _os
+    import subprocess as _sp
+
+    monkeypatch.setattr(
+        _os, "startfile",
+        lambda p: captured.append(p),
+        raising=False,
+    )
+
+    class _FakePopen:
+        def __init__(self, args, *a, **kw):
+            captured.append(args[1])
+
+    monkeypatch.setattr(_sp, "Popen", _FakePopen)
+
+
+def test_controller_open_storage_folder_invokes_platform_opener(
+    qtbot, monkeypatch,
+):
+    """Clicking ``Open folder`` must call the platform's file-manager
+    opener with the resolved storage path. Regression test for a
+    NameError that crashed the click because ``os`` wasn't imported
+    in ``app_controller.py``."""
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
@@ -1177,24 +1202,23 @@ def test_controller_open_storage_folder_uses_os_startfile(qtbot, monkeypatch):
         lambda v: v or "C:/resolved/default",
     )
     captured: list = []
-    monkeypatch.setattr(_os, "startfile", lambda p: captured.append(p))
+    _patch_open_folder(monkeypatch, captured)
 
     AppController(config=config, window=window)
     window.shortcuts_view.storage_open_requested.emit()
 
     assert captured == ["C:/resolved/default"], (
-        "expected os.startfile to be called with the resolved path"
+        "expected the platform opener to be called with the resolved path"
     )
 
 
 def test_controller_open_storage_folder_creates_dir_if_missing(
     qtbot, monkeypatch, tmp_path,
 ):
-    """Brand-new install (cache dir doesn't exist yet): the open-folder
-    handler creates the directory before launching Explorer so the
-    user doesn't get a 'path not found' popup from the OS."""
-    import os as _os
-
+    """Brand-new install (cache dir doesn't exist yet): the
+    open-folder handler creates the directory before launching the
+    file manager so the user doesn't get a 'path not found' popup
+    from the OS."""
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
@@ -1207,7 +1231,7 @@ def test_controller_open_storage_folder_creates_dir_if_missing(
     monkeypatch.setattr(
         controller_module, "get_models_root", lambda _v: str(fresh_dir)
     )
-    monkeypatch.setattr(_os, "startfile", lambda p: None)
+    _patch_open_folder(monkeypatch, [])
 
     assert not fresh_dir.exists()
 
@@ -1215,7 +1239,7 @@ def test_controller_open_storage_folder_creates_dir_if_missing(
     window.shortcuts_view.storage_open_requested.emit()
 
     assert fresh_dir.exists(), (
-        "expected the controller to mkdir before opening Explorer"
+        "expected the controller to mkdir before opening the file manager"
     )
 
 

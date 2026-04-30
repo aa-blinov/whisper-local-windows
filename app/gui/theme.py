@@ -6,7 +6,6 @@ use ``{{group.key}}`` placeholders that are substituted at load time.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
@@ -15,21 +14,7 @@ from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 
-def _styles_dir() -> Path:
-    """Locate the directory containing per-theme .qss files.
-
-    In a PyInstaller bundle the .py modules live in the frozen PYZ archive,
-    so ``Path(__file__).parent`` does not resolve to a real folder. The
-    spec drops the bundled stylesheets under ``sys._MEIPASS / gui / styles``;
-    fall back to that location when frozen.
-    """
-    if getattr(sys, "frozen", False):
-        meipass = Path(getattr(sys, "_MEIPASS", ""))
-        return meipass / "gui" / "styles"
-    return Path(__file__).parent / "styles"
-
-
-_STYLES_DIR = _styles_dir()
+_STYLES_DIR = Path(__file__).parent / "styles"
 
 
 @dataclass(frozen=True)
@@ -75,13 +60,18 @@ TOKENS = _Tokens(
         "xl": 20,
     },
     fonts={
-        # Inter first — modern UI default used by GitHub, Vercel,
-        # Figma. Falls back to Segoe UI Variable on Windows 11, then
-        # Segoe UI on older Windows, then a generic sans for Linux /
-        # frozen-bundle scenarios where no preferred face is
-        # installed. The whole stack is emitted into QSS verbatim,
-        # which Qt's font matcher honours left-to-right.
-        "family": '"Inter", "Segoe UI Variable", "Segoe UI", "Helvetica Neue", Arial, sans-serif',
+        # ``Inter Variable`` is the family name our bundled
+        # ``InterVariable.ttf`` registers under (Qt's
+        # ``addApplicationFont`` reads it from the font's name table
+        # — variable fonts get a single family with axis variations
+        # rolled in). ``Inter`` is the static-cut fallback for
+        # systems where the user has installed Rasmus's classic
+        # release; ``Segoe UI Variable`` / ``Segoe UI`` cover
+        # Windows 11 / older Windows; ``Helvetica Neue`` is the
+        # preferred macOS system face when nothing else matches.
+        # The whole stack is emitted into QSS verbatim, which Qt's
+        # font matcher honours left-to-right.
+        "family": '"Inter Variable", "Inter", "Segoe UI Variable", "Segoe UI", "Helvetica Neue", Arial, sans-serif',
         "size_title": 22,
         "size_heading": 17,
         "size_body": 13,
@@ -137,7 +127,7 @@ def icon_path(filename: str) -> Optional[str]:
 _FONTS_LOADED = False
 
 
-def _load_bundled_fonts() -> None:
+def load_bundled_fonts() -> None:
     """Register every ``.ttf`` shipped under ``styles/fonts/`` with
     Qt's font database.
 
@@ -146,6 +136,14 @@ def _load_bundled_fonts() -> None:
     Inter Variable so the UI looks identical on machines where the
     user hasn't pre-installed it; the font-family stack in
     ``TOKENS.fonts['family']`` references it by name.
+
+    Should be called as early as possible after ``QApplication`` is
+    constructed — Qt builds its font-alias cache lazily on the first
+    ``QFont`` resolution, and any reference to "Inter" before this
+    runs triggers a ``qt.qpa.fonts: Replace uses of missing font
+    family "Inter"`` warning. Calling here from ``apply_theme`` is
+    too late if widgets / icons / message boxes were created before
+    the stylesheet is applied.
     """
     global _FONTS_LOADED
     if _FONTS_LOADED:
@@ -160,5 +158,5 @@ def _load_bundled_fonts() -> None:
 
 
 def apply_theme(app: QApplication, theme: str = "dark") -> None:
-    _load_bundled_fonts()
+    load_bundled_fonts()
     app.setStyleSheet(load_stylesheet(theme))

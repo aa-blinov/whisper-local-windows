@@ -1,15 +1,26 @@
 import logging
+import sys
 
-from global_hotkeys import register_hotkeys, start_checking_hotkeys, stop_checking_hotkeys
-# Extra imports to encourage PyInstaller to collect dependencies used internally
-try:
-    import keyboard  # type: ignore
-except Exception:  # pragma: no cover
-    keyboard = None
-try:
-    import ctypes  # noqa: F401
-except Exception:
-    pass
+if sys.platform == "win32":
+    from global_hotkeys import (
+        register_hotkeys,
+        start_checking_hotkeys,
+        stop_checking_hotkeys,
+    )
+    # Extra imports to encourage PyInstaller to collect dependencies
+    # used internally by ``global_hotkeys``.
+    try:
+        import keyboard  # type: ignore  # noqa: F401
+    except Exception:  # pragma: no cover
+        pass
+    try:
+        import ctypes  # noqa: F401
+    except Exception:
+        pass
+else:
+    register_hotkeys = None  # type: ignore[assignment]
+    start_checking_hotkeys = None  # type: ignore[assignment]
+    stop_checking_hotkeys = None  # type: ignore[assignment]
 
 from app.state_manager import StateManager
 
@@ -30,7 +41,11 @@ class HotkeyListener:
         self.cancel_combination = cancel_combination
         self.is_listening = False
         self.logger = logging.getLogger(__name__)
-        self.logger.debug(f"[hotkeys] Initializing (frozen={getattr(__import__('sys'),'frozen',False)}) start='{start_recording_hotkey}' stop='{stop_recording_hotkey}' cancel='{cancel_combination}'")
+        # Non-Windows path: pynput's GlobalHotKeys instance (created
+        # by ``_setup_hotkeys`` and started by ``start_listening``).
+        self._pynput_listener = None
+        self._pynput_callbacks: dict[str, callable] = {}
+        self.logger.debug(f"[hotkeys] Initializing start='{start_recording_hotkey}' stop='{stop_recording_hotkey}' cancel='{cancel_combination}'")
 
         self._setup_hotkeys()
         self.start_listening()
@@ -69,16 +84,24 @@ class HotkeyListener:
             })
         hotkey_configs.sort(key=self._get_hotkey_combination_specificity, reverse=True)
         self.hotkey_bindings = []
+        self._pynput_callbacks = {}
         for config in hotkey_configs:
-            formatted_hotkey = self._convert_hotkey_to_global_hotkeys_format(config['combination'])
-            self.hotkey_bindings.append([
-                formatted_hotkey,
-                config['callback'],
-                config.get('release_callback') or None,
-                False
-            ])
+            if sys.platform == "win32":
+                formatted_hotkey = self._convert_hotkey_to_global_hotkeys_format(config['combination'])
+                self.hotkey_bindings.append([
+                    formatted_hotkey,
+                    config['callback'],
+                    config.get('release_callback') or None,
+                    False
+                ])
+            else:
+                formatted_hotkey = self._convert_hotkey_to_pynput_format(config['combination'])
+                self._pynput_callbacks[formatted_hotkey] = config['callback']
             self.logger.info(f"Configured {config['name']} hotkey: {config['combination']} -> {formatted_hotkey}")
-        self.logger.info(f"Total hotkeys configured: {len(self.hotkey_bindings)}")
+        if sys.platform == "win32":
+            self.logger.info(f"Total hotkeys configured: {len(self.hotkey_bindings)}")
+        else:
+            self.logger.info(f"Total hotkeys configured: {len(self._pynput_callbacks)}")
     
     def _get_hotkey_combination_specificity(self, hotkey_config: dict) -> int:
         """
@@ -129,28 +152,39 @@ class HotkeyListener:
         if self.is_listening:
             return
         try:
-            self.logger.debug(f"[hotkeys] Registering {len(self.hotkey_bindings)} bindings: {self.hotkey_bindings}")
-            register_hotkeys(self.hotkey_bindings)
-            start_checking_hotkeys()
+            if sys.platform == "win32":
+                self.logger.debug(f"[hotkeys] Registering {len(self.hotkey_bindings)} bindings: {self.hotkey_bindings}")
+                register_hotkeys(self.hotkey_bindings)
+                start_checking_hotkeys()
+            else:
+                from pynput import keyboard as _pk
+
+                self._pynput_listener = _pk.GlobalHotKeys(self._pynput_callbacks)
+                self._pynput_listener.start()
             self.is_listening = True
             self.logger.info("Global hotkey listener active")
         except Exception as e:
             self.logger.error(f"Failed to start hotkey listener: {e}")
             raise
-    
+
     def stop_listening(self):
         if not self.is_listening:
             return
         try:
-            stop_checking_hotkeys()
-            # Принудительно очищаем все регистрации горячих клавиш
-            try:
-                from global_hotkeys import clear_hotkeys
-                clear_hotkeys()
-                self.logger.debug("Cleared all hotkey registrations")
-            except (ImportError, AttributeError):
-                # Если функция clear_hotkeys недоступна, используем альтернативный подход
-                self.logger.debug("clear_hotkeys not available, using alternative cleanup")
+            if sys.platform == "win32":
+                stop_checking_hotkeys()
+                # Принудительно очищаем все регистрации горячих клавиш
+                try:
+                    from global_hotkeys import clear_hotkeys
+                    clear_hotkeys()
+                    self.logger.debug("Cleared all hotkey registrations")
+                except (ImportError, AttributeError):
+                    # Если функция clear_hotkeys недоступна, используем альтернативный подход
+                    self.logger.debug("clear_hotkeys not available, using alternative cleanup")
+            else:
+                if self._pynput_listener is not None:
+                    self._pynput_listener.stop()
+                    self._pynput_listener = None
             self.is_listening = False
             self.logger.info("Hotkey listener stopped")
         except Exception as e:
@@ -174,7 +208,52 @@ class HotkeyListener:
         for key in keys:
             key = key.strip()
             converted_keys.append(key_mapping.get(key, key))
-        return ' + '.join(converted_keys)    
+        return ' + '.join(converted_keys)
+
+    def _convert_hotkey_to_pynput_format(self, hotkey_str: str) -> str:
+        """Convert ``ctrl+f2`` → ``<ctrl>+<f2>`` for pynput's GlobalHotKeys.
+
+        pynput expects modifiers and named keys wrapped in angle
+        brackets and single character keys bare. We map the same
+        aliases the Settings tab accepts (``ctrl``, ``win``, ``cmd``,
+        etc.) to pynput's canonical names so the same config.yaml
+        works on both platforms.
+        """
+        modifier_aliases = {
+            'ctrl': 'ctrl',
+            'control': 'ctrl',
+            'shift': 'shift',
+            'alt': 'alt',
+            'option': 'alt',
+            'win': 'cmd',
+            'windows': 'cmd',
+            'cmd': 'cmd',
+            'command': 'cmd',
+            'super': 'cmd',
+        }
+        named_keys = {
+            'space', 'enter', 'tab', 'backspace', 'delete',
+            'esc', 'escape', 'home', 'end', 'page_up', 'page_down',
+            'up', 'down', 'left', 'right', 'insert',
+            *(f'f{i}' for i in range(1, 25)),
+        }
+        parts = []
+        for raw in hotkey_str.lower().split('+'):
+            key = raw.strip()
+            if key in modifier_aliases:
+                parts.append(f"<{modifier_aliases[key]}>")
+            elif key == 'esc':
+                parts.append("<esc>")
+            elif key in named_keys:
+                parts.append(f"<{key}>")
+            elif len(key) == 1:
+                parts.append(key)
+            else:
+                # Unknown long token — let pynput surface the error
+                # at registration time instead of silently passing it
+                # through.
+                parts.append(f"<{key}>")
+        return '+'.join(parts)
     
     def change_hotkey_config(self, setting: str, value):
         valid_settings = ['start_recording_hotkey', 'stop_recording_hotkey', 'cancel_combination']

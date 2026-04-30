@@ -357,132 +357,28 @@ def test_move_cached_dir_short_circuits_when_src_equals_dst(tmp_path):
     assert (src / "model.bin").exists()
 
 
-# ---- Frozen-mode user data dirs --------------------------------------------
+# ---- Dev-mode user data dirs -----------------------------------------------
 
 
-def test_get_project_logs_path_dev_unchanged(monkeypatch):
-    """Dev mode (non-frozen) keeps the existing project-root
-    behaviour — walks up from the module file to find
-    ``pyproject.toml``."""
-    import sys
-
-    monkeypatch.delattr(sys, "frozen", raising=False)
-
+def test_get_project_logs_path_dev_unchanged():
+    """Dev mode walks up from the module file to find
+    ``pyproject.toml`` and returns ``<project>/logs``."""
     from app.utils import get_project_logs_path
 
     result = get_project_logs_path()
-    # Project's own logs dir; never a hidden APPDATA path in dev.
+    # Project's own logs dir; never a hidden user-data path in dev.
     assert "AppData" not in result
+    assert "Application Support" not in result
     assert "logs" in result.lower()
 
 
-def test_get_project_logs_path_frozen_uses_local_appdata(
-    tmp_path, monkeypatch,
-):
-    """Frozen build → ``%LOCALAPPDATA%/LazyToText/logs`` so the
-    runtime can write logs even when installed in
-    ``Program Files`` (read-only without admin)."""
-    import sys
-
-    local_appdata = tmp_path / "local-appdata"
-    local_appdata.mkdir()
-    monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(
-        sys, "executable",
-        "C:/Program Files/LazyToText/LazyToText.exe",
-        raising=False,
-    )
-
-    from app.utils import get_project_logs_path
-
-    result = Path(get_project_logs_path())
-    assert result == local_appdata / "LazyToText" / "logs"
-    assert result.is_dir()
-
-
-def test_get_project_logs_path_frozen_falls_back_when_localappdata_missing(
-    tmp_path, monkeypatch,
-):
-    """Sandboxed shells without ``%LOCALAPPDATA%`` fall back to
-    ``~/AppData/Local/LazyToText/logs``."""
-    import sys
-
-    monkeypatch.delenv("LOCALAPPDATA", raising=False)
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", "C:/foo/LazyToText.exe", raising=False)
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
-
-    from app.utils import get_project_logs_path
-
-    result = Path(get_project_logs_path())
-    expected = tmp_path / "fake_home" / "AppData" / "Local" / "LazyToText" / "logs"
-    assert result == expected
-    assert result.is_dir()
-
-
-def test_get_project_models_path_dev_unchanged(monkeypatch):
-    import sys
-
-    monkeypatch.delattr(sys, "frozen", raising=False)
-
+def test_get_project_models_path_dev_unchanged():
     from app.utils import get_project_models_path
 
     result = get_project_models_path()
     assert "AppData" not in result
+    assert "Application Support" not in result
     assert "models" in result.lower()
-
-
-def test_get_project_models_path_frozen_uses_local_appdata(
-    tmp_path, monkeypatch,
-):
-    """Frozen build → ``%LOCALAPPDATA%/LazyToText/models``. Models
-    are gigabytes — LOCAL appdata (not Roaming) is the right
-    bucket; users with roaming profiles don't want 5 GB of weights
-    syncing across machines."""
-    import sys
-
-    local_appdata = tmp_path / "local-appdata"
-    local_appdata.mkdir()
-    monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(
-        sys, "executable",
-        "C:/Program Files/LazyToText/LazyToText.exe",
-        raising=False,
-    )
-
-    from app.utils import get_project_models_path
-
-    result = Path(get_project_models_path())
-    assert result == local_appdata / "LazyToText" / "models"
-    # ``get_project_models_path`` is a pure path-resolver now; the
-    # consumer (HF Hub / GigaAM / mover script) creates the directory
-    # on first download. The caller should NOT see a side-effect dir
-    # appear just from probing the configured path.
-    assert not result.exists(), (
-        "path resolver must not create the directory as a side effect"
-    )
-
-
-def test_get_project_models_path_frozen_falls_back_when_localappdata_missing(
-    tmp_path, monkeypatch,
-):
-    import sys
-
-    monkeypatch.delenv("LOCALAPPDATA", raising=False)
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", "C:/foo/LazyToText.exe", raising=False)
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
-
-    from app.utils import get_project_models_path
-
-    result = Path(get_project_models_path())
-    expected = tmp_path / "fake_home" / "AppData" / "Local" / "LazyToText" / "models"
-    assert result == expected
-    assert not result.exists(), (
-        "path resolver must not create the directory as a side effect"
-    )
 
 
 # ---- is_onnx_model_cached ---------------------------------------------------

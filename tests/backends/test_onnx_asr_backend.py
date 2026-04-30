@@ -241,9 +241,14 @@ def test_load_passes_cpu_provider_when_device_cpu(monkeypatch):
     assert kwargs.get("providers") == ["CPUExecutionProvider"]
 
 
-def test_load_omits_providers_when_device_auto(monkeypatch):
-    """``device='auto'`` lets ONNX Runtime pick — don't pass providers
-    so it uses its built-in auto-discovery."""
+def test_load_auto_uses_platform_default_providers(monkeypatch):
+    """``device='auto'`` is platform-aware: macOS stages
+    ``CoreMLExecutionProvider`` ahead of CPU so the Neural Engine /
+    GPU is used; Windows / Linux pass ``providers=None`` and let
+    ONNX Runtime auto-discover (CUDA when ``onnxruntime-gpu`` is
+    installed, CPU otherwise)."""
+    import sys as _sys
+
     fake_module, _ = _install_fake_onnx_asr(monkeypatch)
 
     from app.backends.onnx_backend import OnnxAsrBackend
@@ -253,7 +258,39 @@ def test_load_omits_providers_when_device_auto(monkeypatch):
     assert _wait(lambda: backend.status() == "ready")
 
     _args, kwargs = fake_module.load_model.call_args
-    assert "providers" not in kwargs
+    if _sys.platform == "darwin":
+        providers = kwargs.get("providers")
+        assert providers is not None and len(providers) == 2
+        # First entry is the CoreML tuple-form (provider_name, options).
+        assert providers[0][0] == "CoreMLExecutionProvider"
+        assert providers[0][1].get("MLComputeUnits") == "ALL"
+        assert providers[1] == "CPUExecutionProvider"
+    else:
+        assert "providers" not in kwargs
+
+
+def test_load_coreml_explicit_passes_provider_options(monkeypatch):
+    """``device='coreml'`` is the explicit override — same providers
+    list as the macOS ``auto`` path (CoreML w/ MLProgram + ALL
+    compute units, CPU fallback). Available on every platform that
+    has ``onnxruntime`` installed (the EP just won't load on
+    non-Apple hardware and ORT will fall through to CPU)."""
+    fake_module, _ = _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="coreml")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    _args, kwargs = fake_module.load_model.call_args
+    providers = kwargs.get("providers")
+    assert providers is not None and len(providers) == 2
+    assert providers[0][0] == "CoreMLExecutionProvider"
+    assert providers[0][1] == {
+        "ModelFormat": "MLProgram", "MLComputeUnits": "ALL",
+    }
+    assert providers[1] == "CPUExecutionProvider"
 
 
 def test_load_failure_transitions_to_error(monkeypatch):

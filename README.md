@@ -1,10 +1,11 @@
 # Lazy to Text
 
-Press a global hotkey, speak, paste. Local speech-to-text for Windows, with a Qt UI and a single ONNX inference path.
+Press a global hotkey, speak, paste. Local speech-to-text for Windows
+and macOS, with a Qt UI and a single ONNX inference path.
 
 [![Python](https://img.shields.io/badge/python-3.12+-blue)](https://www.python.org/)
 [![Qt](https://img.shields.io/badge/UI-PySide6-41cd52)](https://doc.qt.io/qtforpython-6/)
-[![ONNX Runtime](https://img.shields.io/badge/inference-onnxruntime--gpu-005CED)](https://onnxruntime.ai/)
+[![ONNX Runtime](https://img.shields.io/badge/inference-onnxruntime-005CED)](https://onnxruntime.ai/)
 [![onnx-asr](https://img.shields.io/badge/loader-onnx--asr-blueviolet)](https://github.com/istupakov/onnx-asr)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -14,14 +15,17 @@ Press a global hotkey, speak, paste. Local speech-to-text for Windows, with a Qt
 
 ## What it is
 
-A Windows desktop application that records microphone audio on a global hotkey,
-transcribes it locally through ONNX Runtime, and pastes the result into the
-focused window. A second tab transcribes audio / video files (drop or browse) —
-WAV, MP3, FLAC, OGG, OPUS, M4A, MP4, MOV, MKV, WebM and friends.
+A desktop application that records microphone audio on a global hotkey,
+transcribes it locally through ONNX Runtime, and pastes the result into
+the focused window. A second tab transcribes audio / video files
+(drop or browse) — WAV, MP3, FLAC, OGG, OPUS, M4A, MP4, MOV, MKV,
+WebM and friends.
 
-The audio never leaves the machine. No cloud APIs, no PyTorch in the install
-tree — every model runs through `onnxruntime-gpu` and downloads from
-Hugging Face on first use.
+The audio never leaves the machine. No cloud APIs, no PyTorch in the
+install tree — every model runs through ONNX Runtime and downloads
+from Hugging Face on first use. Distribution is source-only: clone
+the repo, ``uv sync``, ``uv run lazy-to-text-ui``. No PyInstaller
+build, no installer.
 
 ## Features
 
@@ -42,9 +46,12 @@ Hugging Face on first use.
   crushes Whisper on telephony / noisy audio), Vosk RU (30 / 50 MB
   Zipformers for low-spec laptops), plus Parakeet TDT v3 and Canary 1B v2
   for multilingual coverage that includes Russian.
-- **GPU acceleration with auto CPU fallback.** `onnxruntime-gpu` exposes
-  CUDA + TensorRT providers; the backend tries CUDA first and silently
-  retries on CPU if no compatible NVIDIA driver is present. Works on a
+- **Hardware acceleration with auto CPU fallback.** Windows uses
+  `onnxruntime-gpu` (CUDA + TensorRT providers); macOS uses
+  `onnxruntime` with `CoreMLExecutionProvider` for Apple Silicon
+  (Neural Engine + GPU + CPU). Both platforms try the accelerator
+  first and silently retry on CPU if the driver / hardware is
+  missing or the model contains an unsupported op. Works on a
   laptop without a discrete GPU.
 - **Per-model inference settings.** Whisper cards show the full panel
   (language / VAD / beam / temperature / prompt). Parakeet shows just
@@ -54,8 +61,9 @@ Hugging Face on first use.
   appears next to the loading indicator. One click rolls back the active
   card / config / topbar pill — no waiting for the download to finish.
 - **Live resource monitor.** Topbar widget tracks CPU / RAM / GPU
-  utilisation / VRAM via `psutil` + `nvidia-ml-py`, refreshing every two
-  seconds. Hides the GPU bar gracefully on machines without NVIDIA.
+  utilisation / VRAM via `psutil` + `nvidia-ml-py` (Windows only),
+  refreshing every two seconds. Hides the GPU bar gracefully on
+  machines without NVIDIA — including all Macs.
 - **Recording status chip with live VU.** A `STATUS · Idle / Recording /
   Processing` chip in the sidebar's bottom-left corner mirrors the
   topbar's resource cards. The VU meter under it animates while
@@ -64,7 +72,8 @@ Hugging Face on first use.
   latest transcription pops up after every successful run.
 - **Storage card.** Shows the resolved models folder (overridable),
   total disk used by the cache (computed asynchronously), and an
-  Open-folder shortcut to inspect / clean the cache in Explorer.
+  Open-folder shortcut to inspect / clean the cache in Explorer
+  (Windows) or Finder (macOS).
 - **Searchable model browser.** Search box + family chips (All / Whisper
   Turbo / GigaAM / Parakeet / T-One / Vosk / Canary) narrow the grid.
   Empty-state placeholder when nothing matches.
@@ -81,18 +90,24 @@ Hugging Face on first use.
   the sidebar, bundled Inter font, family-coloured badges, smooth
   cosine-eased pixel-level scrolling everywhere — refresh-rate-aware
   (60 / 144 / 240 Hz), so animations match the user's monitor.
-- **Native Windows polish.** System tray with state-aware icon,
-  single-instance guard via named mutex, confirmation dialog before
-  destructive history wipes, `Ctrl+1..5` keyboard shortcuts to switch
-  tabs.
+- **System tray with state-aware icon**, single-instance guard
+  (named mutex on Windows, `filelock` lockfile on macOS),
+  confirmation dialog before destructive history wipes, `Ctrl+1..5`
+  keyboard shortcuts to switch tabs.
 
 ## Quick start
 
-Requires Windows 10 / 11, Python 3.12, and a microphone. A CUDA-capable
-GPU is recommended for the larger models (Whisper Large, Parakeet,
-Canary). Vosk RU and Whisper Base run comfortably on CPU.
+Requires Python 3.12, [uv](https://docs.astral.sh/uv/), and a
+microphone.
 
-```powershell
+- **Windows 10 / 11**: a CUDA-capable NVIDIA GPU is recommended for the
+  larger models (Whisper Large, Parakeet, Canary).
+- **macOS 12+ on Apple Silicon (M-series)**: CoreML routes inference
+  through the Neural Engine + GPU automatically. Intel Macs run on CPU.
+- Vosk RU, Whisper Base, GigaAM CTC and T-One run comfortably on
+  CPU on either platform.
+
+```bash
 git clone https://github.com/aa-blinov/lazy-to-text.git
 cd lazy-to-text
 
@@ -100,76 +115,30 @@ uv sync                      # creates the venv from uv.lock
 uv run lazy-to-text-ui       # launch the app
 ```
 
-The first launch leaves no model loaded — pick one from the Models tab and
-click **Download**. Weights land in `<project>/models/hub/` (HF cache);
-the path is overridable via Settings → Storage. Press `Ctrl+F2`, speak,
-`Ctrl+F3` — the transcript pastes into whatever window has focus, and a
-banner confirms in the bottom-right.
+The first launch leaves no model loaded — pick one from the Models tab
+and click **Download**. Weights land in `<project>/models/hub/`
+(HF cache); the path is overridable via Settings → Storage. Press
+`Ctrl+F2`, speak, `Ctrl+F3` — the transcript pastes into whatever
+window has focus, and a banner confirms in the bottom-right.
 
-To transcribe an audio or video file instead, switch to the **Transcribe**
-tab, drop a file (or click Browse), and watch the result appear.
+To transcribe an audio or video file instead, switch to the
+**Transcribe** tab, drop a file (or click Browse), and watch the
+result appear.
 
-## Run from anywhere (PowerShell shortcut)
+### macOS first-run permissions
 
-Don't want to build an installer just to launch the app from outside
-the repo directory? Drop a few helper functions into your PowerShell
-profile and call `lazy` from any working directory. Faster to set up
-than [`build-exe.ps1`](#building-a-standalone-executable) +
-[install-locally](#installing-locally), and the launcher stays in sync
-with the repo automatically (no rebuild after a `git pull`).
+Two system prompts appear the first time you exercise the relevant
+features:
 
-1. **Edit your PowerShell profile** (created if missing):
-
-   ```powershell
-   if (-not (Test-Path $PROFILE)) {
-       New-Item -ItemType File -Path $PROFILE -Force | Out-Null
-   }
-   notepad $PROFILE
-   ```
-
-2. **Paste this** at the bottom — change the first line to wherever
-   you cloned the repo:
-
-   ```powershell
-   $LazyToTextRoot = 'C:\path\to\lazy-to-text'
-
-   function lazy {
-       Start-Process `
-           -FilePath (Join-Path $LazyToTextRoot '.venv\Scripts\pythonw.exe') `
-           -ArgumentList @('-m', 'app.gui.app') `
-           -WorkingDirectory $LazyToTextRoot
-   }
-
-   function lazy-debug {
-       Push-Location $LazyToTextRoot
-       try { & .venv\Scripts\python.exe -m app.gui.app } finally { Pop-Location }
-   }
-
-   function lazy-log {
-       Get-Content (Join-Path $LazyToTextRoot 'logs\app.log') -Tail 30 -Wait
-   }
-   ```
-
-3. **Allow profile scripts** (one-time per user — leaves signed-by-
-   unknown-publisher scripts blocked, only your own profile runs):
-
-   ```powershell
-   Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-   ```
-
-4. **Reload** the profile (or open a fresh PowerShell window):
-
-   ```powershell
-   . $PROFILE
-   ```
-
-Now from any directory:
-
-| Command       | What it does                                                       |
-|---------------|--------------------------------------------------------------------|
-| `lazy`        | Launch the app in the background (windowed, no console)            |
-| `lazy-debug`  | Launch with attached console — handy for inspecting startup errors |
-| `lazy-log`    | Tail `logs\app.log` in real time (`Ctrl+C` to stop)                |
+- **Microphone** — requested by `sounddevice` / CoreAudio when the
+  recorder opens the input device. Click *Allow*.
+- **Accessibility** — required by `pynput` for global hotkeys and by
+  `pyautogui` for the auto-paste keystroke. macOS won't prompt for
+  this automatically; open *System Settings → Privacy & Security →
+  Accessibility* and add the binary you launch (`Terminal`, `iTerm`,
+  or your IDE — whichever process invokes `uv run`). Without it the
+  hotkeys log a one-time warning at startup and the dictation flow
+  stays inactive; the file-transcribe tab still works.
 
 ## Screenshots
 
@@ -217,16 +186,18 @@ Every model is an ONNX export downloaded from Hugging Face on first use.
 
 ## Configuration
 
-`config.yaml` lives in the project root (or `%APPDATA%\LazyToText\` in a
-built distribution). Most fields are exposed in the UI; the file is the
-source of truth.
+`config.yaml` lives in the project root (resolved by walking up from
+the working directory to the nearest `pyproject.toml`). Most fields
+are exposed in the UI; the file is the source of truth.
 
 ```yaml
 whisper:
   model: parakeet-tdt-v3        # any alias from app/model_mapping.py, or
                                 # any HF repo path with an ONNX export
-  device: auto                  # auto | cpu | cuda
-  compute_type: float16         # float16 | int8 | float32
+  device: auto                  # auto | cpu | cuda | coreml
+                                # auto = CUDA on Windows w/ NVIDIA,
+                                # CoreML on Apple Silicon, CPU otherwise
+  compute_type: float32         # float16 | int8 | float32
   language: auto                # ISO code, or "auto" for auto-detect
                                 # (only Whisper honours this)
   beam_size: 5                  # legacy field, ignored by ONNX path
@@ -269,8 +240,8 @@ audio_feedback:
 
 storage:
   models_dir: ""                # empty = use default
-                                # (<project>/models in dev,
-                                #  %LOCALAPPDATA%/LazyToText/models in exe)
+                                # (<project>/models — created on
+                                # first model download).
 
 history:
   enabled: true
@@ -319,15 +290,18 @@ you only want to reset the storage path.
                                           ┌────────────────────────────┐
                                           │ OnnxAsrBackend             │
                                           │ family-aware (whisper /    │
-                                          │ gigaam / parakeet); CUDA → │
-                                          │ CPU fallback; 25 s chunking│
+                                          │ gigaam / parakeet);        │
+                                          │ CUDA / CoreML → CPU        │
+                                          │ fallback; 25 s chunking    │
                                           │ for long audio.            │
                                           └────────────┬───────────────┘
                                                        │
                                                        ▼
                                           ┌────────────────────────────┐
-                                          │ onnx-asr + onnxruntime-gpu │
-                                          │ (single inference path)    │
+                                          │ onnx-asr + onnxruntime     │
+                                          │ (CUDA on Windows, CoreML   │
+                                          │  on Apple Silicon, CPU     │
+                                          │  everywhere)               │
                                           └────────────────────────────┘
 ```
 
@@ -374,8 +348,10 @@ app/
 ├── clipboard_manager.py                   ← domain: paste delivery
 ├── config_manager.py                      ← domain: yaml read/write
 ├── history_manager.py                     ← domain: transcription history JSON
-├── hotkey_listener.py                     ← domain: global-hotkeys binding
-├── instance_manager.py                    ← domain: single-instance mutex
+├── hotkey_listener.py                     ← domain: cross-platform hotkey binding
+│                                            (global-hotkeys on Win, pynput elsewhere)
+├── instance_manager.py                    ← domain: single-instance lock
+│                                            (named mutex on Win, filelock elsewhere)
 ├── model_mapping.py                       ← domain: registry of supported models
 ├── inference_settings.py                  ← domain: per-model settings dataclasses
 ├── resource_monitor.py                    ← domain: CPU/RAM/GPU sampler
@@ -407,91 +383,36 @@ There's no splash screen — ONNX loads in 3–5 s with no GIL-blocking
 cold import, so the main window appears immediately and the model
 becomes ready in the background.
 
-## Building a standalone executable
+## Hardware acceleration
 
-```powershell
-.\build-exe.ps1            # folder build via lazy_to_text.spec
-.\build-exe.ps1 -OneFile   # single-file build (assets unpacked from _MEIPASS)
-.\build-exe.ps1 -Clean     # remove dist/ and build/ first
-```
+`device: auto` (the default in `config.yaml`) is platform-aware:
 
-Output: `dist\LazyToText\LazyToText.exe` (folder mode, fastest startup) or
-`dist\LazyToText.exe` (`-OneFile`, slower because assets unpack on each
-run). The build script delegates to `pyinstaller` via `uv run`; a fresh
-`uv sync` runs first unless `-SkipSync` is passed.
+- **Windows**: ONNX Runtime picks `CUDAExecutionProvider` when
+  `onnxruntime-gpu` is installed (it is, via the `[gpu]` extra) and
+  a working NVIDIA driver is present, falling back to CPU otherwise.
+  Explicit overrides: `device: cuda` or `device: cpu`.
+- **macOS**: the backend stages
+  `CoreMLExecutionProvider` ahead of CPU with
+  `ModelFormat=MLProgram` and `MLComputeUnits=ALL`, so CoreML's
+  dispatcher routes ops to Neural Engine / GPU / CPU per-op.
+  Explicit overrides: `device: coreml` or `device: cpu`.
 
-Bundle size is around 700 MB for the folder build (down from 6–8 GB in
-the multi-engine era) — `onnxruntime-gpu` is the biggest single chunk.
-Model weights are NOT bundled and download on first use of each card.
-
-## Installing locally
-
-After a folder build, install per-user (no admin required) into
-`%LOCALAPPDATA%\Programs\LazyToText` and add a Start Menu shortcut:
-
-```powershell
-$dest = "$env:LOCALAPPDATA\Programs\LazyToText"
-New-Item -ItemType Directory -Force -Path $dest | Out-Null
-robocopy "dist\LazyToText" $dest /MIR /NFL /NDL /NJH /NJS /NP
-
-$start = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Lazy to Text.lnk"
-$wsh   = New-Object -ComObject WScript.Shell
-$lnk   = $wsh.CreateShortcut($start)
-$lnk.TargetPath       = "$dest\LazyToText.exe"
-$lnk.WorkingDirectory = $dest
-$lnk.IconLocation     = "$dest\LazyToText.exe"
-$lnk.Description      = "Local ONNX speech-to-text for Windows"
-$lnk.Save()
-```
-
-After this, `Win` + typing "Lazy to Text" launches it from the Start
-menu. Right-click the taskbar icon → **Pin to taskbar** for single-click
-access.
-
-To launch automatically at login, copy the shortcut into the user's
-Startup folder:
-
-```powershell
-Copy-Item $start "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Lazy to Text.lnk"
-```
-
-To uninstall:
-
-```powershell
-Get-Process LazyToText -ErrorAction SilentlyContinue | Stop-Process -Force
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\LazyToText"
-Remove-Item -Force "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Lazy to Text.lnk" -ErrorAction SilentlyContinue
-Remove-Item -Force "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Lazy to Text.lnk" -ErrorAction SilentlyContinue
-```
-
-The `config.yaml` lives in `%APPDATA%\LazyToText\` for installed builds —
-not deleted by the uninstall above. Your transcription history
-(`logs\transcription_history.json` next to the exe in the install dir)
-goes with the install. Back it up first if you want to keep it.
-
-## GPU support
-
-By default the backend uses `device: auto` — onnx-asr / ONNX Runtime pick
-a CUDA provider when one is loadable, fall back to CPU otherwise.
-
-For the bundled `dist\LazyToText` you don't need to install CUDA
-separately — `onnxruntime-gpu` ships its own runtime libraries. From
-source, `uv sync` installs the same wheel. **Driver-side**, you still
-need an NVIDIA GPU with up-to-date drivers (CUDA 12 era) for the GPU
-path; if not, the app silently runs on CPU.
+Both platforms retry on CPU automatically if the accelerator session
+fails at session-create time (driver missing, op unsupported by the
+EP, etc.). The Logs view surfaces the retry as a warning.
 
 CPU-only is fine for `vosk-ru-small`, `vosk-ru`, `t-one`, and
 `gigaam-v3-ctc`. The larger Whisper / Parakeet / Canary models
-(`whisper-large-v3*`, `parakeet-tdt-v3`, `canary-1b-v2`) are usable on
-CPU but noticeably slower (10–30 s for a 1-minute clip on a recent i7);
-GPU brings that down to a few seconds.
+(`whisper-large-v3*`, `parakeet-tdt-v3`, `canary-1b-v2`) are usable
+on CPU but noticeably slower; CUDA on Windows or CoreML on Apple
+Silicon brings them down to a few seconds for a 1-minute clip.
 
 ## Development
 
-```powershell
-uv sync                                         # production deps + dev tools
-uv run pytest                                   # full test suite (560+ tests)
-uv run python lazy-to-text-ui.py                # run from source
+```bash
+uv sync                                        # production deps + dev tools
+uv run pytest                                  # full test suite (590+ tests)
+uv run lazy-to-text-ui                         # launch from source
 uv run python scripts/generate_screenshots.py  # regenerate docs/screenshots
 ```
 
@@ -514,15 +435,28 @@ session.
 - Python 3.12
 - PySide6 (Qt 6.11) for the UI, bundled Inter Variable + Heroicons
 - [onnx-asr](https://github.com/istupakov/onnx-asr) +
-  [onnxruntime-gpu](https://onnxruntime.ai/) for the single inference path —
-  covers Whisper, GigaAM, Parakeet, Canary, T-One, Vosk under one API
+  [ONNX Runtime](https://onnxruntime.ai/) for the single inference
+  path — covers Whisper, GigaAM, Parakeet, Canary, T-One, Vosk under
+  one API. Windows ships `onnxruntime-gpu` (CUDA + TensorRT), macOS
+  ships plain `onnxruntime` (CoreMLExecutionProvider for Apple
+  Silicon)
 - [`soundfile`](https://github.com/bastibe/python-soundfile) (libsndfile)
   for native audio decoding (WAV / FLAC / OGG / OPUS / AIFF)
-- [`imageio-ffmpeg`](https://github.com/imageio/imageio-ffmpeg) — bundled
-  static ffmpeg binary for the MP3 / M4A / MP4 / MKV / WebM file path
-- `sounddevice` for audio capture, `pyautogui` + `pyperclip` for paste,
-  `global-hotkeys` + `pywin32` for Windows-native hotkey registration
-- `psutil` + `nvidia-ml-py` for the live resource monitor
+- [`imageio-ffmpeg`](https://github.com/imageio/imageio-ffmpeg) —
+  bundled static ffmpeg binary for the MP3 / M4A / MP4 / MKV / WebM
+  file path
+- `sounddevice` for audio capture, `pyperclip` for clipboard text
+- Hotkeys + auto-paste:
+  Windows uses `global-hotkeys` + `pywin32` (native `RegisterHotKey`
+  + `keybd_event`); macOS / Linux use [`pynput`](https://pynput.readthedocs.io/)
+  (`GlobalHotKeys` + key simulation through `pyautogui` Cmd/Ctrl+V)
+- Sound feedback: `winsound` (Windows) / [`playsound3`](https://github.com/szmikler/playsound3)
+  (macOS via AppKit, Linux via GStreamer)
+- Single-instance lock: native named mutex on Windows, `filelock`
+  lockfile elsewhere
+- Cross-platform user dirs via [`platformdirs`](https://platformdirs.readthedocs.io/)
+- `psutil` for CPU / RAM, `nvidia-ml-py` (Windows-only) for the GPU
+  topbar widget
 
 ## Acknowledgements
 
