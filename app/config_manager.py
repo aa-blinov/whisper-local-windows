@@ -119,12 +119,27 @@ class ConfigManager:
     def _resolve_base_dir(self) -> Path:
         """Where ``config.yaml`` is read from and written to.
 
-        Walks up from CWD to the nearest ``pyproject.toml`` so a
-        developer running ``uv run …`` from anywhere in the repo
-        still reads the project's ``config.yaml``. Falls back to CWD
-        when no marker is found (e.g. running from ``%LOCALAPPDATA%``
-        without the source tree alongside).
+        - **Frozen (py2app / PyInstaller)**: per-user config dir
+          (``~/Library/Application Support/LazyToText`` on macOS,
+          ``%APPDATA%\\LazyToText`` on Windows).  The bundle itself
+          may be in ``/Applications`` which is read-only without
+          admin, so config writes have to go somewhere user-
+          writable that survives across reinstalls.
+        - **Dev**: walks up from CWD to the nearest
+          ``pyproject.toml`` so a developer running ``uv run …``
+          from anywhere in the repo still reads the project's
+          ``config.yaml``.
+        - Final fallback: CWD when no ``pyproject.toml`` is found.
         """
+        import sys
+
+        if getattr(sys, "frozen", False):
+            from platformdirs import user_config_dir
+
+            base = Path(user_config_dir("LazyToText", appauthor=False))
+            base.mkdir(parents=True, exist_ok=True)
+            return base
+
         cwd = Path.cwd()
         for p in [cwd, *cwd.parents]:
             if (p / 'pyproject.toml').exists():

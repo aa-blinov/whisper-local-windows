@@ -44,19 +44,35 @@ def _project_root_or_cwd() -> Path:
     return current.parent.parent.parent
 
 
+def _is_frozen() -> bool:
+    """``True`` when the process is running inside a py2app /
+    PyInstaller bundle. Sources stop being a writable directory
+    in that mode (the bundle may live in ``/Applications``), so
+    user data has to migrate to the canonical per-user dirs."""
+    return bool(getattr(sys, "frozen", False))
+
+
 def get_project_logs_path():
     """Return the directory log files are written to.
 
-    - **Installed wheel**: CWD ``/logs`` (assumes the user launched
-      the tool from a writable cwd).
+    - **Frozen (py2app / PyInstaller)**: ``platformdirs.user_log_dir``
+      → ``~/Library/Logs/LazyToText`` on macOS,
+      ``%LOCALAPPDATA%\\LazyToText\\Logs`` on Windows.  Apple's
+      ``Console.app`` reads from ``~/Library/Logs`` directly, so
+      this is the path Mac users expect when they want to debug.
+    - **Installed wheel**: CWD ``/logs``.
     - **Dev**: project root ``/logs``.
 
     Created if missing.
     """
-    if is_installed_package():
-        logs_dir = Path.cwd() / 'logs'
+    if _is_frozen():
+        from platformdirs import user_log_dir
+
+        logs_dir = Path(user_log_dir("LazyToText", appauthor=False))
+    elif is_installed_package():
+        logs_dir = Path.cwd() / "logs"
     else:
-        logs_dir = _project_root_or_cwd() / 'logs'
+        logs_dir = _project_root_or_cwd() / "logs"
 
     os.makedirs(logs_dir, exist_ok=True)
     return str(logs_dir)
@@ -65,6 +81,15 @@ def get_project_logs_path():
 def get_project_models_path() -> str:
     """Return the directory used to cache downloaded model weights.
 
+    - **Frozen (py2app / PyInstaller)**: ``platformdirs.user_cache_dir``
+      → ``~/Library/Caches/LazyToText/models`` on macOS,
+      ``%LOCALAPPDATA%\\LazyToText\\Cache\\models`` on Windows,
+      ``$XDG_CACHE_HOME/LazyToText/models`` on Linux.  Apple
+      explicitly classifies "files that can be regenerated" as
+      ``~/Library/Caches`` material — Time Machine ignores it
+      (so a 2 GB Whisper Large doesn't bloat user backups), and
+      the OS may purge it under disk pressure (we just
+      re-download from Hugging Face).
     - **Installed wheel**: CWD ``/models``.
     - **Dev**: project root ``/models``.
 
@@ -78,6 +103,12 @@ def get_project_models_path() -> str:
     itself on first download, so probing this function from cache-
     status code shouldn't seed empty ``models/`` dirs as a side effect.
     """
+    if _is_frozen():
+        from platformdirs import user_cache_dir
+
+        return str(
+            Path(user_cache_dir("LazyToText", appauthor=False)) / "models"
+        )
     if is_installed_package():
         base = Path.cwd()
     else:
