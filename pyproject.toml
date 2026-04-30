@@ -73,6 +73,11 @@ dependencies = [
 [project.scripts]
 lazy-to-text-ui = "app.gui.app:main"
 
+[project.optional-dependencies]
+darwin = [
+    "pyobjc-framework-avfoundation>=12.1",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]

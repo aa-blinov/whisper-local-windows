@@ -17,6 +17,11 @@ from app.gui.views._accessibility_check import (
     open_accessibility_settings,
 )
 from app.gui.views._hotkey_validation import validate_all
+from app.gui.views._microphone_check import (
+    microphone_authorization_status,
+    open_microphone_settings,
+    request_microphone_access,
+)
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -150,6 +155,40 @@ class ShortcutsView(QWidget):
 
         # ---- Audio input card -------------------------------------------
         audio_card, audio_form = _make_section_card("Audio input", self)
+
+        # macOS-only: similar story to the Accessibility banner —
+        # if the user hasn't granted Microphone access via TCC,
+        # ``sounddevice.InputStream.start`` returns silence with no
+        # exception, so recording "works" but every transcription
+        # comes back empty. Surface the state explicitly with a
+        # banner that walks the user through grant → restart.
+        self._mic_was_unauthorized_at_start = (
+            microphone_authorization_status() not in (None, "authorized")
+        )
+        self._mic_banner = QFrame(audio_card)
+        self._mic_banner.setObjectName("MicrophoneWarningBanner")
+        self._mic_banner.setProperty("role", "warning-banner")
+        mic_banner_layout = QHBoxLayout(self._mic_banner)
+        mic_banner_layout.setContentsMargins(12, 10, 12, 10)
+        mic_banner_layout.setSpacing(12)
+        self._mic_banner_text = QLabel("", self._mic_banner)
+        self._mic_banner_text.setWordWrap(True)
+        self._mic_banner_text.setProperty("role", "warning-banner-text")
+        mic_banner_layout.addWidget(self._mic_banner_text, 1)
+        self._mic_banner_button = QPushButton("", self._mic_banner)
+        self._mic_banner_button.setObjectName("MicrophoneActionButton")
+        self._mic_banner_button.setFocusPolicy(Qt.NoFocus)
+        self._mic_banner_button.clicked.connect(
+            self._on_mic_banner_clicked,
+        )
+        mic_banner_layout.addWidget(self._mic_banner_button, 0)
+        self._mic_banner.setVisible(False)
+        # State machine: ``"not_determined"`` (Allow access) /
+        # ``"denied"`` (Open Microphone settings) / ``"granted"``
+        # (Restart now) / ``"hidden"``.
+        self._mic_state = "hidden"
+        audio_form.addRow(self._mic_banner)
+        self._refresh_mic_banner()
 
         self._device_combo = QComboBox(audio_card)
         self._device_combo.setObjectName("MicrophoneCombo")
@@ -790,16 +829,105 @@ class ShortcutsView(QWidget):
         if self._accessibility_state == "granted":
             self.restart_requested.emit()
 
+    def _refresh_mic_banner(self) -> None:
+        """Show / hide / restate the macOS Microphone-permission
+        banner based on the current TCC status.
+
+        States:
+
+        - ``status is None`` → hidden (non-macOS)
+        - ``not_determined`` → "Click to grant" (system prompt
+          only fires from the first ``requestAccess``; we wire
+          that to the button)
+        - ``denied`` / ``restricted`` → "Open Microphone settings"
+          (system won't show a fresh prompt — only the toggle in
+          System Settings can flip the state)
+        - ``authorized`` AND ``_mic_was_unauthorized_at_start``
+          → "Restart now" (sounddevice grabbed an audio device
+          handle under the old denied state and won't pick up
+          the grant without a relaunch)
+        - ``authorized`` AND already trusted at start → hidden
+        """
+        status = microphone_authorization_status()
+        if status is None:
+            self._mic_state = "hidden"
+            self._mic_banner.setVisible(False)
+            return
+        if status == "not_determined":
+            self._mic_state = "not_determined"
+            self._mic_banner_text.setText(
+                "Lazy to Text hasn't asked macOS for microphone "
+                "access yet — recordings would silently come back "
+                "empty. Click below to grant access."
+            )
+            self._mic_banner_button.setText("Allow microphone access")
+            self._mic_banner.setVisible(True)
+            return
+        if status in ("denied", "restricted"):
+            self._mic_state = "denied"
+            self._mic_banner_text.setText(
+                "Microphone access is blocked — recordings come "
+                "back empty. Toggle Lazy to Text on under System "
+                "Settings → Privacy & Security → Microphone, then "
+                "restart it."
+            )
+            self._mic_banner_button.setText("Open Microphone settings")
+            self._mic_banner.setVisible(True)
+            return
+        # authorized
+        if self._mic_was_unauthorized_at_start:
+            self._mic_state = "granted"
+            self._mic_banner_text.setText(
+                "Microphone access granted. Restart Lazy to Text "
+                "to let recording start picking up audio — "
+                "sounddevice already opened the device under the "
+                "previous denied state."
+            )
+            self._mic_banner_button.setText("Restart now")
+            self._mic_banner.setVisible(True)
+            return
+        self._mic_state = "hidden"
+        self._mic_banner.setVisible(False)
+
+    def _on_mic_banner_clicked(self) -> None:
+        """Banner button dispatch — first time fires the system
+        prompt, post-deny opens System Settings, post-grant asks
+        the controller to relaunch."""
+        if self._mic_state == "not_determined":
+            request_microphone_access(
+                on_result=self._on_mic_request_completed,
+            )
+            return
+        if self._mic_state == "denied":
+            open_microphone_settings()
+            return
+        if self._mic_state == "granted":
+            self.restart_requested.emit()
+
+    def _on_mic_request_completed(self, granted: bool) -> None:
+        """Called from a background thread once the user dismisses
+        the system Microphone prompt.  Re-render the banner so it
+        flips into the appropriate post-prompt state.
+
+        The completion handler runs on a non-Qt thread; touching
+        widgets from there crashes Qt.  We bounce through
+        ``QTimer.singleShot(0, ...)`` to land back on the GUI
+        thread before mutating banner state.
+        """
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(0, self._refresh_mic_banner)
+
     def showEvent(self, event):  # noqa: N802 — Qt naming
-        """Re-check Accessibility every time the Settings tab
-        becomes visible. Permission changes need a process restart
-        to take effect on Mac, but a fresh ``AXIsProcessTrusted``
-        call is cheap and covers the case where the user opened
-        Settings, hit the Accessibility button, granted access,
-        and is now back in our window without an app restart —
-        the banner can at least disappear."""
+        """Re-check both Accessibility and Microphone TCC status
+        every time the Settings tab becomes visible.  Permission
+        changes need a process restart to take effect on Mac, but
+        the API calls themselves are cheap and cover the case
+        where the user opened Settings, hit the Allow button,
+        granted access, and is now back in our window."""
         super().showEvent(event)
         self._refresh_accessibility_banner()
+        self._refresh_mic_banner()
 
     def _on_toggle_mode_changed(self, checked: bool) -> None:
         """User flipped 'Use one hotkey for both start and stop'.
