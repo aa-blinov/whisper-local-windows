@@ -1,11 +1,27 @@
 import copy
 import logging
 import os
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict
 
 import yaml
+
+
+# macOS reserves ``Ctrl+F1`` through ``Ctrl+F7`` for keyboard
+# navigation (Move focus to menu bar / Dock / window / toolbar /
+# floating window …). Pynput never sees the events because macOS
+# captures them first, so the same defaults that work on Windows
+# silently fail on Mac. Pick free-of-conflict combos per platform.
+if sys.platform == "darwin":
+    _DEFAULT_START_HOTKEY = "ctrl+f8"
+    _DEFAULT_STOP_HOTKEY = "ctrl+f9"
+    _DEFAULT_CANCEL_HOTKEY = "ctrl+f10"
+else:
+    _DEFAULT_START_HOTKEY = "ctrl+f2"
+    _DEFAULT_STOP_HOTKEY = "ctrl+f3"
+    _DEFAULT_CANCEL_HOTKEY = "ctrl+f6"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "whisper": {
@@ -18,15 +34,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "beam_size": 5,
     },
     "hotkey": {
-        "start_recording_hotkey": "ctrl+f2",
-        "stop_recording_hotkey": "ctrl+f3",
-        # 'Discard the current buffer without transcribing'. Empty
-        # string means no global key is bound — the runtime feature
-        # works through ``StateManager.cancel_active_recording`` but
-        # nothing fires it. ctrl+f6 sits in the same row as f2/f3
-        # without colliding with Alt+F4 (close window) or F5
-        # (refresh) muscle memory the way ctrl+f4 / ctrl+f5 would.
-        "cancel_recording_hotkey": "ctrl+f6",
+        # Defaults chosen per-platform — see the constants above.
+        # Windows: ``ctrl+f2`` / ``ctrl+f3`` / ``ctrl+f6`` (the
+        # original muscle-memory set; nothing else uses them on
+        # Win 10/11). macOS: ``ctrl+f8`` / ``ctrl+f9`` / ``ctrl+f10``
+        # (lower F-keys are claimed by the system's keyboard
+        # navigation). 'cancel' discards the current buffer
+        # without transcribing — empty string disables the binding.
+        "start_recording_hotkey": _DEFAULT_START_HOTKEY,
+        "stop_recording_hotkey": _DEFAULT_STOP_HOTKEY,
+        "cancel_recording_hotkey": _DEFAULT_CANCEL_HOTKEY,
     },
     "audio": {
         "channels": 1,
