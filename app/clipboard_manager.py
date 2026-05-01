@@ -33,11 +33,20 @@ class ClipboardManager:
             raise
     
     def _print_status(self):
-        if self.auto_paste:
-            method_name = "key simulation (CTRL+V)"
-            self.logger.info(f"Auto-paste is ENABLED using {method_name}", extra={'user_message': True})
+        if sys.platform == "darwin":
+            paste_combo = "Cmd+V"
         else:
-            self.logger.info("Auto-paste is DISABLED - paste manually with Ctrl+V", extra={'user_message': True})
+            paste_combo = "Ctrl+V"
+        if self.auto_paste:
+            self.logger.info(
+                f"Auto-paste is ENABLED using key simulation ({paste_combo})",
+                extra={'user_message': True},
+            )
+        else:
+            self.logger.info(
+                f"Auto-paste is DISABLED - paste manually with {paste_combo}",
+                extra={'user_message': True},
+            )
     
     def copy_text(self, text: str) -> bool:
         if not text:
@@ -205,10 +214,22 @@ class ClipboardManager:
         """Send the paste hotkey to the focused window.
 
         Windows: raw ``win32api.keybd_event`` Ctrl+V — works against
-        every Win32 app, no permission prompts. macOS: ``pyautogui``
-        Cmd+V; requires the user to grant Accessibility permission
-        once in System Settings → Privacy & Security → Accessibility.
-        Linux: ``pyautogui`` Ctrl+V via the X11 / Wayland backend.
+        every Win32 app, no permission prompts.
+
+        macOS: ``pynput.keyboard.Controller`` Cmd+V — same Quartz
+        CGEvent path the global hotkey listener uses, so once the
+        user has granted Accessibility once (for Ctrl+F8…F10) the
+        same permission powers paste delivery.  ``pyautogui.hotkey``
+        on Mac was unreliable: the events posted to the HID tap
+        without the application-targeting context that real key
+        presses carry, so a fraction of macOS apps (notably
+        Telegram, some Electron-based editors) treated them as
+        non-keystrokes and dropped the paste silently.  Going
+        through ``pynput.keyboard.Controller`` builds a proper
+        Cocoa-style key event with ``kCGEventFlagMaskCommand`` set,
+        which every paste-handling app respects.
+
+        Linux: keep ``pyautogui`` (X11 / Wayland backend).
         """
         if sys.platform == "win32":
             try:
@@ -224,15 +245,39 @@ class ClipboardManager:
                 self.logger.error(f"Failed to send Ctrl+V: {e}")
             return
 
-        # macOS uses Cmd as the paste modifier; Linux uses Ctrl.
-        modifier = "command" if sys.platform == "darwin" else "ctrl"
+        if sys.platform == "darwin":
+            try:
+                from pynput.keyboard import Controller, Key
+
+                kb = Controller()
+                # ``with kb.pressed(Key.cmd)`` would also work, but the
+                # explicit press / release pair lets us interleave a
+                # tiny sleep between modifier-down and key-tap so the
+                # OS has time to register the modifier flag before the
+                # ``v`` event arrives — without it, fast Macs can
+                # deliver the ``v`` while CGEventFlagsChanged is still
+                # propagating, and the target app sees a literal "v"
+                # character instead of Cmd+V.
+                kb.press(Key.cmd)
+                time.sleep(0.02)
+                kb.press("v")
+                time.sleep(0.02)
+                kb.release("v")
+                time.sleep(0.005)
+                kb.release(Key.cmd)
+                time.sleep(max(0.02, self.key_simulation_delay))
+            except Exception as e:
+                self.logger.error(f"Failed to send Cmd+V via pynput: {e}")
+            return
+
+        # Linux — pyautogui with X11 / Wayland.
         try:
             import pyautogui
 
-            pyautogui.hotkey(modifier, "v")
+            pyautogui.hotkey("ctrl", "v")
             time.sleep(max(0.02, self.key_simulation_delay))
         except Exception as e:
-            self.logger.error(f"Failed to send {modifier}+V: {e}")
+            self.logger.error(f"Failed to send Ctrl+V: {e}")
 
     def _send_enter(self):
         if sys.platform == "win32":
@@ -243,6 +288,19 @@ class ClipboardManager:
                 time.sleep(max(0.02, self.key_simulation_delay))
             except Exception as e:
                 self.logger.error(f"Failed to send ENTER: {e}")
+            return
+
+        if sys.platform == "darwin":
+            try:
+                from pynput.keyboard import Controller, Key
+
+                kb = Controller()
+                kb.press(Key.enter)
+                time.sleep(0.005)
+                kb.release(Key.enter)
+                time.sleep(max(0.02, self.key_simulation_delay))
+            except Exception as e:
+                self.logger.error(f"Failed to send ENTER via pynput: {e}")
             return
 
         try:
