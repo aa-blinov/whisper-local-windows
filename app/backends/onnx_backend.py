@@ -88,6 +88,7 @@ class OnnxAsrBackend:
         device: str = "auto",
         quantization: Optional[str] = None,
         load_id: Optional[str] = None,
+        prefer_cpu_provider: bool = False,
     ) -> None:
         if family not in _FAMILIES:
             raise ValueError(
@@ -105,6 +106,11 @@ class OnnxAsrBackend:
         self._language = language
         self._device = device
         self._quantization = quantization
+        # Skip the accelerator EP entirely for models known to break
+        # ORT's CoreML / CUDA adapters at session-init time.  Set by
+        # the registry from ``ModelInfo.prefer_cpu_provider`` — see
+        # ``_resolve_providers`` for the full rationale.
+        self._prefer_cpu_provider = bool(prefer_cpu_provider)
 
         self._model = None
         self._status = "stopped"
@@ -204,6 +210,7 @@ class OnnxAsrBackend:
         model: str,
         compute_type: Optional[str] = None,  # API parity, ignored
         load_id: Optional[str] = None,
+        prefer_cpu_provider: Optional[bool] = None,
     ) -> None:
         """Switch to a different ONNX model. Triggers a background reload.
 
@@ -211,6 +218,13 @@ class OnnxAsrBackend:
         loader identifier when the new model's onnx-asr id differs
         from its HF canonical (T-One, GigaAM e2e, NeMo short names).
         Defaults to ``model``.
+
+        ``prefer_cpu_provider=None`` means "leave the existing flag
+        as-is" — the in-family swap path in ``RegistryBackend`` keeps
+        the same ``ModelInfo.prefer_cpu_provider`` for both old and
+        new model anyway (Whisper-base → Whisper-turbo: both False;
+        GigaAM CTC → GigaAM RNN-T: both True), so unspecified is
+        safe.  Pass an explicit value when crossing the boundary.
         """
         del compute_type
         with self._lock:
@@ -220,6 +234,8 @@ class OnnxAsrBackend:
                 return
             self._model_name = model
             self._load_id = load_id or model
+            if prefer_cpu_provider is not None:
+                self._prefer_cpu_provider = bool(prefer_cpu_provider)
             self._model = None
             self._status = "stopped"
             self._active_provider = None
@@ -397,7 +413,21 @@ class OnnxAsrBackend:
         (driver missing, unsupported op for this model, etc.).
         Returning ``None`` lets onnx-asr / ORT pick from whatever is
         registered in the installed ``onnxruntime`` wheel.
+
+        ``prefer_cpu_provider`` short-circuits the accelerator branches
+        for models we know will fail mid-compilation:  GigaAM v3 CTC
+        and RNN-T burn ~75 s in ``MLModel.compileModelAtURL`` before
+        ORT raises ``HandleNegativeAxis … axis 2 is not in valid
+        range`` and the retry-on-CPU path kicks in.  The wait is the
+        same on Windows + CUDA for the same models (CUDA EP also
+        rejects the CTC op).  Skipping straight to CPU saves the user
+        a 75-second freeze on every model load — same eventual
+        outcome, no wasted compilation.  Honoured for ``auto``,
+        ``cuda`` and ``coreml`` selections;  an explicit ``cpu`` is
+        already CPU.
         """
+        if self._prefer_cpu_provider and self._device != "cpu":
+            return ["CPUExecutionProvider"]
         if self._device == "cuda":
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
         if self._device == "coreml":
