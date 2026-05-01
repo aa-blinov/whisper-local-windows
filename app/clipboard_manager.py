@@ -14,13 +14,38 @@ else:
     win32con = None  # type: ignore[assignment]
     win32gui = None  # type: ignore[assignment]
 
-class ClipboardManager:    
+class ClipboardManager:
     def __init__(self, key_simulation_delay, auto_paste, preserve_clipboard):
         self.logger = logging.getLogger(__name__)
         self.key_simulation_delay = key_simulation_delay
         self.auto_paste = auto_paste
         self.preserve_clipboard = preserve_clipboard
         self._test_clipboard_access()
+        # Build the macOS keyboard controller eagerly on the main
+        # thread.  ``pynput.keyboard.Controller.__init__`` makes
+        # ``TSMGetInputSourceProperty`` calls under the hood, and the
+        # macOS Text Services Manager asserts the call comes from the
+        # main dispatch queue — instantiating from the recording-
+        # pipeline worker (where ``execute_auto_paste`` runs) crashes
+        # the process with EXC_BREAKPOINT in
+        # ``_dispatch_assert_queue_fail``.  ``__init__`` here is
+        # invoked from ``recording_factory.build_recording_stack`` on
+        # the Qt main thread, so building the Controller now is safe.
+        # ``Controller.press`` / ``release`` themselves only post
+        # CGEvents and are thread-safe, so the cached instance can be
+        # used from the worker thread without further coordination.
+        self._mac_keyboard = None
+        if sys.platform == "darwin":
+            try:
+                from pynput.keyboard import Controller as _MacController
+
+                self._mac_keyboard = _MacController()
+            except Exception as exc:
+                self.logger.error(
+                    "Failed to initialise pynput keyboard Controller on "
+                    "main thread: %s. Auto-paste / Enter delivery will "
+                    "fall back to pyautogui.", exc,
+                )
         self._print_status()
     
     def _test_clipboard_access(self):
@@ -246,10 +271,17 @@ class ClipboardManager:
             return
 
         if sys.platform == "darwin":
+            kb = self._mac_keyboard
+            if kb is None:
+                self.logger.error(
+                    "Cmd+V skipped — pynput Controller wasn't initialised "
+                    "(see startup error). Text is in clipboard; user can "
+                    "Cmd+V manually."
+                )
+                return
             try:
-                from pynput.keyboard import Controller, Key
+                from pynput.keyboard import Key
 
-                kb = Controller()
                 # ``with kb.pressed(Key.cmd)`` would also work, but the
                 # explicit press / release pair lets us interleave a
                 # tiny sleep between modifier-down and key-tap so the
@@ -291,10 +323,15 @@ class ClipboardManager:
             return
 
         if sys.platform == "darwin":
+            kb = self._mac_keyboard
+            if kb is None:
+                self.logger.error(
+                    "Enter skipped — pynput Controller wasn't initialised."
+                )
+                return
             try:
-                from pynput.keyboard import Controller, Key
+                from pynput.keyboard import Key
 
-                kb = Controller()
                 kb.press(Key.enter)
                 time.sleep(0.005)
                 kb.release(Key.enter)
