@@ -26,6 +26,15 @@ if [[ "${1:-}" == "--release" ]]; then
     mode="release"
 fi
 
+# Use the already-synced project venv directly. Running ``uv run``
+# while ``pyproject.toml`` is temporarily stripped for py2app can
+# rewrite ``uv.lock`` to match the patched dependency set.
+venv_python=".venv/bin/python"
+if [[ ! -x "$venv_python" ]]; then
+    echo "✗ expected $venv_python from a prior 'uv sync'" >&2
+    exit 1
+fi
+
 # Always start from a clean dist/ — py2app refuses to overwrite a
 # pre-existing bundle and the residue of an earlier build can
 # silently mask missing files.
@@ -38,7 +47,7 @@ rm -rf build dist
 # generic in the Dock).
 if command -v iconutil >/dev/null 2>&1; then
     echo "→ regenerating .icns from the runtime squircle"
-    uv run python scripts/generate_icns.py
+    "$venv_python" scripts/generate_icns.py
 else
     echo "  (iconutil not found — bundle will use a default icon)"
 fi
@@ -78,10 +87,10 @@ PY
 # stay self-contained.
 if [[ "$mode" == "alias" ]]; then
     echo "→ py2app alias build (fast iteration)"
-    uv run python setup.py py2app -A
+    "$venv_python" setup.py py2app -A
 else
     echo "→ py2app release build (full bundle, slow)"
-    uv run python setup.py py2app
+    "$venv_python" setup.py py2app
 fi
 
 # Restore happens via the EXIT trap; keep a no-op here so the
