@@ -1,3 +1,4 @@
+import importlib
 import logging
 import sys
 import time
@@ -28,7 +29,7 @@ from app.state_manager import StateManager
 
 # Push-to-talk key vocabulary → pynput Key attribute name.  We
 # resolve the actual ``pynput.keyboard.Key`` enum lazily inside
-# ``_resolve_ptt_key`` so the module import path doesn't pull in
+# ``_resolve_pynput_ptt_key`` so the module import path doesn't pull in
 # pynput on Windows where the legacy ``global-hotkeys`` listener
 # is used instead.
 _PTT_KEY_TO_PYNPUT: dict[str, str] = {
@@ -36,6 +37,12 @@ _PTT_KEY_TO_PYNPUT: dict[str, str] = {
     "cmd_r": "cmd_r",
     "right_command": "cmd_r",
     "command_r": "cmd_r",
+    "right_win": "cmd_r",
+    "win_r": "cmd_r",
+    "right_windows": "cmd_r",
+    "windows_r": "cmd_r",
+    "right_super": "cmd_r",
+    "super_r": "cmd_r",
     "right_option": "alt_r",
     "option_r": "alt_r",
     "right_alt": "alt_r",
@@ -48,6 +55,65 @@ _PTT_KEY_TO_PYNPUT: dict[str, str] = {
     "control_r": "ctrl_r",
     "fn": "fn",
 }
+
+_PTT_KEY_TO_WINDOWS: dict[str, str] = {
+    "right_cmd": "right_window",
+    "cmd_r": "right_window",
+    "right_command": "right_window",
+    "command_r": "right_window",
+    "right_win": "right_window",
+    "win_r": "right_window",
+    "right_windows": "right_window",
+    "windows_r": "right_window",
+    "right_super": "right_window",
+    "super_r": "right_window",
+    "right_window": "right_window",
+    "right_option": "right_menu",
+    "option_r": "right_menu",
+    "right_alt": "right_menu",
+    "alt_r": "right_menu",
+    "right_menu": "right_menu",
+    "right_shift": "right_shift",
+    "shift_r": "right_shift",
+    "right_ctrl": "right_control",
+    "ctrl_r": "right_control",
+    "right_control": "right_control",
+    "control_r": "right_control",
+}
+
+
+def _patch_pynput_darwin_listener() -> None:
+    """Skip pynput's unused ``keycode_context`` on macOS.
+
+    Recent macOS builds can abort the whole process with
+    ``dispatch_assert_queue_fail`` when ``pynput`` calls
+    ``TISGetInputSourceProperty`` from the listener thread during
+    startup. ``pynput`` 1.8.x stores the resulting context on
+    ``self._context`` but the Darwin keyboard listener never reads it
+    afterwards, so we can safely bypass that preflight and jump
+    straight to the real event-tap loop.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        _pk_darwin = importlib.import_module("pynput.keyboard._darwin")
+    except ImportError:
+        return
+
+    listener_cls = _pk_darwin.Listener
+    if getattr(listener_cls, "_lazy_to_text_skip_keycode_context", False):
+        return
+
+    def _run_without_keycode_context(self):
+        self._context = None
+        return _pk_darwin.ListenerMixin._run(self)
+
+    listener_cls._lazy_to_text_original_run = listener_cls._run
+    listener_cls._lazy_to_text_skip_keycode_context = True
+    listener_cls._run = _run_without_keycode_context
+    logging.getLogger(__name__).debug(
+        "Patched pynput Darwin listener to skip keycode_context()"
+    )
 
 
 class HotkeyListener:
@@ -76,9 +142,10 @@ class HotkeyListener:
           would otherwise be the same combo).
         - ``"push_to_talk"`` — hold ``push_to_talk_key`` to record,
           release to stop and transcribe.  The PTT path uses a raw
-          ``pynput.keyboard.Listener`` (or the
-          ``global_hotkeys`` low-level hook on Windows) instead of
-          ``GlobalHotKeys`` because the latter only fires on press.
+          ``pynput.keyboard.Listener`` on macOS/Linux and the
+          documented ``global_hotkeys`` press/release callbacks on
+          Windows, because that platform already routes the normal
+          hotkey path through ``global-hotkeys``.
           Bindings shorter than ``push_to_talk_min_hold_seconds``
           are treated as accidental taps and cancel the recording
           before transcription, so a glancing right-Cmd press
@@ -102,11 +169,12 @@ class HotkeyListener:
         # by ``_setup_hotkeys`` and started by ``start_listening``).
         self._pynput_listener = None
         self._pynput_callbacks: dict[str, callable] = {}
-        # Push-to-talk: separate ``pynput.keyboard.Listener`` that
-        # tracks raw on_press / on_release for the configured key.
-        # Lives alongside the GlobalHotKeys instance (which
-        # registers the cancel combo, if any).
+        # Non-Windows push-to-talk: separate ``pynput.keyboard.Listener``
+        # that tracks raw on_press / on_release for the configured key.
+        # Lives alongside the GlobalHotKeys instance (which registers
+        # the cancel combo, if any).
         self._ptt_listener = None
+        self._ptt_windows_binding = None
         self._ptt_target_key = None  # pynput.keyboard.Key enum
         self._ptt_held = False
         self._ptt_press_ts: float = 0.0
@@ -125,17 +193,32 @@ class HotkeyListener:
 
         if self.mode == "push_to_talk":
             # PTT path:  the press/release listener is set up
-            # separately in ``start_listening``.  Register only the
-            # cancel binding through GlobalHotKeys so a global
-            # "abort recording" combo still works while the user
-            # holds the PTT key.
-            self._ptt_target_key = self._resolve_ptt_key(self.push_to_talk_key)
-            if self._ptt_target_key is None:
+            # separately on macOS/Linux via ``pynput``;  on Windows
+            # we keep everything inside ``global-hotkeys`` and bind a
+            # press + release callback pair for the PTT key itself.
+            self._ptt_windows_binding = None
+            self._ptt_target_key = None
+            if sys.platform == "win32":
+                self._ptt_windows_binding = self._resolve_windows_ptt_binding(
+                    self.push_to_talk_key
+                )
+                ptt_available = self._ptt_windows_binding is not None
+            else:
+                self._ptt_target_key = self._resolve_pynput_ptt_key(
+                    self.push_to_talk_key
+                )
+                ptt_available = self._ptt_target_key is not None
+            if not ptt_available:
                 self.logger.warning(
                     "Push-to-talk key %r is not in the recognised "
-                    "vocabulary (%s) — PTT will be inactive.",
+                    "vocabulary (%s) for %s — PTT will be inactive.",
                     self.push_to_talk_key,
-                    sorted(_PTT_KEY_TO_PYNPUT.keys()),
+                    sorted(
+                        _PTT_KEY_TO_WINDOWS.keys()
+                        if sys.platform == "win32"
+                        else _PTT_KEY_TO_PYNPUT.keys()
+                    ),
+                    sys.platform,
                 )
             else:
                 self.logger.info(
@@ -143,6 +226,13 @@ class HotkeyListener:
                     self.push_to_talk_key,
                     self.push_to_talk_min_hold_seconds * 1000,
                 )
+                if sys.platform == "win32":
+                    hotkey_configs.append({
+                        'combination': self.push_to_talk_key,
+                        'callback': self._ptt_press,
+                        'release_callback': self._ptt_release,
+                        'name': 'push_to_talk',
+                    })
             if self.cancel_combination:
                 hotkey_configs.append({
                     'combination': self.cancel_combination,
@@ -218,7 +308,7 @@ class HotkeyListener:
         else:
             self.logger.info(f"Total hotkeys configured: {len(self._pynput_callbacks)}")
 
-    def _resolve_ptt_key(self, name: str | None):
+    def _resolve_pynput_ptt_key(self, name: str | None):
         """Translate a user-facing PTT key name (``"right_cmd"``,
         ``"cmd_r"``, …) to a ``pynput.keyboard.Key`` enum.  Returns
         ``None`` when the name is unrecognised or pynput isn't
@@ -235,17 +325,24 @@ class HotkeyListener:
             return None
         return getattr(_pk.Key, attr, None)
 
+    def _resolve_windows_ptt_binding(self, name: str | None) -> str | None:
+        """Translate a user-facing PTT key name to a documented
+        ``global-hotkeys`` Windows key token such as
+        ``"right_menu"`` or ``"right_control"``.
+        """
+        if not name:
+            return None
+        return _PTT_KEY_TO_WINDOWS.get(name.strip().lower())
+
     # ---- push-to-talk callbacks (called from listener thread) ---------------
 
-    def _ptt_on_press(self, key) -> None:
-        """Listener callback — start recording on the first press of
-        the PTT key.  Auto-repeat presses while the key is held are
-        ignored (``_ptt_held`` guard).
+    def _ptt_press(self) -> None:
+        """Start recording on the first press of the configured PTT
+        key. Called either by ``pynput`` (after key filtering) or by
+        the Windows ``global-hotkeys`` press callback.
         """
-        if self._ptt_target_key is None or key != self._ptt_target_key:
-            return
         if self._ptt_held:
-            return  # auto-repeat
+            return  # auto-repeat / duplicate callback
         self._ptt_held = True
         self._ptt_press_ts = time.monotonic()
         if self.state_manager.get_current_state() != "idle":
@@ -263,14 +360,12 @@ class HotkeyListener:
         )
         self.state_manager.toggle_recording()
 
-    def _ptt_on_release(self, key) -> None:
-        """Listener callback — stop recording when the PTT key is
-        released.  Holds shorter than ``push_to_talk_min_hold_seconds``
-        are treated as accidental taps:  cancel the recording so the
-        history doesn't fill up with empty entries.
+    def _ptt_release(self) -> None:
+        """Stop recording when the held PTT key is released.
+
+        Called either by ``pynput`` (after key filtering) or by the
+        Windows ``global-hotkeys`` release callback.
         """
-        if self._ptt_target_key is None or key != self._ptt_target_key:
-            return
         if not self._ptt_held:
             return
         held_for = time.monotonic() - self._ptt_press_ts
@@ -292,6 +387,25 @@ class HotkeyListener:
             held_for * 1000,
         )
         self.state_manager.stop_recording(use_auto_enter=False)
+
+    def _ptt_on_press(self, key) -> None:
+        """Listener callback — start recording on the first press of
+        the PTT key.  Auto-repeat presses while the key is held are
+        ignored (``_ptt_held`` guard).
+        """
+        if self._ptt_target_key is None or key != self._ptt_target_key:
+            return
+        self._ptt_press()
+
+    def _ptt_on_release(self, key) -> None:
+        """Listener callback — stop recording when the PTT key is
+        released.  Holds shorter than ``push_to_talk_min_hold_seconds``
+        are treated as accidental taps:  cancel the recording so the
+        history doesn't fill up with empty entries.
+        """
+        if self._ptt_target_key is None or key != self._ptt_target_key:
+            return
+        self._ptt_release()
     
     def _get_hotkey_combination_specificity(self, hotkey_config: dict) -> int:
         """
@@ -337,6 +451,21 @@ class HotkeyListener:
     def _cancel_hotkey_pressed(self):
         self.logger.info(f"Cancel hotkey pressed: {self.cancel_combination}")
         self.state_manager.cancel_recording_hotkey_pressed()
+
+    def _stop_pynput_thread(self, listener, label: str) -> None:
+        """Best-effort stop + join for pynput threads before rebinding."""
+        if listener is None:
+            return
+        try:
+            listener.stop()
+        except Exception as exc:
+            self.logger.debug("Stopping %s listener raised: %s", label, exc)
+        join = getattr(listener, "join", None)
+        if callable(join):
+            try:
+                join(timeout=1.0)
+            except Exception as exc:
+                self.logger.debug("Joining %s listener raised: %s", label, exc)
     
     def start_listening(self):
         if self.is_listening:
@@ -349,20 +478,8 @@ class HotkeyListener:
                     )
                     register_hotkeys(self.hotkey_bindings)
                     start_checking_hotkeys()
-                if self.mode == "push_to_talk" and self._ptt_target_key is not None:
-                    # Windows PTT also needs the raw press/release
-                    # listener — ``global-hotkeys`` only fires on
-                    # press.  pynput is shipped on Windows too
-                    # (transitively via several deps), so the same
-                    # code path works.
-                    from pynput import keyboard as _pk
-
-                    self._ptt_listener = _pk.Listener(
-                        on_press=self._ptt_on_press,
-                        on_release=self._ptt_on_release,
-                    )
-                    self._ptt_listener.start()
             else:
+                _patch_pynput_darwin_listener()
                 from pynput import keyboard as _pk
 
                 if self._pynput_callbacks:
@@ -398,13 +515,14 @@ class HotkeyListener:
                     self.logger.debug("clear_hotkeys not available, using alternative cleanup")
             else:
                 if self._pynput_listener is not None:
-                    self._pynput_listener.stop()
+                    self._stop_pynput_thread(
+                        self._pynput_listener, "global hotkey"
+                    )
                     self._pynput_listener = None
             if self._ptt_listener is not None:
-                try:
-                    self._ptt_listener.stop()
-                except Exception:
-                    pass
+                self._stop_pynput_thread(
+                    self._ptt_listener, "push-to-talk"
+                )
                 self._ptt_listener = None
             # Reset PTT state so a stop-during-hold doesn't leave the
             # next start_listening() in a stuck "_ptt_held=True" state.
@@ -417,15 +535,63 @@ class HotkeyListener:
     def _convert_hotkey_to_global_hotkeys_format(self, hotkey_str: str) -> str:
         key_mapping = {
             'ctrl': 'control',
+            'control': 'control',
             'shift': 'shift',
             'alt': 'alt',
+            'option': 'alt',
             'win': 'window',
             'windows': 'window',
             'cmd': 'window',
+            'command': 'window',
             'super': 'window',
             'space': 'space',
             'enter': 'enter',
-            'esc': 'escape'
+            'return': 'enter',
+            'esc': 'escape',
+            'escape': 'escape',
+            'pageup': 'page_up',
+            'pagedown': 'page_down',
+            'del': 'delete',
+            'left_cmd': 'left_window',
+            'cmd_l': 'left_window',
+            'left_command': 'left_window',
+            'command_l': 'left_window',
+            'left_win': 'left_window',
+            'win_l': 'left_window',
+            'left_windows': 'left_window',
+            'windows_l': 'left_window',
+            'left_super': 'left_window',
+            'super_l': 'left_window',
+            'right_cmd': 'right_window',
+            'cmd_r': 'right_window',
+            'right_command': 'right_window',
+            'command_r': 'right_window',
+            'right_win': 'right_window',
+            'win_r': 'right_window',
+            'right_windows': 'right_window',
+            'windows_r': 'right_window',
+            'right_super': 'right_window',
+            'super_r': 'right_window',
+            'left_option': 'left_menu',
+            'option_l': 'left_menu',
+            'left_alt': 'left_menu',
+            'alt_l': 'left_menu',
+            'right_option': 'right_menu',
+            'option_r': 'right_menu',
+            'right_alt': 'right_menu',
+            'alt_r': 'right_menu',
+            'left_ctrl': 'left_control',
+            'ctrl_l': 'left_control',
+            'left_control': 'left_control',
+            'control_l': 'left_control',
+            'right_ctrl': 'right_control',
+            'ctrl_r': 'right_control',
+            'right_control': 'right_control',
+            'control_r': 'right_control',
+            'left_shift': 'left_shift',
+            'shift_l': 'left_shift',
+            'right_shift': 'right_shift',
+            'shift_r': 'right_shift',
         }
         keys = hotkey_str.lower().split('+')
         converted_keys = []
@@ -455,19 +621,25 @@ class HotkeyListener:
             'command': 'cmd',
             'super': 'cmd',
         }
+        key_aliases = {
+            'return': 'enter',
+            'esc': 'esc',
+            'escape': 'esc',
+            'pageup': 'page_up',
+            'pagedown': 'page_down',
+            'del': 'delete',
+        }
         named_keys = {
             'space', 'enter', 'tab', 'backspace', 'delete',
-            'esc', 'escape', 'home', 'end', 'page_up', 'page_down',
+            'esc', 'home', 'end', 'page_up', 'page_down',
             'up', 'down', 'left', 'right', 'insert',
             *(f'f{i}' for i in range(1, 25)),
         }
         parts = []
         for raw in hotkey_str.lower().split('+'):
-            key = raw.strip()
+            key = key_aliases.get(raw.strip(), raw.strip())
             if key in modifier_aliases:
                 parts.append(f"<{modifier_aliases[key]}>")
-            elif key == 'esc':
-                parts.append("<esc>")
             elif key in named_keys:
                 parts.append(f"<{key}>")
             elif len(key) == 1:

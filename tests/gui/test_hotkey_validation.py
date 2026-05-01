@@ -83,6 +83,12 @@ def test_lone_modifier_rejected() -> None:
     assert "modifier" in (validate_hotkey("ctrl") or "").lower()
 
 
+def test_duplicate_modifier_aliases_rejected() -> None:
+    err = validate_hotkey("ctrl+control+f2")
+    assert err is not None
+    assert "duplicate modifier" in err.lower()
+
+
 @pytest.mark.parametrize("key", ["space", "enter", "esc", "tab", "left"])
 def test_lone_named_key_rejected(key: str) -> None:
     """Named keys like ``space`` or ``enter`` are too "hot" to
@@ -94,10 +100,39 @@ def test_lone_named_key_rejected(key: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "combo", ["alt+space", "ctrl+enter", "shift+tab", "cmd+left"],
+    "combo",
+    [
+        "alt+space",
+        "ctrl+enter",
+        "ctrl+return",
+        "ctrl+pageup",
+        "shift+tab",
+        "cmd+left",
+    ],
 )
 def test_named_key_with_modifier_accepted(combo: str) -> None:
     assert validate_hotkey(combo) is None
+
+
+def test_windows_push_to_talk_accepts_right_side_modifiers() -> None:
+    assert (
+        validate_hotkey(
+            "right_alt", push_to_talk=True, platform="win32",
+        )
+        is None
+    )
+    assert (
+        validate_hotkey(
+            "right_control", push_to_talk=True, platform="win32",
+        )
+        is None
+    )
+
+
+def test_windows_push_to_talk_rejects_fn() -> None:
+    err = validate_hotkey("fn", push_to_talk=True, platform="win32")
+    assert err is not None
+    assert "recognised key" in err.lower()
 
 
 # ---- Cross-field conflicts -----------------------------------------------
