@@ -405,11 +405,15 @@ class AppController(
         stop = self._config.get_setting("hotkey", "stop_recording_hotkey") or ""
         cancel = self._config.get_setting("hotkey", "cancel_recording_hotkey") or ""
         auto_paste = bool(self._config.get_setting("clipboard", "auto_paste"))
+        mode = self._config.get_setting("hotkey", "mode") or "two_keys"
+        ptt_key = self._config.get_setting("hotkey", "push_to_talk_key") or ""
         view.set_values(
             start_hotkey=start,
             stop_hotkey=stop,
             auto_paste=auto_paste,
             cancel_hotkey=cancel,
+            mode=mode,
+            push_to_talk_key=ptt_key,
         )
 
         # Populate the microphone dropdown if a recording stack is wired in.
@@ -463,6 +467,16 @@ class AppController(
             "cancel_recording_hotkey",
             payload.get("cancel_hotkey", ""),
         )
+        # Recording mode + PTT key — added with the push-to-talk
+        # feature; ``payload.get`` keeps legacy callers (tests built
+        # against the old view contract) working with the previous
+        # 4-field bundle.
+        new_mode = payload.get("mode", "two_keys")
+        new_ptt_key = payload.get("push_to_talk_key", "") or ""
+        self._config.update_user_setting("hotkey", "mode", new_mode)
+        self._config.update_user_setting(
+            "hotkey", "push_to_talk_key", new_ptt_key,
+        )
         self._config.update_user_setting(
             "clipboard", "auto_paste", payload["auto_paste"]
         )
@@ -475,6 +489,31 @@ class AppController(
                 clipboard.update_auto_paste(bool(payload["auto_paste"]))
             except Exception as exc:  # pragma: no cover — defensive
                 log.warning("Failed to push auto_paste live: %s", exc)
+        # Push hotkey changes into the live HotkeyListener — without
+        # this the user has to restart the app for a mode switch /
+        # rebind to take effect.  Each ``change_hotkey_config`` call
+        # re-runs ``stop_listening`` + ``start_listening`` internally,
+        # so order doesn't matter and we don't have to rebuild the
+        # listener manually.
+        listener = self._resolve_hotkey_listener()
+        if listener is not None:
+            try:
+                listener.change_hotkey_config("mode", new_mode)
+                listener.change_hotkey_config(
+                    "push_to_talk_key", new_ptt_key,
+                )
+                listener.change_hotkey_config(
+                    "start_recording_hotkey", payload["start_hotkey"],
+                )
+                listener.change_hotkey_config(
+                    "stop_recording_hotkey", payload["stop_hotkey"],
+                )
+                listener.change_hotkey_config(
+                    "cancel_combination",
+                    payload.get("cancel_hotkey") or None,
+                )
+            except Exception as exc:
+                log.warning("Failed to push hotkey changes live: %s", exc)
         if "device" in payload:
             self._config.update_user_setting("audio", "device", payload["device"])
             if self._recording is not None and hasattr(self._recording, "set_input_device"):
@@ -482,6 +521,24 @@ class AppController(
                     self._recording.set_input_device(payload["device"])
                 except Exception as exc:
                     log.warning("Failed to switch input device: %s", exc)
+
+    def _resolve_hotkey_listener(self):
+        """Find the live ``HotkeyListener`` instance to push setting
+        changes into.  Returns ``None`` when no recording stack is
+        wired (e.g. unit tests building AppController without a
+        recording controller).
+
+        ``RecordingController`` keeps the listener under
+        ``_hotkey_listener`` (underscore-prefixed by convention).
+        Accept either name in case a future refactor exposes it as
+        a public property.
+        """
+        recording = self._recording
+        if recording is None:
+            return None
+        return getattr(recording, "_hotkey_listener", None) or getattr(
+            recording, "hotkey_listener", None
+        )
 
     def _on_test_mic_requested(self) -> None:
         if self._mic_test_in_progress:
@@ -683,16 +740,18 @@ class AppController(
             log.error("os.execv failed on restart: %s", exc)
 
     def _on_hotkeys_reset(self) -> None:
-        """Reset only the three hotkey fields to their built-in
-        defaults — leaves auto-paste, storage, HF token alone.
-        Per-card reset replaces the old global 'Reset to defaults'
-        footer button which conflated unrelated settings."""
+        """Reset hotkey fields + recording mode to built-in defaults
+        — leaves auto-paste, storage, HF token alone.  Per-card
+        reset replaces the old global 'Reset to defaults' footer
+        button which conflated unrelated settings."""
         from app.config_manager import DEFAULT_CONFIG
 
         defaults_hotkey = DEFAULT_CONFIG.get("hotkey", {})
         start = defaults_hotkey.get("start_recording_hotkey", "")
         stop = defaults_hotkey.get("stop_recording_hotkey", "")
         cancel = defaults_hotkey.get("cancel_recording_hotkey", "")
+        mode = defaults_hotkey.get("mode", "two_keys")
+        ptt_key = defaults_hotkey.get("push_to_talk_key", "") or ""
 
         self._config.update_user_setting(
             "hotkey", "start_recording_hotkey", start
@@ -703,7 +762,11 @@ class AppController(
         self._config.update_user_setting(
             "hotkey", "cancel_recording_hotkey", cancel
         )
-        # Refresh the three fields without disturbing the rest of the
+        self._config.update_user_setting("hotkey", "mode", mode)
+        self._config.update_user_setting(
+            "hotkey", "push_to_talk_key", ptt_key,
+        )
+        # Refresh the fields without disturbing the rest of the
         # form (current auto-paste / device / HF token / storage path
         # all stay where they are). ``set_values`` is suspend-guarded
         # so this won't bounce ``save_requested`` back at us.
@@ -713,6 +776,8 @@ class AppController(
             stop_hotkey=stop,
             auto_paste=view.auto_paste(),
             cancel_hotkey=cancel,
+            mode=mode,
+            push_to_talk_key=ptt_key,
         )
 
     def _on_hf_token_reset(self) -> None:

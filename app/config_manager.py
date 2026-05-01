@@ -18,10 +18,23 @@ if sys.platform == "darwin":
     _DEFAULT_START_HOTKEY = "ctrl+f8"
     _DEFAULT_STOP_HOTKEY = "ctrl+f9"
     _DEFAULT_CANCEL_HOTKEY = "ctrl+f10"
+    # Push-to-talk default: right Cmd is the canonical "thumb"
+    # key on Apple keyboards and rarely used in real shortcuts —
+    # most apps that read Cmd+X look at the modifier mask, not
+    # which physical key produced it, so binding right_cmd alone
+    # to push-to-talk doesn't interfere with regular Cmd+letter
+    # shortcuts (you press left Cmd for those by muscle memory).
+    _DEFAULT_PUSH_TO_TALK_KEY = "right_cmd"
 else:
     _DEFAULT_START_HOTKEY = "ctrl+f2"
     _DEFAULT_STOP_HOTKEY = "ctrl+f3"
     _DEFAULT_CANCEL_HOTKEY = "ctrl+f6"
+    # Windows/Linux push-to-talk: right Alt is the equivalent
+    # "thumb" key — easy to reach, rarely the target of an
+    # existing shortcut.  Right Win is also free but on Linux it
+    # often opens the activities overlay (GNOME / KDE), so we
+    # avoid it.
+    _DEFAULT_PUSH_TO_TALK_KEY = "right_alt"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "whisper": {
@@ -34,6 +47,19 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "beam_size": 5,
     },
     "hotkey": {
+        # Recording mode:
+        #   "two_keys" — separate start / stop bindings (default;
+        #     classical fire-and-forget: tap once to start, tap
+        #     stop to transcribe).
+        #   "toggle" — single ``start_recording_hotkey`` flips
+        #     between idle ↔ recording on each press.
+        #   "push_to_talk" — hold ``push_to_talk_key`` to record,
+        #     release to stop and transcribe.  Only mode that lets
+        #     you bind a solo modifier (``right_cmd`` / ``right_alt``
+        #     etc.) — the listener tracks the press and release
+        #     events directly so the key doesn't have to be a
+        #     standalone non-modifier.
+        "mode": "two_keys",
         # Defaults chosen per-platform — see the constants above.
         # Windows: ``ctrl+f2`` / ``ctrl+f3`` / ``ctrl+f6`` (the
         # original muscle-memory set; nothing else uses them on
@@ -44,6 +70,19 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "start_recording_hotkey": _DEFAULT_START_HOTKEY,
         "stop_recording_hotkey": _DEFAULT_STOP_HOTKEY,
         "cancel_recording_hotkey": _DEFAULT_CANCEL_HOTKEY,
+        # Push-to-talk binding — meaningful only when ``mode`` is
+        # ``"push_to_talk"``.  Solo right-side modifier on macOS
+        # (``right_cmd``) / Windows + Linux (``right_alt``).  Empty
+        # string disables PTT (UI guards against switching to
+        # push_to_talk mode with an empty binding).
+        "push_to_talk_key": _DEFAULT_PUSH_TO_TALK_KEY,
+        # Minimum time (seconds) the PTT key must stay held for
+        # the recording to actually start.  Filters out accidental
+        # taps — without it, a glancing right-Cmd press starts +
+        # stops a recording in the same frame, producing empty
+        # transcriptions and noise.  200 ms is the threshold most
+        # voice apps converge on (Discord PTT, Spokenly).
+        "push_to_talk_min_hold_seconds": 0.2,
     },
     "audio": {
         "channels": 1,

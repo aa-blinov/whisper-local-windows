@@ -105,14 +105,14 @@ def test_named_key_with_modifier_accepted(combo: str) -> None:
 
 def test_no_conflict_when_all_fields_distinct() -> None:
     errors = find_hotkey_conflicts(
-        "ctrl+f2", "ctrl+f3", "ctrl+f6", toggle_mode=False,
+        "ctrl+f2", "ctrl+f3", "ctrl+f6", mode="two_keys",
     )
     assert errors == {}
 
 
 def test_stop_equals_start_flagged_outside_toggle_mode() -> None:
     errors = find_hotkey_conflicts(
-        "ctrl+f2", "ctrl+f2", "ctrl+f6", toggle_mode=False,
+        "ctrl+f2", "ctrl+f2", "ctrl+f6", mode="two_keys",
     )
     assert "stop" in errors
     assert "Start" in errors["stop"]
@@ -120,7 +120,7 @@ def test_stop_equals_start_flagged_outside_toggle_mode() -> None:
 
 def test_cancel_equals_start_flagged() -> None:
     errors = find_hotkey_conflicts(
-        "ctrl+f2", "ctrl+f3", "ctrl+f2", toggle_mode=False,
+        "ctrl+f2", "ctrl+f3", "ctrl+f2", mode="two_keys",
     )
     assert "cancel" in errors
     assert "Start" in errors["cancel"]
@@ -128,7 +128,7 @@ def test_cancel_equals_start_flagged() -> None:
 
 def test_cancel_equals_stop_flagged() -> None:
     errors = find_hotkey_conflicts(
-        "ctrl+f2", "ctrl+f3", "ctrl+f3", toggle_mode=False,
+        "ctrl+f2", "ctrl+f3", "ctrl+f3", mode="two_keys",
     )
     assert "cancel" in errors
 
@@ -137,14 +137,14 @@ def test_toggle_mode_disables_stop_and_cancel_conflict_checks() -> None:
     """In toggle mode start == stop is intentional and cancel is
     expected to be empty — no conflicts to flag."""
     errors = find_hotkey_conflicts(
-        "ctrl+f2", "ctrl+f2", "", toggle_mode=True,
+        "ctrl+f2", "ctrl+f2", "", mode="toggle",
     )
     assert errors == {}
 
 
 def test_conflicts_compared_case_insensitively() -> None:
     errors = find_hotkey_conflicts(
-        "Ctrl+F2", "ctrl+f2", "", toggle_mode=False,
+        "Ctrl+F2", "ctrl+f2", "", mode="two_keys",
     )
     assert "stop" in errors
 
@@ -157,7 +157,7 @@ def test_validate_all_combines_field_errors_and_conflicts() -> None:
         start="ctrl+f2",
         stop="ctrl+f2",
         cancel="ctrl+f6",
-        toggle_mode=False,
+        mode="two_keys",
     )
     # No per-field errors → conflict surfaces.
     assert "stop" in errors
@@ -171,7 +171,7 @@ def test_validate_all_does_not_emit_conflict_when_field_already_invalid() -> Non
         start="not a real hotkey",
         stop="not a real hotkey",
         cancel="",
-        toggle_mode=False,
+        mode="two_keys",
     )
     assert "start" in errors
     # Stop also doesn't parse, so it's flagged for the same reason —
@@ -188,7 +188,7 @@ def test_validate_all_skips_stop_check_in_toggle_mode() -> None:
         start="ctrl+f2",
         stop="",                # would normally fail "empty"
         cancel="",
-        toggle_mode=True,
+        mode="toggle",
     )
     assert "stop" not in errors
 
@@ -198,5 +198,5 @@ def test_validate_all_clears_when_everything_is_valid() -> None:
         start="ctrl+f2",
         stop="ctrl+f3",
         cancel="ctrl+f6",
-        toggle_mode=False,
+        mode="two_keys",
     ) == {}

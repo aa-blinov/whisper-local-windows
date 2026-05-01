@@ -114,6 +114,11 @@ def build_recording_stack(
         start_recording_hotkey=hotkey_cfg.get("start_recording_hotkey", "ctrl+f2"),
         stop_recording_hotkey=hotkey_cfg.get("stop_recording_hotkey", "ctrl+f3"),
         cancel_combination=cancel_hotkey.strip() or None,
+        mode=hotkey_cfg.get("mode", "two_keys"),
+        push_to_talk_key=hotkey_cfg.get("push_to_talk_key") or None,
+        push_to_talk_min_hold_seconds=float(
+            hotkey_cfg.get("push_to_talk_min_hold_seconds", 0.2)
+        ),
     )
 
     log.info(

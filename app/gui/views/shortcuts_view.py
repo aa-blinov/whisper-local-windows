@@ -301,26 +301,43 @@ class ShortcutsView(QWidget):
         self._accessibility_state = "hidden"
         self._refresh_accessibility_banner()
 
-        # Toggle-mode switch: when checked, the Start hotkey doubles
-        # as the Stop hotkey — pressing it again stops the recording.
-        # The HotkeyListener already supports this when start == stop,
-        # but exposing it as an explicit checkbox is much friendlier
-        # than asking the user to type the same combination into two
-        # fields. Cancel is greyed out in this mode too — the toggle
-        # flow is "one key, one job", and an extra cancel binding
-        # adds friction without earning its keep.
-        self._toggle_mode_cb = QCheckBox(
-            "One hotkey for recording — press once to start, again to stop",
-            hotkeys_card,
+        # Recording mode picker.  Three options:
+        #
+        #   - "Two keys"     — separate Start and Stop bindings
+        #                      (the historical default; Cancel is
+        #                      independent).
+        #   - "One key (toggle)" — single Start hotkey flips between
+        #                      idle ↔ recording; Stop field is muted.
+        #   - "Push to talk"   — hold a single key (default
+        #                      ``right_cmd`` on Mac, ``right_alt``
+        #                      elsewhere) to record, release to
+        #                      transcribe; Stop field is muted, the
+        #                      PTT key field becomes the active one.
+        #
+        # A QComboBox is more compact than a 3-way radio cluster
+        # and the "select-from-discrete-set" semantic matches what
+        # the user is doing.  ``setCurrentData`` keeps the on-disk
+        # config value (``"two_keys"`` / ``"toggle"`` / ``"push_to_talk"``)
+        # decoupled from the user-facing label.
+        self._mode_combo = QComboBox(hotkeys_card)
+        self._mode_combo.setObjectName("RecordingModeCombo")
+        self._mode_combo.addItem(
+            "Two keys (Start + Stop)", userData="two_keys",
         )
-        self._toggle_mode_cb.setObjectName("ToggleHotkeyCheckbox")
-        self._toggle_mode_cb.setToolTip(
-            "When on, the same hotkey starts and stops a recording. "
-            "Stop and Cancel fields below become read-only — only the "
-            "Start field is in use."
+        self._mode_combo.addItem(
+            "One key — press to toggle", userData="toggle",
         )
-        self._toggle_mode_cb.toggled.connect(self._on_toggle_mode_changed)
-        hotkeys_form.addRow("", self._toggle_mode_cb)
+        self._mode_combo.addItem(
+            "Push to talk — hold to record", userData="push_to_talk",
+        )
+        self._mode_combo.setToolTip(
+            "Two keys: classic start + stop bindings.\n"
+            "Toggle: one hotkey flips between idle and recording.\n"
+            "Push-to-talk: hold a single key (e.g. right Cmd) to "
+            "record, release to transcribe — best for short dictation."
+        )
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        hotkeys_form.addRow("Recording mode", self._mode_combo)
 
         self._start_edit = QLineEdit(hotkeys_card)
         self._start_edit.setObjectName("StartHotkeyEdit")
@@ -336,6 +353,20 @@ class ShortcutsView(QWidget):
         self._stop_edit.setPlaceholderText("e.g. ctrl+f3")
         self._stop_edit.editingFinished.connect(self._emit_save)
         hotkeys_form.addRow("Stop recording", self._stop_edit)
+
+        # Push-to-talk key — only meaningful in PTT mode, but the
+        # row stays in the form so the field's vertical position
+        # matches the others when it appears.  Hidden via
+        # ``setVisible(False)`` from ``_apply_mode`` when the mode
+        # isn't ``"push_to_talk"``.
+        self._ptt_edit = QLineEdit(hotkeys_card)
+        self._ptt_edit.setObjectName("PushToTalkEdit")
+        self._ptt_edit.setPlaceholderText(
+            "e.g. right_cmd, right_alt, fn — solo modifier OK in PTT mode"
+        )
+        self._ptt_edit.editingFinished.connect(self._emit_save)
+        hotkeys_form.addRow("Push-to-talk key", self._ptt_edit)
+        self._ptt_label_widget = hotkeys_form.labelForField(self._ptt_edit)
 
         # "Discard buffer without transcribing" — the runtime has
         # always supported this (StateManager.cancel_active_recording)
@@ -593,27 +624,43 @@ class ShortcutsView(QWidget):
         stop_hotkey: str,
         auto_paste: bool,
         cancel_hotkey: str = "",
+        mode: str = "two_keys",
+        push_to_talk_key: str = "",
     ) -> None:
         # Programmatic update — must not feed back into save_requested.
-        # ``cancel_hotkey`` is keyword-only with a default so callers
-        # written before the field existed keep working unchanged.
+        # ``cancel_hotkey`` / ``mode`` / ``push_to_talk_key`` are
+        # keyword-only with defaults so callers written before the
+        # fields existed keep working unchanged.
         self._suspend_emit = True
         try:
             self._start_edit.setText(start_hotkey)
             self._stop_edit.setText(stop_hotkey)
             self._auto_paste_cb.setChecked(bool(auto_paste))
             self._cancel_edit.setText(cancel_hotkey or "")
-            # If the persisted config has the same combination for
-            # start and stop, the user is implicitly in toggle mode —
-            # tick the checkbox so the UI matches.  Empty start ==
-            # empty stop should NOT auto-tick (that's "no hotkey
-            # configured at all", not toggle).
+            self._ptt_edit.setText(push_to_talk_key or "")
+
+            # Migration path: legacy configs (pre-mode-field) implicitly
+            # encoded toggle mode by setting Start == Stop.  Honour
+            # that when the explicit ``mode`` field is missing or set
+            # to the default but Start == Stop happens to match.
+            resolved_mode = mode if mode in {"two_keys", "toggle", "push_to_talk"} else "two_keys"
             same = bool(
                 start_hotkey
                 and start_hotkey.strip().lower() == stop_hotkey.strip().lower()
             )
-            self._toggle_mode_cb.setChecked(same)
-            self._apply_toggle_mode(same)
+            if resolved_mode == "two_keys" and same:
+                resolved_mode = "toggle"
+
+            # Find and select the combo entry whose userData matches
+            # the resolved mode.  ``setCurrentIndex`` would fire
+            # ``currentIndexChanged`` and through it ``_on_mode_changed``,
+            # but ``_suspend_emit`` is up so the save-cycle stays
+            # quiet.
+            for i in range(self._mode_combo.count()):
+                if self._mode_combo.itemData(i) == resolved_mode:
+                    self._mode_combo.setCurrentIndex(i)
+                    break
+            self._apply_mode(resolved_mode)
         finally:
             self._suspend_emit = False
         # Run validation once the suspend flag is back down so the
@@ -649,25 +696,41 @@ class ShortcutsView(QWidget):
         return self._start_edit.text().strip()
 
     def stop_hotkey(self) -> str:
-        # In toggle-mode the stop combo is implicitly the start
-        # combo — return it so the persisted config keeps both
-        # fields in sync (HotkeyListener relies on equality to
-        # decide whether to bind a single toggle handler).
-        if self._toggle_mode_cb.isChecked():
+        mode = self._current_mode()
+        # Toggle mode: the stop combo is the start combo (the
+        # HotkeyListener checks equality to decide on a single
+        # toggle handler).  PTT mode: Stop is unused, but we still
+        # write the user's previous stop value to disk so a
+        # later switch back to two_keys restores it.
+        if mode == "toggle":
             return self._start_edit.text().strip()
         return self._stop_edit.text().strip()
 
     def cancel_hotkey(self) -> str:
-        # Toggle-mode disables Cancel functionally — the user wanted
-        # a "one key, one job" recording flow. Returning an empty
-        # string here propagates through ``values()`` /
+        mode = self._current_mode()
+        # Toggle / PTT modes both disable Cancel — the user picked a
+        # streamlined "one key for everything recording" flow.
+        # Returning an empty string propagates through ``values()`` /
         # ``save_requested`` so the persisted config drops the
-        # binding and the HotkeyListener stops registering it. The
-        # field text itself is preserved on screen so un-ticking
-        # restores the previous value transparently.
-        if self._toggle_mode_cb.isChecked():
+        # binding and HotkeyListener stops registering it.  The
+        # field text itself is preserved on screen so a later
+        # mode-switch back to two_keys restores the previous value
+        # transparently.
+        if mode in {"toggle", "push_to_talk"}:
             return ""
         return self._cancel_edit.text().strip()
+
+    def recording_mode(self) -> str:
+        """Active recording mode — ``"two_keys"`` / ``"toggle"`` /
+        ``"push_to_talk"``.  Forwarded to the controller's save
+        bundle so ``HotkeyListener`` rebuilds with the right path."""
+        return self._current_mode()
+
+    def push_to_talk_key(self) -> str:
+        """Push-to-talk binding (e.g. ``"right_cmd"``).  Honoured by
+        the controller only when ``recording_mode() == "push_to_talk"``.
+        """
+        return self._ptt_edit.text().strip()
 
     def auto_paste(self) -> bool:
         return self._auto_paste_cb.isChecked()
@@ -724,6 +787,8 @@ class ShortcutsView(QWidget):
             "cancel_hotkey": self.cancel_hotkey(),
             "auto_paste": self.auto_paste(),
             "device": self.device_index(),
+            "mode": self.recording_mode(),
+            "push_to_talk_key": self.push_to_talk_key(),
         }
 
     # ---- internal -----------------------------------------------------------
@@ -744,18 +809,51 @@ class ShortcutsView(QWidget):
     def _refresh_hotkey_validation(self) -> None:
         """Run :func:`validate_all` over the current field values
         and toggle the ``invalid`` Qt property + tooltip on each
-        QLineEdit. Pure UI shuffle — no signals."""
-        errors = validate_all(
-            start=self._start_edit.text(),
-            stop=self._stop_edit.text(),
-            cancel=self._cancel_edit.text(),
-            toggle_mode=self._toggle_mode_cb.isChecked(),
-        )
-        for field_name, edit in (
-            ("start", self._start_edit),
-            ("stop", self._stop_edit),
-            ("cancel", self._cancel_edit),
-        ):
+        QLineEdit. Pure UI shuffle — no signals.
+
+        In PTT mode, the active "start" field is actually the PTT
+        key edit (not ``_start_edit``), so we feed that value into
+        the validator and stamp the result on ``_ptt_edit`` instead.
+        """
+        mode = self._current_mode()
+        if mode == "push_to_talk":
+            errors = validate_all(
+                start=self._ptt_edit.text(),
+                stop="",
+                cancel=self._cancel_edit.text(),
+                mode="push_to_talk",
+            )
+            field_pairs = (
+                ("start", self._ptt_edit),
+                ("cancel", self._cancel_edit),
+            )
+            # Clear any stale invalid state on the muted Start /
+            # Stop fields — they're not in use, validation noise
+            # there is misleading.
+            for edit in (self._start_edit, self._stop_edit):
+                edit.setProperty("invalid", False)
+                edit.setToolTip("")
+                edit.style().unpolish(edit)
+                edit.style().polish(edit)
+        else:
+            errors = validate_all(
+                start=self._start_edit.text(),
+                stop=self._stop_edit.text(),
+                cancel=self._cancel_edit.text(),
+                mode=mode,
+            )
+            field_pairs = (
+                ("start", self._start_edit),
+                ("stop", self._stop_edit),
+                ("cancel", self._cancel_edit),
+            )
+            # Clear stale invalid state on the hidden PTT field.
+            self._ptt_edit.setProperty("invalid", False)
+            self._ptt_edit.setToolTip("")
+            self._ptt_edit.style().unpolish(self._ptt_edit)
+            self._ptt_edit.style().polish(self._ptt_edit)
+
+        for field_name, edit in field_pairs:
             err = errors.get(field_name)
             edit.setProperty("invalid", bool(err))
             edit.setToolTip(err or "")
@@ -929,68 +1027,100 @@ class ShortcutsView(QWidget):
         self._refresh_accessibility_banner()
         self._refresh_mic_banner()
 
-    def _on_toggle_mode_changed(self, checked: bool) -> None:
-        """User flipped 'Use one hotkey for both start and stop'.
+    def _current_mode(self) -> str:
+        """Read the active recording mode from the combo box.  Returns
+        one of ``"two_keys"`` / ``"toggle"`` / ``"push_to_talk"``."""
+        data = self._mode_combo.currentData()
+        if data in {"two_keys", "toggle", "push_to_talk"}:
+            return data
+        return "two_keys"
 
-        Mirror Start into Stop and lock the Stop / Cancel fields,
-        but snapshot Stop's original text first so un-ticking
-        restores the user's previous binding instead of leaving
-        Stop frozen at the Start value. Cancel doesn't need this —
-        we never overwrite its text in toggle mode, only ignore it
-        in ``cancel_hotkey()``.
+    def _on_mode_changed(self, _index: int) -> None:
+        """User picked a different recording mode in the combo box.
+
+        Apply the visual shuffle (mute / unmute fields, mirror Start
+        into Stop for toggle, show or hide PTT field), snapshot
+        Stop's previous value when entering toggle mode so we can
+        restore on switch-back, then emit save.
         """
-        if checked:
-            # Capture the value the user had before we mirror Start
-            # in.  Skipped if we're already in toggle mode (would
-            # snapshot a value that's already a mirror of Start).
+        mode = self._current_mode()
+        if mode == "toggle":
+            # Capture Stop's value before we mirror Start in.
+            # Skipped if we're already in toggle (re-emitting the
+            # same mode change) — would snapshot a mirror of Start.
             if self._previous_stop_hotkey is None:
                 self._previous_stop_hotkey = self._stop_edit.text()
         else:
+            # Restore the user's previous Stop value when leaving
+            # toggle.  Two_keys honours it directly; push_to_talk
+            # keeps it for visual continuity (Stop field is hidden
+            # but the value is preserved on disk so switching back
+            # to two_keys doesn't reset to defaults).
             if self._previous_stop_hotkey is not None:
                 self._stop_edit.setText(self._previous_stop_hotkey)
                 self._previous_stop_hotkey = None
-        self._apply_toggle_mode(checked)
+        self._apply_mode(mode)
         self._emit_save()
 
-    def _apply_toggle_mode(self, checked: bool) -> None:
-        """Lock / unlock the Stop and Cancel fields per ``checked``.
-        Pure UI shuffle — no signal emission.
+    def _apply_mode(self, mode: str) -> None:
+        """Wire field visibility / muting to the active mode.  Pure
+        UI shuffle — no signal emission.
 
         Read-only (rather than disabled) makes it obvious that the
-        fields are *deactivated by toggle-mode*, not broken. The
-        ``muted="true"`` Qt property switches the field's QSS to
+        fields are *deactivated by the current mode*, not broken.
+        The ``muted="true"`` Qt property flips the QSS to
         ``color.bg_elevated`` background + ``text_muted`` foreground
         so the visual reads as "currently inactive" rather than a
         normal editable input.
 
-        - **Stop** mirrors the Start value live (so the user sees
-          which hotkey actually stops a recording in toggle mode).
-        - **Cancel** keeps its previously-configured value so a
-          later un-tick restores it, but is muted — toggle mode is a
-          "one key for everything recording" UX and the cancel
-          escape hatch would muddy that.
+        Field map per mode:
+
+        =================  ==========  ==========  ==========  =======
+                           Start       Stop        PTT key     Cancel
+        =================  ==========  ==========  ==========  =======
+        two_keys           active      active      hidden      active
+        toggle             active      muted       hidden      muted
+        push_to_talk       muted       muted       active      muted
+        =================  ==========  ==========  ==========  =======
         """
+        is_toggle = mode == "toggle"
+        is_ptt = mode == "push_to_talk"
+
+        # Stop is muted in any mode that doesn't use a separate stop
+        # binding — toggle mirrors Start; PTT doesn't have a stop.
         for field in (self._stop_edit, self._cancel_edit):
-            field.setReadOnly(checked)
-            field.setProperty("muted", checked)
-            # ``setProperty`` on a styled widget needs an
-            # unpolish/polish cycle before Qt picks up the new
-            # selector match.
+            muted = is_toggle or is_ptt
+            field.setReadOnly(muted)
+            field.setProperty("muted", muted)
             field.style().unpolish(field)
             field.style().polish(field)
-        if checked:
+
+        # Start is muted in PTT mode (its value isn't used by the
+        # listener — the PTT key field is the active binding).
+        self._start_edit.setReadOnly(is_ptt)
+        self._start_edit.setProperty("muted", is_ptt)
+        self._start_edit.style().unpolish(self._start_edit)
+        self._start_edit.style().polish(self._start_edit)
+
+        # PTT key field appears only in PTT mode.  Hide both the
+        # input and its form-row label so the form's vertical
+        # spacing collapses cleanly.
+        self._ptt_edit.setVisible(is_ptt)
+        if self._ptt_label_widget is not None:
+            self._ptt_label_widget.setVisible(is_ptt)
+
+        if is_toggle:
             self._stop_edit.setText(self._start_edit.text())
 
     def _mirror_start_into_stop(self, new_text: str) -> None:
         """Keep the Stop field synced with Start while toggle-mode
-        is on. No-op when toggle-mode is off — that's the regular
-        two-independent-fields path.
+        is on.  No-op in any other mode.
 
         Bypasses ``_suspend_emit`` because this is a UI mirror, not
         a programmatic load — we explicitly want the user's keystroke
         in Start to ripple through and persist.
         """
-        if self._toggle_mode_cb.isChecked():
+        if self._current_mode() == "toggle":
             self._stop_edit.setText(new_text)
 
     def _on_device_changed(self, _idx: int) -> None:

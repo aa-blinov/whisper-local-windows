@@ -24,6 +24,21 @@ _MODIFIERS = frozenset({
     "cmd", "command", "win", "windows", "super",
 })
 
+# Solo keys allowed only in push-to-talk mode.  The listener
+# tracks press + release events directly there, so we don't have
+# to worry about a held key swallowing an active typing session
+# (the user is voluntarily holding it).  Right-side modifiers
+# are the safest pick: they're rarely the target of an existing
+# shortcut on any platform, and the user keeps a free left-hand
+# modifier for normal Cmd+letter / Ctrl+letter shortcuts.
+_PTT_SOLO_MODIFIERS = frozenset({
+    "right_cmd", "cmd_r", "right_command", "command_r",
+    "right_option", "option_r", "right_alt", "alt_r",
+    "right_shift", "shift_r",
+    "right_ctrl", "ctrl_r", "right_control", "control_r",
+    "fn",
+})
+
 _NAMED_KEYS = frozenset({
     "space", "enter", "return",
     "esc", "escape",
@@ -53,17 +68,38 @@ def _is_digit(key: str) -> bool:
     return len(key) == 1 and "0" <= key <= "9"
 
 
-def validate_hotkey(text: str, *, allow_empty: bool = False) -> Optional[str]:
+def validate_hotkey(
+    text: str,
+    *,
+    allow_empty: bool = False,
+    push_to_talk: bool = False,
+) -> Optional[str]:
     """Return ``None`` if ``text`` is a valid hotkey combination,
     otherwise a human-readable error string.
 
     ``allow_empty=True`` makes the empty / whitespace-only input
     accepted (used for the optional Cancel field — empty means
     "no binding").
+
+    ``push_to_talk=True`` switches to the more permissive vocabulary
+    that allows a solo right-side modifier (``right_cmd`` /
+    ``right_alt`` / …) or ``fn`` — those bindings are only safe
+    when the listener tracks press + release events (which the
+    push-to-talk listener does), because the user is deliberately
+    holding the key for the recording duration.  In any other
+    mode a solo modifier would silently swallow the next
+    keystroke and is rejected.
     """
     raw = (text or "").strip()
     if not raw:
         return None if allow_empty else "Hotkey cannot be empty"
+
+    # Push-to-talk solo modifier shortcut: accept the special
+    # vocabulary up-front, before normal parsing splits on ``+``.
+    # ``right_cmd`` doesn't have a ``+`` separator, and the modifier
+    # check below would reject it because nothing precedes the key.
+    if push_to_talk and raw.lower() in _PTT_SOLO_MODIFIERS:
+        return None
 
     parts = [p.strip().lower() for p in raw.split("+")]
     if any(not p for p in parts):
@@ -119,35 +155,36 @@ def find_hotkey_conflicts(
     stop: str,
     cancel: str,
     *,
-    toggle_mode: bool,
+    mode: str = "two_keys",
 ) -> Dict[str, str]:
     """Cross-field conflict check.
 
     Returns a mapping ``field_name -> error_message`` where
     ``field_name`` is one of ``"start"``, ``"stop"``, ``"cancel"``.
 
-    In toggle mode ``stop`` is expected to equal ``start`` (the
-    HotkeyListener registers a single toggle binding) and ``cancel``
-    is expected to be empty (the UI mutes it) — so neither pair is
-    flagged.
+    ``mode``:
+      - ``"two_keys"`` (default):  flags Stop == Start as needing
+        toggle mode, plus standard Cancel collisions.
+      - ``"toggle"`` / ``"push_to_talk"``:  ``stop`` is unused;
+        we only check Cancel against Start.
     """
     errors: Dict[str, str] = {}
-    if toggle_mode:
-        return errors
 
     s = start.strip().lower()
     p = stop.strip().lower()
     c = cancel.strip().lower()
 
-    if s and p and s == p:
-        errors["stop"] = (
-            f"Stop matches Start ({s}) — enable the toggle checkbox if you "
-            "want one hotkey to do both"
-        )
-    if c and s and c == s:
+    if mode == "two_keys":
+        if s and p and s == p:
+            errors["stop"] = (
+                f"Stop matches Start ({s}) — switch to Toggle mode if you "
+                "want one hotkey to do both"
+            )
+        if c and p and c == p:
+            errors["cancel"] = f"Cancel matches Stop ({p})"
+
+    if c and s and c == s and "cancel" not in errors:
         errors["cancel"] = f"Cancel matches Start ({s})"
-    if c and p and c == p and "cancel" not in errors:
-        errors["cancel"] = f"Cancel matches Stop ({p})"
 
     return errors
 
@@ -157,21 +194,27 @@ def validate_all(
     start: str,
     stop: str,
     cancel: str,
-    toggle_mode: bool,
+    mode: str = "two_keys",
 ) -> Mapping[str, str]:
     """One-stop check returning a ``field_name -> error`` map for
     every problem ShortcutsView should surface.  Combines
     :func:`validate_hotkey` per-field with
     :func:`find_hotkey_conflicts`. First-error-wins per field — we
     don't accumulate multiple messages on the same input.
+
+    ``mode``:
+      - ``"two_keys"``:  Start + Stop + (optional) Cancel
+      - ``"toggle"``:    only Start + (optional) Cancel
+      - ``"push_to_talk"``:  only Start (with the looser "solo
+        modifier" vocabulary) + (optional) Cancel
     """
     errors: Dict[str, str] = {}
 
-    err = validate_hotkey(start)
+    err = validate_hotkey(start, push_to_talk=(mode == "push_to_talk"))
     if err:
         errors["start"] = err
 
-    if not toggle_mode:
+    if mode == "two_keys":
         err = validate_hotkey(stop)
         if err:
             errors["stop"] = err
@@ -184,7 +227,7 @@ def validate_all(
     # individually parsed correctly.
     if "start" not in errors and "stop" not in errors and "cancel" not in errors:
         errors.update(find_hotkey_conflicts(
-            start, stop, cancel, toggle_mode=toggle_mode,
+            start, stop, cancel, mode=mode,
         ))
 
     return errors

@@ -330,9 +330,10 @@ def test_reset_does_not_re_emit_save_requested(qtbot):
     window.shortcuts_view.hotkeys_reset_requested.emit()
     writes_during = len(config.writes) - writes_before
 
-    # Reset writes exactly 3 settings: start, stop, cancel.
-    # If save_requested re-fired from set_values, we'd see extras.
-    assert writes_during == 3
+    # Reset writes exactly 5 settings: start, stop, cancel, mode,
+    # push_to_talk_key.  If save_requested re-fired from set_values,
+    # we'd see auto_paste / device / etc on top.
+    assert writes_during == 5
 
 
 # ---- Topbar sync ------------------------------------------------------------
