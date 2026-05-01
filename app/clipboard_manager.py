@@ -14,6 +14,15 @@ else:
     win32con = None  # type: ignore[assignment]
     win32gui = None  # type: ignore[assignment]
 
+# macOS virtual key codes (ANSI layout — Apple keeps these stable
+# across keyboard layouts via the HIToolbox key-code abstraction;
+# the OS does the layout translation when the event is delivered).
+# Defined as module constants so the keystroke helpers don't have
+# to reach into the Carbon framework just for two integers.
+_MAC_KEYCODE_V = 0x09        # ANSI_V
+_MAC_KEYCODE_RETURN = 0x24   # ANSI_Return
+
+
 class ClipboardManager:
     def __init__(self, key_simulation_delay, auto_paste, preserve_clipboard):
         self.logger = logging.getLogger(__name__)
@@ -21,31 +30,6 @@ class ClipboardManager:
         self.auto_paste = auto_paste
         self.preserve_clipboard = preserve_clipboard
         self._test_clipboard_access()
-        # Build the macOS keyboard controller eagerly on the main
-        # thread.  ``pynput.keyboard.Controller.__init__`` makes
-        # ``TSMGetInputSourceProperty`` calls under the hood, and the
-        # macOS Text Services Manager asserts the call comes from the
-        # main dispatch queue — instantiating from the recording-
-        # pipeline worker (where ``execute_auto_paste`` runs) crashes
-        # the process with EXC_BREAKPOINT in
-        # ``_dispatch_assert_queue_fail``.  ``__init__`` here is
-        # invoked from ``recording_factory.build_recording_stack`` on
-        # the Qt main thread, so building the Controller now is safe.
-        # ``Controller.press`` / ``release`` themselves only post
-        # CGEvents and are thread-safe, so the cached instance can be
-        # used from the worker thread without further coordination.
-        self._mac_keyboard = None
-        if sys.platform == "darwin":
-            try:
-                from pynput.keyboard import Controller as _MacController
-
-                self._mac_keyboard = _MacController()
-            except Exception as exc:
-                self.logger.error(
-                    "Failed to initialise pynput keyboard Controller on "
-                    "main thread: %s. Auto-paste / Enter delivery will "
-                    "fall back to pyautogui.", exc,
-                )
         self._print_status()
     
     def _test_clipboard_access(self):
@@ -271,35 +255,7 @@ class ClipboardManager:
             return
 
         if sys.platform == "darwin":
-            kb = self._mac_keyboard
-            if kb is None:
-                self.logger.error(
-                    "Cmd+V skipped — pynput Controller wasn't initialised "
-                    "(see startup error). Text is in clipboard; user can "
-                    "Cmd+V manually."
-                )
-                return
-            try:
-                from pynput.keyboard import Key
-
-                # ``with kb.pressed(Key.cmd)`` would also work, but the
-                # explicit press / release pair lets us interleave a
-                # tiny sleep between modifier-down and key-tap so the
-                # OS has time to register the modifier flag before the
-                # ``v`` event arrives — without it, fast Macs can
-                # deliver the ``v`` while CGEventFlagsChanged is still
-                # propagating, and the target app sees a literal "v"
-                # character instead of Cmd+V.
-                kb.press(Key.cmd)
-                time.sleep(0.02)
-                kb.press("v")
-                time.sleep(0.02)
-                kb.release("v")
-                time.sleep(0.005)
-                kb.release(Key.cmd)
-                time.sleep(max(0.02, self.key_simulation_delay))
-            except Exception as e:
-                self.logger.error(f"Failed to send Cmd+V via pynput: {e}")
+            self._send_mac_keystroke_with_cmd(_MAC_KEYCODE_V, "Cmd+V")
             return
 
         # Linux — pyautogui with X11 / Wayland.
@@ -323,21 +279,7 @@ class ClipboardManager:
             return
 
         if sys.platform == "darwin":
-            kb = self._mac_keyboard
-            if kb is None:
-                self.logger.error(
-                    "Enter skipped — pynput Controller wasn't initialised."
-                )
-                return
-            try:
-                from pynput.keyboard import Key
-
-                kb.press(Key.enter)
-                time.sleep(0.005)
-                kb.release(Key.enter)
-                time.sleep(max(0.02, self.key_simulation_delay))
-            except Exception as e:
-                self.logger.error(f"Failed to send ENTER via pynput: {e}")
+            self._send_mac_keystroke(_MAC_KEYCODE_RETURN, "Enter")
             return
 
         try:
@@ -347,3 +289,69 @@ class ClipboardManager:
             time.sleep(max(0.02, self.key_simulation_delay))
         except Exception as e:
             self.logger.error(f"Failed to send ENTER: {e}")
+
+    # ---- macOS keystroke helpers --------------------------------------------
+
+    def _send_mac_keystroke(
+        self, key_code: int, label: str, flags: int = 0
+    ) -> None:
+        """Post a synthetic key-down + key-up pair via Quartz CGEvent.
+
+        ``key_code`` is an HIToolbox virtual key code (``0x09`` for V,
+        ``0x24`` for Return — see ``_MAC_KEYCODE_*`` above).  ``flags``
+        is an OR'd ``kCGEventFlagMask*`` value: critically, on macOS
+        the modifier mask is attached **to the key event itself**,
+        not to a separate flagsChanged event — apps look at the
+        ``flags`` of the keystroke they receive when deciding
+        whether the user pressed Cmd+V vs literal "v".  ``pynput``
+        and ``pyautogui`` both emulate the press-modifier-then-key
+        pattern the way a real keyboard does (modifier-down →
+        flagsChanged → key-down with implicit flag), but on
+        synthetic events macOS doesn't always carry the modifier
+        forward correctly and the target app sees a literal "v"
+        instead of the paste shortcut — visible to the user as
+        "auto-paste does nothing even though Accessibility is
+        granted".  Setting the flag directly on the key-down /
+        key-up events bypasses that translation entirely.
+
+        Failures are logged but never raised — the worker thread
+        that calls this has the text in clipboard already, so the
+        user can fall back to a manual ``Cmd+V`` if the synthetic
+        path is denied.
+        """
+        try:
+            from Quartz import (
+                CGEventCreateKeyboardEvent,
+                CGEventPost,
+                CGEventSetFlags,
+                kCGHIDEventTap,
+            )
+        except ImportError as exc:
+            self.logger.error(
+                "Failed to import Quartz for %s send: %s", label, exc,
+            )
+            return
+
+        try:
+            event_down = CGEventCreateKeyboardEvent(None, key_code, True)
+            event_up = CGEventCreateKeyboardEvent(None, key_code, False)
+            if flags:
+                CGEventSetFlags(event_down, flags)
+                CGEventSetFlags(event_up, flags)
+            CGEventPost(kCGHIDEventTap, event_down)
+            time.sleep(0.01)
+            CGEventPost(kCGHIDEventTap, event_up)
+            time.sleep(max(0.02, self.key_simulation_delay))
+        except Exception as exc:
+            self.logger.error("Failed to send %s via Quartz: %s", label, exc)
+
+    def _send_mac_keystroke_with_cmd(self, key_code: int, label: str) -> None:
+        """``_send_mac_keystroke`` with the Command modifier flag set."""
+        try:
+            from Quartz import kCGEventFlagMaskCommand
+        except ImportError as exc:
+            self.logger.error(
+                "Failed to import Quartz for %s send: %s", label, exc,
+            )
+            return
+        self._send_mac_keystroke(key_code, label, flags=kCGEventFlagMaskCommand)
