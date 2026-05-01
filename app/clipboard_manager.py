@@ -30,16 +30,77 @@ class ClipboardManager:
         self.auto_paste = auto_paste
         self.preserve_clipboard = preserve_clipboard
         self._test_clipboard_access()
+        self._check_mac_post_event_access()
         self._print_status()
     
     def _test_clipboard_access(self):
         try:
             pyperclip.paste()
             self.logger.info("Clipboard access test successful")
-            
+
         except Exception as e:
             self.logger.error(f"Clipboard access test failed: {e}")
             raise
+
+    def _check_mac_post_event_access(self) -> None:
+        """Probe whether macOS will let us post synthetic keystrokes.
+
+        macOS 14+ introduced a separate TCC gate for synthetic event
+        injection — an Accessibility-granted process is **not**
+        automatically allowed to call ``CGEventPost``.  The new
+        ``CGPreflightPostEventAccess()`` reports the live state, and
+        ``CGRequestPostEventAccess()`` triggers the system prompt
+        when access is missing.
+
+        On older macOS versions (or when the symbol isn't bound by
+        the installed pyobjc), the call short-circuits with a
+        debug-level log and we keep going — Accessibility was
+        sufficient there.
+
+        This is purely diagnostic on the calling side: a denied
+        access state explains why ``execute_auto_paste`` would log
+        "Auto-pasted via key simulation" but the focused app never
+        receives a paste — Quartz silently swallows the event when
+        the post-event grant is missing.
+        """
+        if sys.platform != "darwin":
+            return
+        try:
+            from Quartz import (
+                CGPreflightPostEventAccess,
+                CGRequestPostEventAccess,
+            )
+        except ImportError:
+            self.logger.debug(
+                "CGPreflight/RequestPostEventAccess unavailable in this "
+                "pyobjc — skipping post-event TCC probe (older macOS "
+                "doesn't gate this anyway)."
+            )
+            return
+
+        try:
+            if CGPreflightPostEventAccess():
+                self.logger.info(
+                    "macOS post-event access: granted — auto-paste "
+                    "synthetic keystrokes will be delivered."
+                )
+                return
+            self.logger.warning(
+                "macOS post-event access: NOT granted — auto-paste "
+                "Cmd+V will be silently dropped by Quartz.  Triggering "
+                "the system prompt now;  approve in System Settings → "
+                "Privacy & Security → Accessibility for Lazy to Text "
+                "to enable auto-paste.",
+            )
+            # Async: pops the system dialog without blocking init.
+            # Returns True if access is already granted (which the
+            # preflight above already negated, so log the result for
+            # diagnostics only).
+            CGRequestPostEventAccess()
+        except Exception as exc:
+            self.logger.debug(
+                "macOS post-event TCC probe failed (non-fatal): %s", exc,
+            )
     
     def _print_status(self):
         if sys.platform == "darwin":
@@ -297,22 +358,43 @@ class ClipboardManager:
     ) -> None:
         """Post a synthetic key-down + key-up pair via Quartz CGEvent.
 
-        ``key_code`` is an HIToolbox virtual key code (``0x09`` for V,
-        ``0x24`` for Return — see ``_MAC_KEYCODE_*`` above).  ``flags``
-        is an OR'd ``kCGEventFlagMask*`` value: critically, on macOS
-        the modifier mask is attached **to the key event itself**,
-        not to a separate flagsChanged event — apps look at the
-        ``flags`` of the keystroke they receive when deciding
-        whether the user pressed Cmd+V vs literal "v".  ``pynput``
-        and ``pyautogui`` both emulate the press-modifier-then-key
-        pattern the way a real keyboard does (modifier-down →
-        flagsChanged → key-down with implicit flag), but on
-        synthetic events macOS doesn't always carry the modifier
-        forward correctly and the target app sees a literal "v"
-        instead of the paste shortcut — visible to the user as
-        "auto-paste does nothing even though Accessibility is
-        granted".  Setting the flag directly on the key-down /
-        key-up events bypasses that translation entirely.
+        Three details that took experimentation to get right —
+        documented inline because every one of them is a silent-
+        failure mode that ``pynput`` and ``pyautogui`` also trip
+        on, and there is no exception or log to point at:
+
+        1. **Pass an explicit CGEventSource** built with
+           ``kCGEventSourceStateCombinedSessionState``.  Passing
+           ``None`` materialises a default event whose modifier
+           flags don't combine with the live HID state — most
+           apps see "v" without the Command bit set even though
+           we called ``CGEventSetFlags(ev, kCGEventFlagMaskCommand)``.
+           Telegram and Electron-based editors are the canonical
+           offenders: they look at the ``flags`` field of the V
+           event itself and reject the paste when the bit isn't
+           there.  With a combined-session source the OS carries
+           the modifier forward correctly.
+
+        2. **Post to ``kCGAnnotatedSessionEventTap``**, not
+           ``kCGHIDEventTap``.  HID is the window-server tap and
+           is meant for system-wide HID input;  the session tap
+           is what delivers events to the focused application.
+           On macOS 14+ posting Cmd+V to HID from a non-foreground
+           app frequently lands in the void.
+
+        3. **Set the modifier flag directly on the V key event,
+           not via a separate flagsChanged event.**  Real
+           keyboards work that way (the OS aggregates modifier
+           state across events), but synthetic CGEvents don't
+           carry a separate flagsChanged forward reliably — the
+           app sees the V event with empty flags.  Stamping the
+           flag on the down + up events themselves is what every
+           working PyObjC paste-recipe does.
+
+        ``key_code`` is an HIToolbox virtual key code (``0x09``
+        for V, ``0x24`` for Return — see ``_MAC_KEYCODE_*`` above).
+        ``flags`` is an OR'd ``kCGEventFlagMask*`` value;  pass 0
+        for an unmodified keystroke.
 
         Failures are logged but never raised — the worker thread
         that calls this has the text in clipboard already, so the
@@ -324,7 +406,9 @@ class ClipboardManager:
                 CGEventCreateKeyboardEvent,
                 CGEventPost,
                 CGEventSetFlags,
-                kCGHIDEventTap,
+                CGEventSourceCreate,
+                kCGAnnotatedSessionEventTap,
+                kCGEventSourceStateCombinedSessionState,
             )
         except ImportError as exc:
             self.logger.error(
@@ -333,14 +417,17 @@ class ClipboardManager:
             return
 
         try:
-            event_down = CGEventCreateKeyboardEvent(None, key_code, True)
-            event_up = CGEventCreateKeyboardEvent(None, key_code, False)
+            source = CGEventSourceCreate(
+                kCGEventSourceStateCombinedSessionState
+            )
+            event_down = CGEventCreateKeyboardEvent(source, key_code, True)
+            event_up = CGEventCreateKeyboardEvent(source, key_code, False)
             if flags:
                 CGEventSetFlags(event_down, flags)
                 CGEventSetFlags(event_up, flags)
-            CGEventPost(kCGHIDEventTap, event_down)
-            time.sleep(0.01)
-            CGEventPost(kCGHIDEventTap, event_up)
+            CGEventPost(kCGAnnotatedSessionEventTap, event_down)
+            time.sleep(0.02)
+            CGEventPost(kCGAnnotatedSessionEventTap, event_up)
             time.sleep(max(0.02, self.key_simulation_delay))
         except Exception as exc:
             self.logger.error("Failed to send %s via Quartz: %s", label, exc)
