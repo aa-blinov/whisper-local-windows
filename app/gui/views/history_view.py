@@ -326,6 +326,12 @@ class HistoryView(QWidget):
         # Double-click on any row opens the full-text detail dialog.
         self._table.doubleClicked.connect(self._on_row_double_clicked)
 
+    def set_export_busy(self, busy: bool) -> None:
+        """Disable the Export button while a background export is running."""
+        is_busy = bool(busy)
+        self._export_btn.setEnabled(not is_busy)
+        self._export_btn.setText("Exporting…" if is_busy else "Export")
+
     # ---- public API ---------------------------------------------------------
 
     def set_entries(self, entries: Sequence[Any]) -> None:

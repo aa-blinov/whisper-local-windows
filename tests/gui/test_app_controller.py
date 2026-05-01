@@ -1,5 +1,7 @@
 """Tests for the AppController wiring Models view to config storage."""
 
+import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
@@ -403,6 +405,8 @@ class FakeHistory:
         self.cleared = False
         self.exported_to: list[str] = []
         self.export_returns: bool = True
+        self.export_wait: Optional[threading.Event] = None
+        self.export_started = threading.Event()
 
     def get_entries(self):
         return list(self._entries)
@@ -413,6 +417,9 @@ class FakeHistory:
 
     def export_to_text(self, filepath: str) -> bool:
         self.exported_to.append(filepath)
+        self.export_started.set()
+        if self.export_wait is not None:
+            self.export_wait.wait(5)
         return self.export_returns
 
 
@@ -487,8 +494,8 @@ def test_controller_deletes_cached_model_after_confirm(qtbot, monkeypatch):
     AppController(config=config, window=window)
     window.models_view.model_delete_requested.emit("vosk-ru-small")
 
-    assert deleted == ["vosk-ru-small"]
-    assert refreshed["called"] is True
+    qtbot.waitUntil(lambda: deleted == ["vosk-ru-small"], timeout=2000)
+    qtbot.waitUntil(lambda: refreshed["called"] is True, timeout=2000)
 
 
 def test_controller_does_not_delete_when_user_cancels(qtbot, monkeypatch):
@@ -515,6 +522,45 @@ def test_controller_does_not_delete_when_user_cancels(qtbot, monkeypatch):
     window.models_view.model_delete_requested.emit("vosk-ru-small")
 
     assert deleted == []
+
+
+def test_controller_delete_runs_in_background(qtbot, monkeypatch):
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+
+    monkeypatch.setattr(controller_module, "confirm", lambda *a, **kw: True)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_delete(_info):
+        started.set()
+        release.wait(5)
+        return True
+
+    monkeypatch.setattr(controller_module, "delete_cached_for_info", slow_delete)
+
+    controller = AppController(config=config, window=window)
+
+    t0 = time.monotonic()
+    window.models_view.model_delete_requested.emit("vosk-ru-small")
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 0.5
+    qtbot.waitUntil(lambda: started.is_set(), timeout=2000)
+    assert controller._model_delete_in_progress == {"vosk-ru-small"}
+    assert window.models_view._cards["vosk-ru-small"]._delete_btn.text() == "Deleting…"
+
+    release.set()
+    qtbot.waitUntil(
+        lambda: controller._model_delete_in_progress == set(),
+        timeout=2000,
+    )
 
 
 def test_controller_delete_dialog_warns_about_shared_canonical(qtbot, monkeypatch):
@@ -647,7 +693,10 @@ def test_controller_storage_change_writes_config_and_updates_env(
     AppController(config=config, window=window)
     window.shortcuts_view.storage_path_change_requested.emit()
 
-    assert config._data.get("storage", {}).get("models_dir") == chosen
+    qtbot.waitUntil(
+        lambda: config._data.get("storage", {}).get("models_dir") == chosen,
+        timeout=3000,
+    )
     # ``HF_HOME`` updated live so the next ``onnx_asr.load_model``
     # download routes through huggingface_hub into the new root.
     assert os.environ.get("HF_HOME") == chosen
@@ -752,9 +801,12 @@ def test_controller_storage_change_offers_migration_when_old_has_weights(
 
     # Hub moved, gigaam absent so its move was a no-op (still
     # called — controller decides per-subdir).
-    assert any("hub" in src for src, _ in moves)
+    qtbot.waitUntil(lambda: any("hub" in src for src, _ in moves), timeout=3000)
     # Files actually moved on disk.
-    assert (new_root / "hub" / "model.bin").exists()
+    qtbot.waitUntil(
+        lambda: (new_root / "hub" / "model.bin").exists(),
+        timeout=3000,
+    )
     # New path written to config.
     assert config._data["storage"]["models_dir"] == str(new_root)
 
@@ -806,7 +858,10 @@ def test_controller_storage_change_no_prompt_when_old_root_is_empty(
     # No migration prompt fired — old root was empty.
     assert question_calls == []
     # Path still written.
-    assert config._data["storage"]["models_dir"] == str(new_root)
+    qtbot.waitUntil(
+        lambda: config._data["storage"]["models_dir"] == str(new_root),
+        timeout=3000,
+    )
 
 
 def test_controller_storage_change_no_on_migration_writes_config_only(
@@ -844,8 +899,8 @@ def test_controller_storage_change_no_on_migration_writes_config_only(
         lambda *a, **kw: str(new_root),
     )
     monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda *a, **kw: QMessageBox.No,
+        "app.gui.controllers._storage_mixin.confirm_three_way",
+        lambda *a, **kw: "no",
     )
 
     moves: list = []
@@ -859,7 +914,10 @@ def test_controller_storage_change_no_on_migration_writes_config_only(
 
     assert moves == []
     assert (old_root / "hub" / "model.bin").exists()
-    assert config._data["storage"]["models_dir"] == str(new_root)
+    qtbot.waitUntil(
+        lambda: config._data["storage"]["models_dir"] == str(new_root),
+        timeout=3000,
+    )
 
 
 def test_controller_storage_change_cancel_on_migration_aborts(
@@ -901,10 +959,14 @@ def test_controller_storage_change_cancel_on_migration_aborts(
         lambda *a, **kw: "cancel",
     )
 
-    AppController(config=config, window=window)
+    controller = AppController(config=config, window=window)
     window.shortcuts_view.storage_path_change_requested.emit()
 
     # Nothing changed — user can re-pick.
+    qtbot.waitUntil(
+        lambda: controller._storage_change_in_progress is False,
+        timeout=3000,
+    )
     assert config._data["storage"]["models_dir"] == "C:/initial"
 
 
@@ -943,9 +1005,59 @@ def test_controller_storage_change_refreshes_model_card_cache_state(
     AppController(config=config, window=window)
     window.shortcuts_view.storage_path_change_requested.emit()
 
+    qtbot.waitUntil(lambda: bool(refresh_calls), timeout=3000)
     assert refresh_calls, (
         "refresh_cache_state must be called so model cards update "
         "Download→Select without requiring a restart"
+    )
+
+
+def test_controller_storage_change_does_not_block_on_slow_probe(
+    qtbot, monkeypatch,
+):
+    from PySide6.QtWidgets import QFileDialog
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setenv("HF_HOME", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default"
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: "D:/lazy-models",
+    )
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_size(_root):
+        started.set()
+        release.wait(5)
+        return 0
+
+    monkeypatch.setattr(controller_module, "cached_models_size", slow_size)
+
+    AppController(config=config, window=window)
+
+    t0 = time.monotonic()
+    window.shortcuts_view.storage_path_change_requested.emit()
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 0.5
+    qtbot.waitUntil(lambda: started.is_set(), timeout=2000)
+    assert not window.shortcuts_view._change_storage_btn.isEnabled()
+
+    release.set()
+    qtbot.waitUntil(
+        lambda: config._data["storage"]["models_dir"] == "D:/lazy-models",
+        timeout=3000,
     )
 
 
@@ -1331,7 +1443,7 @@ def test_controller_export_writes_through_manager(qtbot, monkeypatch):
     AppController(config=config, window=window, history=history)
     window.history_view.export_requested.emit()
 
-    assert history.exported_to == [chosen_path]
+    qtbot.waitUntil(lambda: history.exported_to == [chosen_path], timeout=2000)
 
 
 def test_controller_export_cancelled_does_not_call_manager(qtbot, monkeypatch):
@@ -1353,6 +1465,39 @@ def test_controller_export_cancelled_does_not_call_manager(qtbot, monkeypatch):
     window.history_view.export_requested.emit()
 
     assert history.exported_to == []
+
+
+def test_controller_export_does_not_block_on_slow_manager(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([FakeHistoryEntry("hi")])
+    history.export_wait = threading.Event()
+
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName",
+        lambda *a, **kw: ("C:/tmp/history-export.txt", "Text files (*.txt)"),
+    )
+
+    AppController(config=config, window=window, history=history)
+
+    t0 = time.monotonic()
+    window.history_view.export_requested.emit()
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 0.5
+    assert window.history_view._export_btn.text() == "Exporting…"
+    qtbot.waitUntil(lambda: history.export_started.is_set(), timeout=2000)
+
+    history.export_wait.set()
+    qtbot.waitUntil(
+        lambda: window.history_view._export_btn.text() == "Export",
+        timeout=2000,
+    )
 
 
 def test_controller_export_with_empty_history_skips_dialog(qtbot, monkeypatch):
@@ -2212,5 +2357,50 @@ def test_controller_pushes_inference_settings_to_live_backend_on_change(qtbot):
     new = InferenceSettings(language="ru", vad_filter=False, beam_size=4)
     window.models_view.inference_settings_changed.emit("whisper-large-v3", new)
 
+    qtbot.waitUntil(lambda: bool(backend.received), timeout=2000)
     # Most recent push must match what we emitted.
     assert backend.received[-1] == new
+
+
+def test_controller_inference_push_does_not_block_model_selection(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    class _SlowBackend:
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.received: list[object] = []
+
+        def update_inference_settings(self, settings) -> None:
+            self.started.set()
+            self.release.wait(5)
+            self.received.append(settings)
+
+    backend = _SlowBackend()
+
+    class _StateManager:
+        def __init__(self) -> None:
+            self.backend = backend
+            self.audio_recorder = None
+            self.clipboard_manager = None
+
+    rec = FakeRecordingController(state_manager=_StateManager())
+    rec.state_manager = _StateManager()
+    rec.state_manager.backend = backend
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})
+
+    AppController(config=config, window=window, recording=rec)
+
+    t0 = time.monotonic()
+    window.models_view.model_selected.emit("whisper-large-v3")
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 0.5
+    qtbot.waitUntil(lambda: backend.started.is_set(), timeout=2000)
+
+    backend.release.set()
+    qtbot.waitUntil(lambda: bool(backend.received), timeout=2000)

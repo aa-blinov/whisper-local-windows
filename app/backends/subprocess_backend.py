@@ -80,6 +80,8 @@ class SubprocessBackend:
     """
 
     def __init__(self, **kwargs: Any) -> None:
+        from app.model_mapping import canonical_for
+
         # Use an explicit ``spawn`` context rather than the global
         # default.  Two reasons:
         #
@@ -138,6 +140,12 @@ class SubprocessBackend:
             Callable[[int, int, str], None]
         ] = None
         self._shutdown = False
+        # Fast local cache for "which model is currently configured?".
+        # The worker knows the same value, but answering it via IPC from the
+        # Qt thread (model-card clicks) can stall if the child is still
+        # initialising. Keep the configured canonical in-process instead.
+        self._current_model_cache = canonical_for(str(kwargs.get("model", "")))
+        self._current_model_cache_lock = threading.Lock()
 
         # Status cache populated by ``status_change`` push messages
         # from the worker.  Removes the need for the parent to
@@ -324,7 +332,8 @@ class SubprocessBackend:
             return self._provider_cache
 
     def current_model(self) -> str:
-        return self._send_cmd(("current_model",), timeout=_FAST_TIMEOUT)
+        with self._current_model_cache_lock:
+            return self._current_model_cache
 
     def current_language(self) -> Optional[str]:
         return self._send_cmd(
@@ -343,6 +352,10 @@ class SubprocessBackend:
         compute_type: Optional[str] = None,
     ) -> None:
         # Same rationale as ``load`` — fast handshake only.
+        from app.model_mapping import canonical_for
+
+        with self._current_model_cache_lock:
+            self._current_model_cache = canonical_for(model)
         self._send_cmd(
             ("change_model", model, compute_type),
             timeout=_FAST_TIMEOUT,
@@ -393,10 +406,13 @@ class SubprocessBackend:
             return
         self._shutdown = True
         # Politely ask the worker to drop the inner backend and exit
-        # its receive loop, then wait briefly.  Fall back to terminate
-        # if it doesn't quit on its own (stuck in C++ destructor).
+        # its receive loop, then wait briefly.  Don't block on an IPC
+        # response here: app shutdown has nothing useful to do with the
+        # ack, and waiting for it can stall the caller for the full
+        # command timeout if the child is already half-dead.
         try:
-            self._send_cmd(("shutdown_worker",), timeout=_FAST_TIMEOUT)
+            with self._send_lock:
+                self._parent_conn.send(("shutdown_worker",))
         except Exception as exc:  # pragma: no cover — pipe may be dead
             log.debug("shutdown_worker send failed: %s", exc)
         try:

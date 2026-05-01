@@ -186,6 +186,11 @@ class ModelsView(QWidget):
         for card in self._cards.values():
             card.set_loading(loading)
 
+    def set_delete_busy(self, alias: str, busy: bool) -> None:
+        card = self._cards.get(alias)
+        if card is not None:
+            card.set_delete_busy(busy)
+
     def set_loading_progress(self, current: int, total: int) -> None:
         """Forward backend download progress to the active card only.
 

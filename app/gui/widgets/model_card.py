@@ -140,6 +140,7 @@ class ModelCard(QFrame):
         self._active = False
         self._locked = False
         self._loading = False
+        self._delete_busy = False
         # Pill-text inputs — both reset on every loading transition.
         # ``_loading_progress_text`` wins when present (download %),
         # ``_loading_elapsed_s`` is the fallback for cached loads.
@@ -449,10 +450,21 @@ class ModelCard(QFrame):
         Delete is shown only when (a) weights are on disk, (b) the card
         isn't currently the active model, and (c) we aren't mid-load.
         """
+        if self._delete_busy:
+            self._delete_btn.setVisible(True)
+            self._delete_btn.setEnabled(False)
+            self._delete_btn.setText("Deleting…")
+            return
         cached = self._cached or False  # None → unknown → treat as not cached
+        self._delete_btn.setText("Delete")
+        self._delete_btn.setEnabled(not self._locked)
         self._delete_btn.setVisible(
             cached and not self._active and not self._loading
         )
+
+    def set_delete_busy(self, busy: bool) -> None:
+        self._delete_busy = bool(busy)
+        self._refresh_delete_visibility()
 
     def set_loading(self, loading: bool) -> None:
         """Reflect backend load state on the active pill — swap 'Active' for

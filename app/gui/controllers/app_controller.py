@@ -12,7 +12,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
-from app.gui.widgets.dialogs import confirm
+from app.gui.widgets.dialogs import confirm, notify
 
 # QApplication is imported above for the clipboard helper; reuse it for
 # explicit ``quit()`` calls from tray actions.
@@ -112,6 +112,10 @@ class AppController(
     _mic_test_completed = Signal(float, float)
     _mic_test_failed = Signal(str)
     _storage_size_ready = Signal(str)
+    _history_export_finished = Signal(object)
+    _model_delete_finished = Signal(object)
+    _storage_probe_finished = Signal(object)
+    _storage_move_finished = Signal(object)
 
     def __init__(
         self,
@@ -193,6 +197,16 @@ class AppController(
         # download instead of a climbing percentage. Reset once the
         # load settles (state goes idle).
         self._loading_expected_bytes: int = 0
+        self._history_export_in_progress = False
+        self._storage_change_in_progress = False
+        self._model_delete_in_progress: set[str] = set()
+        self._pending_inference_settings = None
+        self._backend_settings_push_thread: Optional[threading.Thread] = None
+        self._backend_settings_push_lock = threading.Lock()
+        self._history_export_finished.connect(self._on_history_export_finished)
+        self._model_delete_finished.connect(self._on_model_delete_finished)
+        self._storage_probe_finished.connect(self._on_storage_probe_finished)
+        self._storage_move_finished.connect(self._on_storage_move_finished)
         self._wire_models()
         self._wire_shortcuts()
         self._wire_history()
@@ -386,13 +400,64 @@ class AppController(
         ):
             return
 
-        if delete_cached_for_info(info):
-            log.info("Deleted cached weights for %s (%s)", alias, info.canonical)
+        if alias in self._model_delete_in_progress:
+            return
+        self._model_delete_in_progress.add(alias)
+        self._window.models_view.set_delete_busy(alias, True)
+
+        def worker() -> None:
+            try:
+                deleted = bool(delete_cached_for_info(info))
+            except Exception as exc:  # pragma: no cover — defensive
+                payload = {
+                    "alias": alias,
+                    "deleted": False,
+                    "error": str(exc),
+                    "display_name": info.display_name,
+                }
+            else:
+                payload = {
+                    "alias": alias,
+                    "deleted": deleted,
+                    "error": "",
+                    "display_name": info.display_name,
+                }
+            try:
+                self._model_delete_finished.emit(payload)
+            except RuntimeError:
+                pass
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name=f"delete-model:{alias}",
+        ).start()
+
+    def _on_model_delete_finished(self, payload: dict) -> None:
+        alias = str(payload.get("alias", ""))
+        deleted = bool(payload.get("deleted"))
+        error = str(payload.get("error", "") or "")
+        display_name = str(payload.get("display_name", alias) or alias)
+        self._model_delete_in_progress.discard(alias)
+        if alias:
+            self._window.models_view.set_delete_busy(alias, False)
+        if deleted:
+            log.info("Deleted cached weights for %s", alias)
         else:
             log.warning(
                 "Delete returned False for %s — see earlier log for the "
                 "filesystem error, or the cache was already empty",
                 alias,
+            )
+            notify(
+                self._window,
+                "Delete failed",
+                (
+                    f"Could not delete the cached weights for "
+                    f"{display_name}."
+                ),
+                informative=error or None,
+                kind="warning",
             )
         self._window.models_view.refresh_cache_state()
         # Recompute the Storage card size — the just-deleted weights
@@ -498,20 +563,30 @@ class AppController(
         listener = self._resolve_hotkey_listener()
         if listener is not None:
             try:
-                listener.change_hotkey_config("mode", new_mode)
-                listener.change_hotkey_config(
-                    "push_to_talk_key", new_ptt_key,
-                )
-                listener.change_hotkey_config(
-                    "start_recording_hotkey", payload["start_hotkey"],
-                )
-                listener.change_hotkey_config(
-                    "stop_recording_hotkey", payload["stop_hotkey"],
-                )
-                listener.change_hotkey_config(
-                    "cancel_combination",
-                    payload.get("cancel_hotkey") or None,
-                )
+                batch = getattr(listener, "change_hotkey_configs", None)
+                if callable(batch):
+                    batch({
+                        "mode": new_mode,
+                        "push_to_talk_key": new_ptt_key,
+                        "start_recording_hotkey": payload["start_hotkey"],
+                        "stop_recording_hotkey": payload["stop_hotkey"],
+                        "cancel_combination": payload.get("cancel_hotkey") or None,
+                    })
+                else:
+                    listener.change_hotkey_config("mode", new_mode)
+                    listener.change_hotkey_config(
+                        "push_to_talk_key", new_ptt_key,
+                    )
+                    listener.change_hotkey_config(
+                        "start_recording_hotkey", payload["start_hotkey"],
+                    )
+                    listener.change_hotkey_config(
+                        "stop_recording_hotkey", payload["stop_hotkey"],
+                    )
+                    listener.change_hotkey_config(
+                        "cancel_combination",
+                        payload.get("cancel_hotkey") or None,
+                    )
             except Exception as exc:
                 log.warning("Failed to push hotkey changes live: %s", exc)
         if "device" in payload:
@@ -654,15 +729,38 @@ class AppController(
     def _push_inference_to_backend(self, settings) -> None:
         if self._recording is None:
             return
-        sm = getattr(self._recording, "state_manager", None)
-        backend = getattr(sm, "backend", None) if sm is not None else None
-        target = getattr(backend, "update_inference_settings", None)
-        if target is None:
-            return
-        try:
-            target(settings)
-        except Exception as exc:  # pragma: no cover — defensive
-            log.warning("Live inference-settings push raised: %s", exc)
+        with self._backend_settings_push_lock:
+            self._pending_inference_settings = settings
+            thread = self._backend_settings_push_thread
+            if thread is not None and thread.is_alive():
+                return
+            thread = threading.Thread(
+                target=self._drain_inference_pushes,
+                daemon=True,
+                name="push-inference-settings",
+            )
+            self._backend_settings_push_thread = thread
+        thread.start()
+
+    def _drain_inference_pushes(self) -> None:
+        while True:
+            with self._backend_settings_push_lock:
+                settings = self._pending_inference_settings
+                if settings is None:
+                    self._backend_settings_push_thread = None
+                    return
+                self._pending_inference_settings = None
+            sm = getattr(self._recording, "state_manager", None)
+            backend = getattr(sm, "backend", None) if sm is not None else None
+            target = getattr(backend, "update_inference_settings", None)
+            if target is None:
+                with self._backend_settings_push_lock:
+                    self._backend_settings_push_thread = None
+                return
+            try:
+                target(settings)
+            except Exception as exc:  # pragma: no cover — defensive
+                log.warning("Live inference-settings push raised: %s", exc)
 
     def _on_inference_settings_changed(self, alias: str, settings) -> None:
         # Persist for next launch.
@@ -1028,4 +1126,3 @@ class AppController(
             target(provider)
         except Exception:  # pragma: no cover — defensive
             pass
-

@@ -510,9 +510,9 @@ def test_subprocess_backend_error_response_raises(patched_subprocess):
     RuntimeError on the calling thread — otherwise the parent is
     silently broken.
 
-    Uses ``current_model()`` rather than ``status()`` because
-    ``status()`` is now served from the local cache (no IPC) and
-    can't surface a worker-side error.
+    Uses ``current_language()`` rather than ``status()`` because
+    ``status()`` and ``current_model()`` are now served from local
+    caches (no IPC) and can't surface a worker-side error.
     """
     from app.backends.subprocess_backend import SubprocessBackend
 
@@ -521,7 +521,7 @@ def test_subprocess_backend_error_response_raises(patched_subprocess):
 
     conn.push(("error", "RuntimeError: boom"))
     with pytest.raises(RuntimeError, match="boom"):
-        backend.current_model()
+        backend.current_language()
 
 
 def test_subprocess_backend_change_model_sync(patched_subprocess):

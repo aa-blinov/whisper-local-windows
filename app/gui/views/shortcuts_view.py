@@ -102,6 +102,8 @@ class ShortcutsView(QWidget):
         # Suppresses save_requested emission while we are populating fields
         # programmatically (e.g. controller prefilling from config).
         self._suspend_emit = False
+        self._storage_is_default = True
+        self._storage_busy = False
 
         # Snapshot of the user's Stop hotkey taken just before we
         # mirror the Start value over it on toggle-mode entry, so
@@ -764,12 +766,15 @@ class ShortcutsView(QWidget):
         disables the Reset button (no point resetting when we're
         already on the default).
         """
+        self._storage_is_default = bool(is_default)
         if is_default:
             self._storage_path_label.setText(f"{path}  (default)")
-            self._reset_storage_btn.setEnabled(False)
+            if not self._storage_busy:
+                self._reset_storage_btn.setEnabled(False)
         else:
             self._storage_path_label.setText(path)
-            self._reset_storage_btn.setEnabled(True)
+            if not self._storage_busy:
+                self._reset_storage_btn.setEnabled(True)
 
     def set_storage_size(self, text: str) -> None:
         """Render the human-readable used-space string in the Storage card.
@@ -779,6 +784,20 @@ class ShortcutsView(QWidget):
         ``""`` blanks the label (used while the worker is computing).
         """
         self._storage_size_label.setText(text or "…")
+
+    def set_storage_busy(
+        self, busy: bool, status_text: Optional[str] = None
+    ) -> None:
+        """Temporarily disable the Storage card actions while a long-running
+        filesystem operation is in progress."""
+        self._storage_busy = bool(busy)
+        self._change_storage_btn.setEnabled(not self._storage_busy)
+        self._open_storage_btn.setEnabled(not self._storage_busy)
+        self._reset_storage_btn.setEnabled(
+            (not self._storage_busy) and (not self._storage_is_default)
+        )
+        if status_text is not None:
+            self.set_storage_size(status_text)
 
     def values(self) -> Dict[str, Any]:
         return {

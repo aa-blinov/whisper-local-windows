@@ -30,11 +30,12 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QRunnable, QThreadPool
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PySide6.QtCore import QRunnable, QThreadPool
+from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from app.gui.widgets.dialogs import confirm_three_way, notify
 
@@ -149,6 +150,15 @@ class StorageMixin:
     def _on_storage_size_ready(self, text: str) -> None:
         self._window.shortcuts_view.set_storage_size(text)
 
+    def _set_storage_busy(
+        self, busy: bool, status_text: str | None = None
+    ) -> None:
+        self._storage_change_in_progress = bool(busy)
+        self._window.shortcuts_view.set_storage_busy(
+            self._storage_change_in_progress,
+            status_text=status_text,
+        )
+
     # ---- user actions ------------------------------------------------------
 
     def _on_storage_open(self) -> None:
@@ -190,17 +200,18 @@ class StorageMixin:
         Flow:
           1. Open the folder picker; bail on Cancel.
           2. If the pick equals the current root → no-op.
-          3. Sum cached weights at the old root. If non-zero, ask
-             Yes/No/Cancel about migrating them. Cancel here aborts
-             the whole change so the user can re-pick without leaving
-             config in a half-applied state.
-          4. On Yes — block UI with a wait cursor and call
-             ``move_cached_dir`` for the ``hub/`` subtree (single-
+          3. Sum cached weights at the old root on a worker thread.
+             If non-zero, ask Yes/No/Cancel about migrating them.
+             Cancel here aborts the whole change so the user can
+             re-pick without leaving config in a half-applied state.
+          4. On Yes — move ``hub/`` on a worker thread too (single-
              engine app — only one subdirectory exists today).
           5. Write the new path to config and pop a single info
              dialog summarising what moved + the live-vs-restart
              nuance.
         """
+        if getattr(self, "_storage_change_in_progress", False):
+            return
         configured = self._config.get_setting("storage", "models_dir") or ""
         old_root = _ctrl_module().get_models_root(configured)
         start_dir = configured or str(Path(old_root).parent)
@@ -218,10 +229,40 @@ class StorageMixin:
             same = chosen == old_root
         if same:
             return  # Picked the same folder — nothing to do.
+        ctx = {
+            "chosen": chosen,
+            "old_root": old_root,
+            "old_size": 0,
+            "move_outcomes": [],
+        }
+        self._set_storage_busy(True, "checking existing models…")
+        self._start_storage_probe(ctx)
 
-        old_size = _ctrl_module().cached_models_size(old_root)
-        move_outcomes: list[tuple[str, dict]] = []
+    def _start_storage_probe(self, ctx: dict) -> None:
+        old_root = str(ctx.get("old_root", ""))
 
+        def worker() -> None:
+            try:
+                old_size = _ctrl_module().cached_models_size(old_root)
+            except Exception:  # pragma: no cover — defensive
+                old_size = 0
+            payload = dict(ctx)
+            payload["old_size"] = int(old_size)
+            try:
+                self._storage_probe_finished.emit(payload)
+            except RuntimeError:
+                pass
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="probe-storage-cache",
+        ).start()
+
+    def _on_storage_probe_finished(self, ctx: dict) -> None:
+        old_root = str(ctx.get("old_root", ""))
+        chosen = str(ctx.get("chosen", ""))
+        old_size = int(ctx.get("old_size", 0))
         if old_size > 0:
             answer = confirm_three_way(
                 self._window,
@@ -241,27 +282,52 @@ class StorageMixin:
                 no_label="Leave",
             )
             if answer == "cancel":
-                return  # Bail without writing config.
+                self._set_storage_busy(False)
+                self._refresh_storage_size()
+                return
             if answer == "yes":
-                QApplication.setOverrideCursor(Qt.WaitCursor)
-                try:
-                    # Single-engine app — only the HF hub subtree
-                    # exists.  The legacy ``gigaam`` subtree (used by
-                    # the old gigaam-Python backend) was retired with
-                    # the ONNX-only refactor.
-                    result = _ctrl_module().move_cached_dir(
-                        str(Path(old_root) / "hub"),
-                        str(Path(chosen) / "hub"),
-                    )
-                    move_outcomes.append(("hub", result))
-                finally:
-                    QApplication.restoreOverrideCursor()
+                self._set_storage_busy(True, "moving cached models…")
+                self._start_storage_move(ctx)
+                return
+        self._apply_storage_change(ctx)
+
+    def _start_storage_move(self, ctx: dict) -> None:
+        old_root = str(ctx.get("old_root", ""))
+        chosen = str(ctx.get("chosen", ""))
+
+        def worker() -> None:
+            result = _ctrl_module().move_cached_dir(
+                str(Path(old_root) / "hub"),
+                str(Path(chosen) / "hub"),
+            )
+            payload = dict(ctx)
+            payload["move_outcomes"] = [("hub", result)]
+            try:
+                self._storage_move_finished.emit(payload)
+            except RuntimeError:
+                pass
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="move-storage-cache",
+        ).start()
+
+    def _on_storage_move_finished(self, ctx: dict) -> None:
+        self._apply_storage_change(ctx)
+
+    def _apply_storage_change(self, ctx: dict) -> None:
+        chosen = str(ctx.get("chosen", ""))
+        old_root = str(ctx.get("old_root", ""))
+        old_size = int(ctx.get("old_size", 0))
+        move_outcomes = list(ctx.get("move_outcomes", []))
 
         self._config.update_user_setting("storage", "models_dir", chosen)
         # Mirror into the live process env — both backends read these
         # at every load, so the change takes effect on the very next
         # ``Download`` click without a restart.
         _apply_env_for_models_root(chosen)
+        self._set_storage_busy(False)
         self._refresh_storage_path()
         self._refresh_storage_size()
         # Refresh every model card's cache state so the Download ↔ Select
@@ -306,6 +372,8 @@ class StorageMixin:
     def _on_storage_reset(self) -> None:
         """Reset Storage to default and mirror that into the live
         env so subsequent loads/downloads use the default path."""
+        if getattr(self, "_storage_change_in_progress", False):
+            return
         self._config.update_user_setting("storage", "models_dir", "")
         resolved = _apply_env_for_models_root("")
         self._refresh_storage_path()

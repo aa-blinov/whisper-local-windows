@@ -652,6 +652,9 @@ class HotkeyListener:
         return '+'.join(parts)
     
     def change_hotkey_config(self, setting: str, value):
+        self.change_hotkey_configs({setting: value})
+
+    def change_hotkey_configs(self, updates: dict[str, object]) -> None:
         valid_settings = [
             'start_recording_hotkey',
             'stop_recording_hotkey',
@@ -660,21 +663,34 @@ class HotkeyListener:
             'push_to_talk_key',
             'push_to_talk_min_hold_seconds',
         ]
-        if setting not in valid_settings:
-            raise ValueError(f"Invalid setting '{setting}'. Valid options: {valid_settings}")
-        old_value = getattr(self, setting)
-        if setting == "push_to_talk_key" and isinstance(value, str):
-            value = value.strip().lower() or None
-        if setting == "push_to_talk_min_hold_seconds":
-            value = float(value)
-        if setting == "mode" and value not in {"two_keys", "toggle", "push_to_talk"}:
-            raise ValueError(
-                f"mode must be one of two_keys / toggle / push_to_talk, got {value!r}"
-            )
-        if old_value == value:
+        normalized: dict[str, object] = {}
+        for setting, raw_value in updates.items():
+            if setting not in valid_settings:
+                raise ValueError(
+                    f"Invalid setting '{setting}'. Valid options: {valid_settings}"
+                )
+            value = raw_value
+            if setting == "push_to_talk_key" and isinstance(value, str):
+                value = value.strip().lower() or None
+            if setting == "push_to_talk_min_hold_seconds":
+                value = float(value)
+            if setting == "mode" and value not in {"two_keys", "toggle", "push_to_talk"}:
+                raise ValueError(
+                    f"mode must be one of two_keys / toggle / push_to_talk, got {value!r}"
+                )
+            normalized[setting] = value
+
+        changed = []
+        for setting, value in normalized.items():
+            old_value = getattr(self, setting)
+            if old_value == value:
+                continue
+            setattr(self, setting, value)
+            changed.append((setting, old_value, value))
+        if not changed:
             return
-        setattr(self, setting, value)
-        self.logger.info(f"Changed {setting}: {old_value} -> {value}")
+        for setting, old_value, value in changed:
+            self.logger.info(f"Changed {setting}: {old_value} -> {value}")
         self.stop_listening()
         self._setup_hotkeys()
         self.start_listening()
