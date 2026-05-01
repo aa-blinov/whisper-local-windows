@@ -10,10 +10,11 @@ This file is your project quickstart — keep it skim-able.
 uv sync                          # bootstrap venv from uv.lock
 uv run lazy-to-text-ui           # launch the app in dev mode
 
-# macOS-only: rebuild the .app bundle (alias mode = 5–10 s,
-# source edits picked up on next launch with no rebuild)
-./scripts/build-macos.sh
-./scripts/build-macos.sh --release   # full self-contained bundle, 5–10 min
+# Portable bundle — wrapper picks the right tool per OS:
+./scripts/build-macos.sh         # py2app alias .app, 5–10 s (Mac)
+./scripts/build-macos.sh --release   # py2app full .app, 5–10 min (Mac)
+.\scripts\build-windows.ps1      # PyInstaller folder bundle (Win)
+.\scripts\build-windows.ps1 -OneFile  # PyInstaller single .exe (Win)
 
 # Tests — always with offscreen Qt platform plugin so Cocoa /
 # WinAPI never opens a real window in CI
@@ -27,18 +28,18 @@ tests are mostly engine-specific paths that need a real model.
 
 ## Where things live
 
-| Data | Dev (`uv run`) | macOS `.app` (frozen) | Windows |
+| Data | Dev (`uv run`) | macOS `.app` (frozen) | Windows portable (frozen) |
 | --- | --- | --- | --- |
-| `config.yaml` | `<project>/config.yaml` | `~/Library/Application Support/LazyToText/` | `<project>/config.yaml` *(no Win bundle yet)* |
-| `app.log` + history | `<project>/logs/` | `~/Library/Logs/LazyToText/` | `<project>/logs/` |
-| Model weights (HF hub) | `<project>/models/hub/` | `~/Library/Caches/LazyToText/models/hub/` | `<project>/models/hub/` |
-| Single-instance lock | system temp | `~/Library/Caches/LazyToText/LazyToTextQt.lock` | named mutex |
+| `config.yaml` | `<project>/config.yaml` | `~/Library/Application Support/LazyToText/` | `%APPDATA%\LazyToText\` |
+| `app.log` + history | `<project>/logs/` | `~/Library/Logs/LazyToText/` | `%LOCALAPPDATA%\LazyToText\Log\` |
+| Model weights (HF hub) | `<project>/models/hub/` | `~/Library/Caches/LazyToText/models/hub/` | `%LOCALAPPDATA%\LazyToText\Cache\models\hub\` |
+| Single-instance lock | filelock under cache | `~/Library/Caches/LazyToText/LazyToTextQt.lock` | named mutex |
 
 `platformdirs.user_{config,log,cache}_dir("LazyToText", appauthor=False)`
 is the single source of truth — `app/utils.py:_is_frozen()` and
 `app/config_manager.py:_resolve_base_dir()` gate the frozen paths.
-PyInstaller (Windows) was dropped, so the only frozen target right
-now is py2app's `.app` on macOS.
+Two frozen targets right now: py2app's `.app` on macOS and
+PyInstaller's folder bundle on Windows.
 
 ## Platform conditionals — what to grep for
 

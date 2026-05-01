@@ -143,7 +143,15 @@ features:
   identity in the Accessibility list, persistent permissions
   across sessions, and a real Cmd-Tab title.
 
-### Run as a macOS .app (recommended on Mac)
+### Build a portable bundle
+
+Both platforms have a packaging path that turns the source tree
+into a drop-onto-another-machine artifact. The wrapper scripts
+under `scripts/` handle every prerequisite step (icon refresh,
+`uv sync`, codesign / runtime hook, …); pick the one matching
+your OS.
+
+#### macOS — `.app` via py2app
 
 ```bash
 ./scripts/build-macos.sh             # alias / dev (5–10 s)
@@ -175,25 +183,53 @@ When you're ready to distribute:
 ID + `xcrun notarytool submit` if you want to ship outside the
 Mac App Store without Gatekeeper warnings.
 
+#### Windows — portable folder via PyInstaller
+
+```powershell
+.\scripts\build-windows.ps1                # default folder build
+.\scripts\build-windows.ps1 -Clean         # nuke build/ + dist/ first
+.\scripts\build-windows.ps1 -OneFile       # single-file .exe (slower start)
+```
+
+The default mode is a **folder bundle** under `dist\LazyToText\` —
+copy the whole folder onto another Windows box, double-click
+`LazyToText.exe`, and it runs. No installer, no admin rights, no
+PATH munging. `-OneFile` packs everything into a single
+self-extracting `.exe` for cases where the folder structure is
+inconvenient (slower startup, occasional false-positives from
+heuristic AVs).
+
+The build pulls hidden imports from `pywin32` (Win32 API),
+`global_hotkeys` (system-wide hotkey listener), `PySide6.Qt*`,
+and the full `onnx_asr` / `onnxruntime` submodule trees — anything
+loaded via late-bound `importlib` that PyInstaller's static
+analyser can't see. The runtime hook at
+`scripts/pyi_runtime_hook.py` patches `sys.stdout` / `sys.stderr`
+back to a discarding writer (windowed builds null them out, which
+crashes any tqdm-using library), and adds `CREATE_NO_WINDOW` to
+`subprocess.Popen` calls so child processes don't flash a
+`cmd.exe` window.
+
 #### Where the bundle stores user data
 
-When `sys.frozen` is set (any time the app runs from `.app`,
-including alias-mode), the project follows Apple's File System
-Programming Guide and writes user data to per-user `~/Library`
-directories instead of the project root:
+Both bundles set `sys.frozen` and switch over to per-user directories
+via [`platformdirs`](https://github.com/tox-dev/platformdirs) — the
+.app would otherwise have to write inside `/Applications` (read-only
+without admin) and the Windows folder bundle would write inside
+`Program Files` (same problem, plus AV / UAC pushback):
 
-| Data | Path | Why this dir |
+| Data | macOS `.app` | Windows portable |
 | --- | --- | --- |
-| `config.yaml` | `~/Library/Application Support/LazyToText/` | user-tunable settings, persists across reinstalls |
-| `app.log` + history | `~/Library/Logs/LazyToText/` | `Console.app` reads `~/Library/Logs` natively |
-| Model weights (HF hub) | `~/Library/Caches/LazyToText/models/` | regenerable; Time Machine skips it; OS may purge under disk pressure (we redownload from Hugging Face) |
+| `config.yaml` | `~/Library/Application Support/LazyToText/` | `%APPDATA%\LazyToText\` |
+| `app.log` + history | `~/Library/Logs/LazyToText/` | `%LOCALAPPDATA%\LazyToText\Log\` |
+| Model weights | `~/Library/Caches/LazyToText/models/` | `%LOCALAPPDATA%\LazyToText\Cache\models\` |
 
-`uv run lazy-to-text-ui` (dev mode) keeps the legacy paths
-(`<project>/config.yaml`, `<project>/logs`, `<project>/models`)
-so iterating on source doesn't pollute Library. The Storage card
-in Settings can still override `models/` to any path — `HF_HOME`
-is updated live, so the next download lands in the new dir
-without a restart.
+`uv run lazy-to-text-ui` (dev mode) keeps the legacy in-tree paths
+(`<project>/config.yaml`, `<project>/logs`, `<project>/models`) so
+iterating on source doesn't pollute the user dirs. The Storage card
+in Settings can still override `models/` to any path — `HF_HOME` is
+updated live, so the next download lands in the new dir without a
+restart.
 
 ## Screenshots
 

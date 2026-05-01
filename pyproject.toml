@@ -87,7 +87,13 @@ include = ["app*"]
 
 [dependency-groups]
 dev = [
-    "py2app>=0.28.10",
+    # Bundlers — each only resolves on its target platform so a
+    # Mac contributor's ``uv sync`` doesn't pull in PyInstaller
+    # (and vice versa).  Dropped here rather than in the runtime
+    # ``dependencies`` block because they're only needed when
+    # someone actually rebuilds an .app / .exe distributable.
+    "py2app>=0.28.10; platform_system=='Darwin'",
+    "pyinstaller>=6.0; platform_system=='Windows'",
     "pytest>=9.0.3",
     "pytest-qt>=4.5.0",
 ]
