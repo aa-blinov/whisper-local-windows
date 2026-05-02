@@ -6,6 +6,7 @@ window so it can stay visible while the main app is hidden or unfocused.
 
 from __future__ import annotations
 
+import sys
 from typing import Optional
 
 from PySide6.QtCore import Qt
@@ -32,6 +33,8 @@ class RecordingOverlay(QFrame):
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+        if sys.platform == "darwin":
+            self.setAttribute(Qt.WA_MacAlwaysShowToolWindow, True)
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)

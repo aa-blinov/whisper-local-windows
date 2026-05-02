@@ -1,3 +1,5 @@
+import sys
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
@@ -11,6 +13,8 @@ def test_overlay_starts_hidden(qtbot):
     assert overlay.state() == "idle"
     assert not overlay.isVisible()
     assert overlay.testAttribute(Qt.WA_TranslucentBackground)
+    if sys.platform == "darwin":
+        assert overlay.testAttribute(Qt.WA_MacAlwaysShowToolWindow)
 
 
 def test_overlay_shows_recording_state(qtbot):
