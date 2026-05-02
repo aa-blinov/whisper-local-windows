@@ -86,26 +86,10 @@ class FlowLayout(QLayout):
         spacing = self.spacing()
 
         for item in self._items:
-            widget = item.widget()
+            # Use uniform spacing instead of expensive style().layoutSpacing()
+            # lookups which block the UI thread during large layout passes.
             space_x = spacing
             space_y = spacing
-            if widget is not None:
-                space_x = max(
-                    spacing,
-                    widget.style().layoutSpacing(
-                        QSizePolicy.PushButton,
-                        QSizePolicy.PushButton,
-                        Qt.Horizontal,
-                    ),
-                )
-                space_y = max(
-                    spacing,
-                    widget.style().layoutSpacing(
-                        QSizePolicy.PushButton,
-                        QSizePolicy.PushButton,
-                        Qt.Vertical,
-                    ),
-                )
 
             next_x = x + item.sizeHint().width() + space_x
             if next_x - space_x > effective.right() and line_height > 0:

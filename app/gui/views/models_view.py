@@ -165,25 +165,51 @@ class ModelsView(QWidget):
         """Mark a card as the currently active one. ``None`` clears
         the active state on every card — the rollback hook used by
         the cancel-load flow when the user backs out of a
-        just-clicked model before its load finishes."""
+        just-clicked model before its load finishes.
+
+        Only updates the old and new active cards to avoid O(n) work on
+        the UI thread.
+        """
         if alias is not None and alias not in self._cards:
             raise KeyError(alias)
-        for card_alias, card in self._cards.items():
-            card.set_active(alias is not None and card_alias == alias)
-        self._active_alias = alias
+
+        self.setUpdatesEnabled(False)
+        try:
+            # Deactivate the old card if any
+            if self._active_alias and self._active_alias in self._cards:
+                self._cards[self._active_alias].set_active(False)
+
+            # Activate the new card
+            self._active_alias = alias
+            if self._active_alias:
+                self._cards[self._active_alias].set_active(True)
+        finally:
+            self.setUpdatesEnabled(True)
 
     def is_locked(self) -> bool:
         return self._locked
 
     def set_locked(self, locked: bool) -> None:
-        self._locked = bool(locked)
-        for card in self._cards.values():
-            card.set_locked(self._locked)
+        new_locked = bool(locked)
+        if new_locked == self._locked:
+            return
+        self._locked = new_locked
+        self.setUpdatesEnabled(False)
+        try:
+            for card in self._cards.values():
+                card.set_locked(self._locked)
+        finally:
+            self.setUpdatesEnabled(True)
 
     def set_loading(self, loading: bool) -> None:
         """Mark the currently active card as loading — its pill swaps from
-        'Active' to 'Loading…' until the backend reports ready."""
-        for card in self._cards.values():
+        'Active' to 'Loading…' until the backend reports ready.
+
+        Only updates the active card to avoid O(n) style recalculations
+        that would otherwise block the UI thread on heavy lists.
+        """
+        card = self._cards.get(self._active_alias)
+        if card is not None:
             card.set_loading(loading)
 
     def set_delete_busy(self, alias: str, busy: bool) -> None:

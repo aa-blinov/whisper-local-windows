@@ -393,7 +393,10 @@ class ModelCard(QFrame):
         return self._settings_panel.values()
 
     def set_locked(self, locked: bool) -> None:
-        self._locked = bool(locked)
+        new_locked = bool(locked)
+        if new_locked == self._locked:
+            return
+        self._locked = new_locked
         # Active cards keep Select hidden regardless; for inactive ones,
         # locking disables the button.
         if not self._active:

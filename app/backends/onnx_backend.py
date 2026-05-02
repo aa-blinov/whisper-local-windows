@@ -475,6 +475,9 @@ class OnnxAsrBackend:
             model_name, load_id, self._family, providers, self._quantization,
         )
         forced_provider: Optional[str] = None
+        if providers == ["CPUExecutionProvider"]:
+            forced_provider = "CPU"
+
         try:
             model = onnx_asr.load_model(
                 load_id, **self._build_load_kwargs(providers)
@@ -576,7 +579,7 @@ class OnnxAsrBackend:
             self._active_provider = detected_provider
             log.info(
                 "OnnxAsr model %s ready (provider=%s)",
-                model_name, detected_provider or "unknown",
+                model_name, detected_provider or "CPU (fallback/unknown)",
             )
 
 
@@ -818,31 +821,66 @@ def _pretty_provider(raw: Optional[str]) -> Optional[str]:
 
 
 def _detect_active_provider(model) -> Optional[str]:
-    """Return the EP name actually backing ``model``'s InferenceSession.
+    """Return the EP name actually backing ``model``'s InferenceSession."""
+    if model is None:
+        return None
 
-    onnx-asr puts its ORT sessions on different attributes depending
-    on the model family — encoder/decoder (whisper transformer,
-    NeMo, kaldi-zipformer, gigaam-RNN-T) or a single ``_model`` (CTC,
-    silero, pyannote, tone). We probe the encoder first (it's the
-    heavy compute path that the UI cares about), fall back to the
-    single-session attribute, and pretty-print the result.
+    # Log internal structure to find the session in wrapped adapters
+    log.info("Probing model of type %s. dir() contents: %s", type(model), dir(model))
 
-    Returns ``None`` if the model object doesn't expose any session
-    we recognise — defensive against onnx-asr layout changes between
-    minor versions.
-    """
-    for attr in ("_encoder", "_model"):
+    # Handle onnx-asr adapters (e.g. TextResultsAsrAdapter) that wrap the real model.
+    # These often have a .model attribute containing the actual ASR object.
+    if hasattr(model, "model") and not hasattr(model, "get_providers"):
+        log.info("Unwrapping model adapter: %s", type(model))
+        model = model.model
+
+    # Probe order: common attribute names used by onnx-asr
+    probe_attrs = (
+        "encoder", "_encoder",
+        "model", "_model",
+        "decoder", "_decoder",
+        "session", "_session",
+        "inference_session"
+    )
+
+    # 1. Check if the model itself is the session
+    if hasattr(model, "get_providers"):
+        try:
+            providers = model.get_providers()
+            if providers:
+                res = _pretty_provider(providers[0])
+                log.info("Found provider on model root: %s", res)
+                return res
+        except Exception:
+            pass
+
+    # 2. Check attributes
+    for attr in probe_attrs:
         sess = getattr(model, attr, None)
         if sess is None:
             continue
+
+        log.info("Probing attribute '%s' for session...", attr)
+
+        # Some onnx-asr models wrap the session in another object
+        # that has a 'session' attribute.
+        if not hasattr(sess, "get_providers") and hasattr(sess, "session"):
+            log.info("Attribute '%s' is a wrapper, using .session", attr)
+            sess = sess.session
+
         get_providers = getattr(sess, "get_providers", None)
         if not callable(get_providers):
             continue
         try:
             providers = get_providers()
-        except Exception:  # pragma: no cover — defensive
+            if providers:
+                res = _pretty_provider(providers[0])
+                log.info("Found provider on attribute '%s': %s", attr, res)
+                return res
+        except Exception as e:
+            log.info("Failed to get providers from '%s': %s", attr, e)
             continue
-        if providers:
-            return _pretty_provider(providers[0])
+
+    log.info("No session/provider found in model %s", type(model))
     return None
 

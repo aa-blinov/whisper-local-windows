@@ -364,17 +364,18 @@ class AppController(
         self._sync_topbar_model(info)
         if self._recording is not None:
             compute_type = info.compute_type if info else None
-            try:
-                # Preserve the registry alias here, not just the HF
-                # canonical. Some presets share the same canonical
-                # repo but differ by the onnx-asr ``load_id`` they
-                # must pass to the backend (GigaAM CTC vs RNN-T).
-                # Collapsing to canonical too early makes the backend
-                # resolve back to the registry's first alias and skip
-                # the intended decoder swap.
-                self._recording.request_model_change(alias, compute_type)
-            except Exception as exc:  # pragma: no cover — defensive
-                log.warning("request_model_change raised: %s", exc)
+            # Defer the backend request to the next event loop tick.
+            # Even though request_model_change spawns a thread, the
+            # initial handshake / state prep can take a few ms.
+            # Moving it to the next tick ensures the UI repaints
+            # the "Loading" pill immediately.
+            from PySide6.QtCore import QTimer as _QTimer
+            QTimer.singleShot(
+                0,
+                lambda: self._recording.request_model_change(
+                    alias, compute_type
+                )
+            )
 
     def _sync_topbar_model(self, info) -> None:
         # Use ``alias`` for the topbar pill — ``display_name``
@@ -1118,6 +1119,8 @@ class AppController(
             # in some unrelated download) doesn't inherit a stale
             # 1.2 GB expectation from the previous Parakeet load.
             self._loading_expected_bytes = 0
+            # Explicitly refresh the engine pill again now that we are idle/ready.
+            self._refresh_engine_pill()
         if self._tray is not None:
             self._tray.set_state(state)
 
@@ -1203,6 +1206,8 @@ class AppController(
                 provider = getter()
             except Exception:  # pragma: no cover — defensive
                 provider = None
+        
+        log.debug("Refreshing engine pill. Provider from backend: %s", provider)
         try:
             target(provider)
         except Exception:  # pragma: no cover — defensive

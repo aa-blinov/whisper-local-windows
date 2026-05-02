@@ -102,18 +102,47 @@ Provider tuple for ORT on Mac:
 ```
 
 `onnx_backend.py:_detect_active_provider` probes the live session
-and falls back to CPU on accelerator failure (some GigaAM ops crash
-ORT's CoreML path on init — we retry on CPU and surface the
-provider in the engine pill).
+and falls back to CPU on accelerator failure. It unwraps model
+adapters (like GigaAM's `TextResultsAsrAdapter`) to find the
+inner session. Some models (GigaAM / T-One) are pinned to CPU
+via `prefer_cpu_provider=True` in `model_mapping.py` to avoid
+known CoreML compilation crashes.
+
+## macOS HUD / Fullscreen Overlay
+
+The recording overlay (`app/gui/widgets/recording_overlay.py`) is
+designed to stay visible over native full-screen applications.
+Key technical choices:
+
+- **Agent Mode:** `setup.py` sets `LSUIElement = True`. This
+  background-app mode is required for windows to reliably pierce
+  other applications' full-screen Spaces.
+- **Window Level:** Uses `NSScreenSaverWindowLevel` to stay above
+  full-screen shields, the Notch, and the Menu Bar.
+- **Collection Behavior:** Uses `CanJoinAllSpaces | FullScreenAuxiliary | IgnoresCycle | Stationary`. This ensures it's on every desktop, follows Cmd+Tab ignores, and doesn't slide during swipes.
+- **Focus Policy:** We strictly avoid `raise_()` on background events
+  (like finishing transcription) to prevent focus stealing. Toasts
+  use `WA_ShowWithoutActivating`.
+
+## UI Performance & Layout
+
+- **FlowLayout:** Optimized to use uniform `spacing()` instead of
+  calling `style().layoutSpacing()` thousands of times per frame
+  during list resize events.
+- **Batching:** `setUpdatesEnabled(False/True)` is used during
+  multi-widget updates (like model selection) to prevent layout
+  thrashing and scroll freezes.
+- **Deferred Tasks:** Heavy UI/IPC handshakes (like model change)
+  are deferred via `QTimer.singleShot(0)` to keep animations fluid.
 
 ## Hotkey defaults — and why they differ per OS
 
 ```python
 # config_manager.py
 if sys.platform == "darwin":
-    _DEFAULT_START_HOTKEY = "ctrl+f8"
-    _DEFAULT_STOP_HOTKEY  = "ctrl+f9"
-    _DEFAULT_CANCEL_HOTKEY = "ctrl+f10"
+    _DEFAULT_START_HOTKEY = "ctrl+f2"
+    _DEFAULT_STOP_HOTKEY  = "ctrl+f3"
+    _DEFAULT_CANCEL_HOTKEY = "ctrl+f6"
 else:
     _DEFAULT_START_HOTKEY = "ctrl+f2"
     _DEFAULT_STOP_HOTKEY  = "ctrl+f3"
@@ -122,8 +151,9 @@ else:
 
 macOS reserves `Ctrl+F1`..`Ctrl+F7` for system keyboard navigation
 (focus → menu bar / Dock / window / toolbar / floating window /
-next window / status menu). pynput never sees the events — the OS
-captures them first.
+next window / status menu). We use higher F-keys or safe ones like
+F2/F3/F6 where possible to avoid conflicts.
+
 
 ## macOS App menu (Cmd+, / Cmd+Q / About)
 

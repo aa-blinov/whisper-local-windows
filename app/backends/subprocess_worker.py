@@ -171,7 +171,8 @@ def _worker_main(child_conn: "Connection") -> None:
                 if callable(provider_getter):
                     try:
                         cur_provider = provider_getter()
-                    except Exception:  # pragma: no cover — defensive
+                    except Exception as e:  # pragma: no cover — defensive
+                        log.warning("active_provider() raised: %s", e)
                         cur_provider = None
                     # Push on every transition (including ready→stopped
                     # which clears the pill back to None) and once at
@@ -181,6 +182,7 @@ def _worker_main(child_conn: "Connection") -> None:
                         not provider_seen_once
                         or cur_provider != last_provider
                     ):
+                        log.info("Worker pushing provider_change: %s", cur_provider)
                         safe_send(("provider_change", cur_provider))
                         last_provider = cur_provider
                         provider_seen_once = True
