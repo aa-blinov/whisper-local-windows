@@ -254,6 +254,10 @@ MODELS: Tuple[ModelInfo, ...] = (
         # lowercase identifier.  Pass lowercase to load_model; keep the
         # canonical case for cache directory + URL display.
         onnx_load_id="t-tech/t-one",
+        # CoreML EP rejects this Conformer-CTC graph after a long
+        # session-create attempt; skip straight to CPU on macOS
+        # instead of making every switch look hung for ~1-2 minutes.
+        prefer_cpu_provider=True,
     ),
     # ---- Vosk Russian (alphacep, Zipformer2 RNN-T, ONNX) ------------------
     # The lightweight option.  ``vosk-model-small-ru`` is ~30 MB,
@@ -277,6 +281,9 @@ MODELS: Tuple[ModelInfo, ...] = (
         compute_type="float16",
         family="Vosk",
         onnx_family="gigaam",
+        # Zipformer streaming graphs fail on CoreML EP shape
+        # handling; go straight to CPU to avoid the long retry path.
+        prefer_cpu_provider=True,
     ),
     ModelInfo(
         alias="vosk-ru",
@@ -294,6 +301,7 @@ MODELS: Tuple[ModelInfo, ...] = (
         compute_type="float16",
         family="Vosk",
         onnx_family="gigaam",
+        prefer_cpu_provider=True,
     ),
     # ---- NVIDIA Canary 1B v2 (multilingual, ONNX) -------------------------
     # 1B-param transformer encoder-decoder; 25 languages incl. Russian.

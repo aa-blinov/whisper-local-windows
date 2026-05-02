@@ -494,17 +494,29 @@ def _autoload_persisted_model(backend, config=None) -> None:
 
     from app.model_mapping import MODELS, alias_for, get_model
 
-    canonical = backend.current_model()
+    persisted_name = None
+    if config is not None:
+        raw = getattr(config, "get_setting", None)
+        if callable(raw):
+            try:
+                candidate = raw("whisper", "model")
+            except Exception:  # pragma: no cover — defensive
+                candidate = None
+            if isinstance(candidate, str) and candidate.strip():
+                persisted_name = candidate.strip()
+
+    requested = persisted_name or backend.current_model()
     try:
-        info = get_model(alias_for(canonical))
+        alias = requested if persisted_name is not None else alias_for(requested)
+        info = get_model(alias)
     except KeyError:
         info = None
-        cached = is_model_cached(canonical)
+        cached = is_model_cached(requested)
     else:
         cached = is_cached_for_info(info)
 
     if cached:
-        display = info.display_name if info is not None else canonical
+        display = info.display_name if info is not None else requested
         log.info(
             "Persisted model %s is cached — kicking off background load.",
             display,
@@ -522,12 +534,12 @@ def _autoload_persisted_model(backend, config=None) -> None:
             "Persisted model %s is not cached — falling back to "
             "cached %s (%s).  Pick a different model in Settings to "
             "override.",
-            canonical, candidate.display_name, candidate.alias,
+            requested, candidate.display_name, candidate.alias,
         )
         change = getattr(backend, "change_model", None)
         if callable(change):
             try:
-                change(candidate.canonical)
+                change(candidate.alias)
             except Exception as exc:  # pragma: no cover — defensive
                 log.warning("change_model fallback raised: %s", exc)
                 return
@@ -554,12 +566,12 @@ def _autoload_persisted_model(backend, config=None) -> None:
         backend.load()
         return
 
-    log.info(
-        "Persisted model %s is not cached and no other model is "
-        "downloaded — skipping auto-load. Waiting for the user to "
-        "pick a model.",
-        canonical,
-    )
+        log.info(
+            "Persisted model %s is not cached and no other model is "
+            "downloaded — skipping auto-load. Waiting for the user to "
+            "pick a model.",
+            requested,
+        )
 
 
 def main() -> int:

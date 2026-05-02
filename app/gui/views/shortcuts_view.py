@@ -94,10 +94,19 @@ class ShortcutsView(QWidget):
     # controller is responsible for the actual relaunch (clean
     # backend shutdown + ``os.execv`` swap).
     restart_requested = Signal()
+    # macOS-only — bridges the asynchronous AVFoundation microphone
+    # permission callback back onto the GUI thread. Emitting a Qt
+    # signal from the background completion handler is reliable;
+    # trying to schedule a raw callable with QTimer from that thread
+    # can miss the main event loop and leave the banner stale.
+    _mic_request_result = Signal(bool)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("ShortcutsView")
+        self._mic_request_result.connect(
+            self._apply_mic_request_completed,
+        )
 
         # Suppresses save_requested emission while we are populating fields
         # programmatically (e.g. controller prefilling from config).
@@ -1027,13 +1036,14 @@ class ShortcutsView(QWidget):
         flips into the appropriate post-prompt state.
 
         The completion handler runs on a non-Qt thread; touching
-        widgets from there crashes Qt.  We bounce through
-        ``QTimer.singleShot(0, ...)`` to land back on the GUI
-        thread before mutating banner state.
+        widgets from there crashes Qt. Bounce through a Qt signal so
+        the slot is delivered on the GUI thread that owns the view.
         """
-        from PySide6.QtCore import QTimer
+        self._mic_request_result.emit(bool(granted))
 
-        QTimer.singleShot(0, self._refresh_mic_banner)
+    def _apply_mic_request_completed(self, granted: bool) -> None:
+        del granted
+        self._refresh_mic_banner()
 
     def showEvent(self, event):  # noqa: N802 — Qt naming
         """Re-check both Accessibility and Microphone TCC status

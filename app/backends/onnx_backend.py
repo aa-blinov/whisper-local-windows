@@ -227,13 +227,18 @@ class OnnxAsrBackend:
         safe.  Pass an explicit value when crossing the boundary.
         """
         del compute_type
+        requested_load_id = load_id or model
         with self._lock:
             if self._shutdown:
                 return
-            if model == self._model_name and self._status == "ready":
+            if (
+                model == self._model_name
+                and requested_load_id == self._load_id
+                and self._status == "ready"
+            ):
                 return
             self._model_name = model
-            self._load_id = load_id or model
+            self._load_id = requested_load_id
             if prefer_cpu_provider is not None:
                 self._prefer_cpu_provider = bool(prefer_cpu_provider)
             self._model = None
@@ -840,5 +845,4 @@ def _detect_active_provider(model) -> Optional[str]:
         if providers:
             return _pretty_provider(providers[0])
     return None
-
 

@@ -20,11 +20,23 @@ def test_patch_pynput_darwin_listener_skips_keycode_context(monkeypatch):
         def _run(self):
             self.original_runs += 1
 
+    class FakeGlobalHotKeys:
+        def __init__(self):
+            self.press_calls = []
+            self.release_calls = []
+
+        def _on_press(self, key, injected):
+            self.press_calls.append((key, injected))
+
+        def _on_release(self, key, injected):
+            self.release_calls.append((key, injected))
+
     fake_pynput = types.ModuleType("pynput")
     fake_keyboard = types.ModuleType("pynput.keyboard")
     fake_darwin = types.ModuleType("pynput.keyboard._darwin")
     fake_pynput.keyboard = fake_keyboard
     fake_keyboard._darwin = fake_darwin
+    fake_keyboard.GlobalHotKeys = FakeGlobalHotKeys
     fake_darwin.Listener = FakeListener
     fake_darwin.ListenerMixin = FakeListenerMixin
 
@@ -39,12 +51,25 @@ def test_patch_pynput_darwin_listener_skips_keycode_context(monkeypatch):
 
     listener = FakeListener()
     listener._run()
+    global_hotkeys = FakeGlobalHotKeys()
+    global_hotkeys._on_press("volume_up")
+    global_hotkeys._on_release("volume_up")
 
     assert FakeListener._run is patched_run
     assert listener._context is None
     assert listener.original_runs == 0
     assert listener.mixin_runs == 1
     assert getattr(FakeListener, "_lazy_to_text_skip_keycode_context", False) is True
+    assert (
+        getattr(
+            FakeGlobalHotKeys,
+            "_lazy_to_text_optional_injected_callbacks",
+            False,
+        )
+        is True
+    )
+    assert global_hotkeys.press_calls == [("volume_up", False)]
+    assert global_hotkeys.release_calls == [("volume_up", False)]
 
 
 def test_stop_listening_joins_pynput_threads(monkeypatch):

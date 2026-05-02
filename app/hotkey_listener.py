@@ -92,10 +92,19 @@ def _patch_pynput_darwin_listener() -> None:
     ``self._context`` but the Darwin keyboard listener never reads it
     afterwards, so we can safely bypass that preflight and jump
     straight to the real event-tap loop.
+
+    ``pynput`` 1.8.x also has a Darwin quirk for media/system keys:
+    ``Listener._handle_message`` calls ``on_press`` / ``on_release``
+    without the ``injected`` argument on that path.  ``GlobalHotKeys``
+    expects the argument, so a volume/brightness/media-key event can
+    crash the global-hotkey thread and make shortcuts appear to "die"
+    until the app is restarted.  Patch those callbacks to accept a
+    missing flag and default it to ``False``.
     """
     if sys.platform != "darwin":
         return
     try:
+        _pk = importlib.import_module("pynput.keyboard")
         _pk_darwin = importlib.import_module("pynput.keyboard._darwin")
     except ImportError:
         return
@@ -111,6 +120,39 @@ def _patch_pynput_darwin_listener() -> None:
     listener_cls._lazy_to_text_original_run = listener_cls._run
     listener_cls._lazy_to_text_skip_keycode_context = True
     listener_cls._run = _run_without_keycode_context
+
+    global_hotkeys_cls = getattr(_pk, "GlobalHotKeys", None)
+    if (
+        global_hotkeys_cls is not None
+        and not getattr(
+            global_hotkeys_cls,
+            "_lazy_to_text_optional_injected_callbacks",
+            False,
+        )
+    ):
+        original_on_press = global_hotkeys_cls._on_press
+        original_on_release = global_hotkeys_cls._on_release
+
+        def _on_press_with_optional_injected(
+            self, key, injected=False,
+        ):
+            return original_on_press(self, key, injected)
+
+        def _on_release_with_optional_injected(
+            self, key, injected=False,
+        ):
+            return original_on_release(self, key, injected)
+
+        global_hotkeys_cls._lazy_to_text_original_on_press = (
+            original_on_press
+        )
+        global_hotkeys_cls._lazy_to_text_original_on_release = (
+            original_on_release
+        )
+        global_hotkeys_cls._lazy_to_text_optional_injected_callbacks = True
+        global_hotkeys_cls._on_press = _on_press_with_optional_injected
+        global_hotkeys_cls._on_release = _on_release_with_optional_injected
+
     logging.getLogger(__name__).debug(
         "Patched pynput Darwin listener to skip keycode_context()"
     )

@@ -167,6 +167,25 @@ def test_controller_persists_selection_back_to_config(qtbot):
     assert window.models_view.active_alias() == "whisper-large-v3-turbo"
 
 
+def test_controller_preserves_alias_for_shared_canonical_model_change(qtbot):
+    """Shared-canonical presets must reach the backend by alias, not
+    just by HF repo id. ``gigaam-v3-ctc`` and ``gigaam-v3-rnnt`` both
+    point at ``istupakov/gigaam-v3-onnx`` but require different
+    onnx-asr ``load_id`` values."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "gigaam-v3-ctc"}})
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+    window.models_view.model_selected.emit("gigaam-v3-rnnt")
+
+    assert rec.model_change_requests[-1] == ("gigaam-v3-rnnt", "float16")
+
+
 def test_controller_no_ops_when_selecting_already_active(qtbot):
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
@@ -2100,6 +2119,127 @@ def test_controller_quit_requested_calls_request_quit_and_app_quit(qtbot, monkey
     # when setQuitOnLastWindowClosed(False) is set for tray support.
     assert quit_calls == [None]
     assert app_quit_calls == [None]
+
+
+def test_resolve_macos_bundle_path_finds_enclosing_app():
+    from app.gui.controllers.app_controller import _resolve_macos_bundle_path
+
+    assert (
+        _resolve_macos_bundle_path(
+            "/Applications/Lazy to Text.app/Contents/MacOS/python"
+        )
+        == "/Applications/Lazy to Text.app"
+    )
+
+
+def test_controller_restart_requested_relaunches_frozen_macos_bundle(
+    qtbot, monkeypatch
+):
+    import sys
+
+    from PySide6.QtWidgets import QApplication
+
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    controller = AppController(config=config, window=window)
+
+    quit_calls: list[None] = []
+    original_request_quit = window.request_quit
+    window.request_quit = (
+        lambda: quit_calls.append(None) or original_request_quit()
+    )
+
+    app_quit_calls: list[None] = []
+    monkeypatch.setattr(
+        QApplication.instance(),
+        "quit",
+        lambda: app_quit_calls.append(None),
+    )
+
+    popen_calls: list[list[str]] = []
+
+    class _DummyPopen:
+        def __init__(self, argv, **kwargs):
+            popen_calls.append(list(argv))
+
+    execv_calls: list[tuple[str, list[str]]] = []
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(
+        sys,
+        "frozen",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sys,
+        "executable",
+        "/Applications/Lazy to Text.app/Contents/MacOS/python",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["/Applications/Lazy to Text.app/Contents/MacOS/Lazy to Text"],
+    )
+    monkeypatch.setattr(controller_module.subprocess, "Popen", _DummyPopen)
+    monkeypatch.setattr(
+        controller_module.os,
+        "execv",
+        lambda path, argv: execv_calls.append((path, argv)),
+    )
+
+    controller._on_restart_requested()
+
+    assert popen_calls == [["/usr/bin/open", "-n", "/Applications/Lazy to Text.app"]]
+    assert quit_calls == [None]
+    assert app_quit_calls == [None]
+    assert execv_calls == []
+
+
+def test_controller_restart_requested_uses_execv_outside_frozen_macos(
+    qtbot, monkeypatch
+):
+    import sys
+
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    controller = AppController(config=config, window=window)
+
+    execv_calls: list[tuple[str, list[str]]] = []
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(
+        sys,
+        "executable",
+        "/Users/me/project/.venv/bin/python",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["lazy-to-text-ui"],
+    )
+    monkeypatch.setattr(
+        controller_module.os,
+        "execv",
+        lambda path, argv: execv_calls.append((path, argv)),
+    )
+
+    controller._on_restart_requested()
+
+    assert execv_calls == [
+        ("/Users/me/project/.venv/bin/python", ["/Users/me/project/.venv/bin/python", "lazy-to-text-ui"])
+    ]
 
 
 def test_controller_forwards_recording_state_to_tray(qtbot):

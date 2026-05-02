@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import threading
 from typing import Any, Optional, Protocol
 
@@ -37,6 +38,27 @@ from app.utils import (  # noqa: F401  (re-export for tests + storage mixin)
 
 
 log = logging.getLogger(__name__)
+
+
+def _resolve_macos_bundle_path(executable: str) -> Optional[str]:
+    """Return the enclosing ``.app`` bundle for a frozen macOS binary.
+
+    py2app bundles expose helper executables under
+    ``Contents/MacOS`` (notably ``python`` and the app-named launcher).
+    Relaunching the helper directly is brittle; the stable unit is the
+    bundle itself, which LaunchServices knows how to open correctly.
+    """
+    if not executable:
+        return None
+    path = Path(executable)
+    try:
+        path = path.resolve()
+    except OSError:
+        path = path.absolute()
+    for candidate in (path, *path.parents):
+        if candidate.suffix == ".app":
+            return str(candidate)
+    return None
 
 
 def _apply_hf_token_to_env(configured: Optional[str]) -> bool:
@@ -341,10 +363,16 @@ class AppController(
         self._push_inference_to_backend(self._load_inference_settings(alias))
         self._sync_topbar_model(info)
         if self._recording is not None:
-            canonical = info.canonical if info else canonical_for(alias)
             compute_type = info.compute_type if info else None
             try:
-                self._recording.request_model_change(canonical, compute_type)
+                # Preserve the registry alias here, not just the HF
+                # canonical. Some presets share the same canonical
+                # repo but differ by the onnx-asr ``load_id`` they
+                # must pass to the backend (GigaAM CTC vs RNN-T).
+                # Collapsing to canonical too early makes the backend
+                # resolve back to the registry's first alias and skip
+                # the intended decoder swap.
+                self._recording.request_model_change(alias, compute_type)
             except Exception as exc:  # pragma: no cover — defensive
                 log.warning("request_model_change raised: %s", exc)
 
@@ -799,12 +827,15 @@ class AppController(
         without a restart.
 
         We tear down the recording stack synchronously (so the
-        worker process exits, audio device is released, etc.),
-        then ``os.execv`` swaps the running process for a fresh
-        copy with the same argv — Qt's event loop is replaced in
-        place, no double-start, no orphaned widgets.
+        worker process exits, audio device is released, etc.).
+
+        In dev / non-frozen runs we can safely ``os.execv`` the
+        current interpreter. For a py2app bundle on macOS we must
+        relaunch the bundle via LaunchServices (``open -n``) instead
+        of exec'ing the inner helper binary directly — that helper
+        does not have a stable standalone loader layout and can die
+        at launch with a missing ``libpython`` error.
         """
-        import os
         import sys
 
         log.info("Restart requested — relaunching")
@@ -829,8 +860,30 @@ class AppController(
                     handle.release()
         except Exception as exc:  # pragma: no cover — defensive
             log.warning("instance lock release raised on restart: %s", exc)
+        if sys.platform == "darwin" and getattr(sys, "frozen", False):
+            bundle_path = _resolve_macos_bundle_path(sys.executable)
+            if bundle_path:
+                try:
+                    subprocess.Popen(
+                        ["/usr/bin/open", "-n", bundle_path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except OSError as exc:
+                    log.error("bundle relaunch failed: %s", exc)
+                else:
+                    if self._window is not None:
+                        self._window.request_quit()
+                    qt_app = QApplication.instance()
+                    if qt_app is not None:
+                        qt_app.quit()
+                    return
+            log.warning(
+                "Could not resolve .app bundle from %s; falling back to execv",
+                sys.executable,
+            )
         # ``execv`` replaces the current process image — never
-        # returns on success.  ``sys.executable`` + ``sys.argv``
+        # returns on success. ``sys.executable`` + ``sys.argv``
         # gives us the same launch line uv used originally.
         try:
             os.execv(sys.executable, [sys.executable, *sys.argv])

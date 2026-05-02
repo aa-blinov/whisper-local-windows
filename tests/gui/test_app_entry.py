@@ -122,12 +122,16 @@ class _FakeBackend:
     def __init__(self, model: str) -> None:
         self._model = model
         self.load_called = 0
+        self.changed_to: list[str] = []
 
     def current_model(self) -> str:
         return self._model
 
     def load(self) -> None:
         self.load_called += 1
+
+    def change_model(self, model: str) -> None:
+        self.changed_to.append(model)
 
 
 def test_autoload_kicks_off_load_when_model_is_cached(monkeypatch):
@@ -175,6 +179,62 @@ def test_autoload_falls_back_to_canonical_check_for_unknown_model(monkeypatch):
 
     app_module._autoload_persisted_model(backend)
     assert backend.load_called == 1
+
+
+def test_autoload_prefers_persisted_alias_over_backend_canonical(monkeypatch):
+    """Shared-canonical presets such as GigaAM CTC/RNN-T must keep the
+    persisted alias when deciding what is cached + what to log. The
+    backend only surfaces the HF canonical, which would otherwise map
+    back to the registry's first alias and lose the decoder choice."""
+    import app.gui.app as app_module
+
+    class _Config:
+        def get_setting(self, section, key):
+            if (section, key) == ("whisper", "model"):
+                return "gigaam-v3-rnnt"
+            return None
+
+    backend = _FakeBackend("istupakov/gigaam-v3-onnx")
+
+    def _is_cached(info):
+        return info.alias == "gigaam-v3-rnnt"
+
+    monkeypatch.setattr(app_module, "is_cached_for_info", _is_cached)
+    monkeypatch.setattr(
+        app_module,
+        "is_model_cached",
+        lambda canonical: pytest.fail("should use registry alias path"),
+    )
+
+    app_module._autoload_persisted_model(backend, config=_Config())
+    assert backend.load_called == 1
+
+
+def test_autoload_fallback_changes_to_candidate_alias(monkeypatch):
+    """Fallback auto-load must preserve alias-level semantics when it
+    asks the backend to switch. Using the candidate canonical would
+    lose per-alias ``load_id`` differences for shared-canonical
+    presets."""
+    import app.gui.app as app_module
+
+    class _Config:
+        def get_setting(self, section, key):
+            if (section, key) == ("whisper", "model"):
+                return "missing-model"
+            return None
+
+    backend = _FakeBackend("missing-model")
+    monkeypatch.setattr(
+        app_module, "is_model_cached", lambda canonical: False
+    )
+    monkeypatch.setattr(
+        app_module,
+        "is_cached_for_info",
+        lambda info: info.alias == "gigaam-v3-rnnt",
+    )
+
+    app_module._autoload_persisted_model(backend, config=_Config())
+    assert backend.changed_to == ["gigaam-v3-rnnt"]
 
 
 def test_autoload_no_op_when_backend_is_none():

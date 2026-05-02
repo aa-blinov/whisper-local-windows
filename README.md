@@ -183,6 +183,76 @@ When you're ready to distribute:
 ID + `xcrun notarytool submit` if you want to ship outside the
 Mac App Store without Gatekeeper warnings.
 
+##### Reproducible macOS build notes
+
+The macOS packaging path is intentionally scripted so the same repo
+state produces the same `.app` structure on another Mac with the same
+Python / dependency lockfile. The moving parts are:
+
+1. `scripts/build-macos.sh`
+   - wipes `build/` and `dist/`
+   - regenerates `app/assets/lazy_to_text.icns`
+   - temporarily strips the `dependencies = [...]` block from
+     `pyproject.toml`
+   - runs `.venv/bin/python setup.py py2app` (or `py2app -A`)
+   - ad-hoc signs the finished bundle with `codesign --deep --force`
+2. `setup.py`
+   - pins the bundle identifier to `ai.eora.lazytotext`
+   - seeds `TCL_LIBRARY` / `TK_LIBRARY` from the live interpreter so
+     `py2app`'s unconditional `tkinter` probe does not abort on the
+     uv-managed Python runtime
+   - patches built-in `zlib` for `py2app 0.28`, which otherwise
+     assumes `zlib.__file__` exists in release mode
+   - excludes `rubicon` and `tkinter`-related modules that are not
+     needed by the app but can break the standalone build
+   - force-includes runtime-critical packages such as `PySide6`,
+     `onnxruntime`, `onnx_asr`, `pynput`, `sounddevice`,
+     `_sounddevice_data`, `pyautogui`, and `platformdirs`
+
+If you need to reproduce the release bundle from scratch on another
+Mac, the shortest safe path is:
+
+```bash
+uv sync
+./scripts/build-macos.sh --release
+open "dist/Lazy to Text.app"
+```
+
+To install the built app the same way we do during local testing:
+
+```bash
+ditto "dist/Lazy to Text.app" "/Applications/Lazy to Text.app"
+open -n "/Applications/Lazy to Text.app"
+```
+
+Useful verification commands:
+
+```bash
+codesign -dv "/Applications/Lazy to Text.app" 2>&1 | rg 'Identifier|Signature|TeamIdentifier'
+shasum -a 256 "dist/Lazy to Text.app/Contents/MacOS/Lazy to Text" \
+               "/Applications/Lazy to Text.app/Contents/MacOS/Lazy to Text"
+```
+
+If the app shows a generic `py2app` launch dialog, run the bundle's
+real executable directly to see the Python traceback:
+
+```bash
+"/Applications/Lazy to Text.app/Contents/MacOS/Lazy to Text"
+```
+
+The runtime log for the frozen app lives at:
+
+```text
+~/Library/Logs/LazyToText/app.log
+```
+
+Important limitation: the build is signed ad-hoc, not with a stable
+Developer ID certificate. macOS therefore treats each rebuilt app as a
+new code identity for privacy permissions. After reinstalling a fresh
+bundle into `/Applications`, you may need to re-grant
+`Accessibility` for `Lazy to Text.app` before global hotkeys and
+synthetic paste keystrokes work again.
+
 #### Windows — portable folder via PyInstaller
 
 ```powershell

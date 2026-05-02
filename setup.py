@@ -31,6 +31,7 @@ no PEP 621 equivalent for the ``OPTIONS`` dict it expects.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -51,6 +52,65 @@ if sys.platform != "darwin":
 
 _PROJECT_ROOT = Path(__file__).resolve().parent
 _ICON_PATH = _PROJECT_ROOT / "app" / "assets" / "lazy_to_text.icns"
+
+
+def _patch_builtin_zlib_for_py2app() -> None:
+    """Work around py2app 0.28 assuming ``zlib.__file__`` exists.
+
+    Our uv-managed Python 3.12 build exposes ``zlib`` as a built-in
+    module (``__spec__.origin == "built-in"``), so py2app's release
+    path crashes when it blindly tries to copy ``zlib.__file__`` into
+    the bundle. The stdlib zlib implementation is already linked into
+    libpython in this configuration, so runtime does not need a
+    separate extension file. We hand py2app a tiny placeholder path so
+    the copy step succeeds instead of aborting the whole build.
+    """
+    import zlib
+
+    if getattr(zlib, "__file__", None):
+        return
+
+    placeholder = _PROJECT_ROOT / ".py2app-zlib-built-in-placeholder"
+    if not placeholder.exists():
+        placeholder.write_bytes(b"")
+    zlib.__file__ = str(placeholder)
+
+
+_patch_builtin_zlib_for_py2app()
+
+
+def _seed_tcl_tk_env_for_py2app() -> None:
+    """Point py2app's tkinter recipe at the live Tcl/Tk runtime.
+
+    py2app 0.28 unconditionally imports ``_tkinter`` during its
+    recipe pass and calls ``_tkinter.create()`` to inspect the Tk
+    version. Under the uv-managed Python build that powers this repo,
+    the runtime libraries live under ``~/.local/share/uv/python/...``
+    and are not discovered by py2app's fallback search path, which
+    makes release builds fail before our app code is even considered.
+
+    We do not ship or use tkinter at runtime, but exporting the live
+    library paths here keeps py2app's probe from aborting the build.
+    """
+    if os.environ.get("TCL_LIBRARY") and os.environ.get("TK_LIBRARY"):
+        return
+    try:
+        import _tkinter
+    except Exception:
+        return
+    try:
+        tcl = _tkinter.create()
+        tcl_library = tcl.call("info", "library")
+    except Exception:
+        return
+    if tcl_library:
+        os.environ.setdefault("TCL_LIBRARY", str(tcl_library))
+        tk_library = str(Path(str(tcl_library)).with_name("tk8.6"))
+        if Path(tk_library).exists():
+            os.environ.setdefault("TK_LIBRARY", tk_library)
+
+
+_seed_tcl_tk_env_for_py2app()
 
 # py2app expects the entry script as a positional argument under
 # ``app=[...]``.  We point it at our existing thin shim
@@ -75,6 +135,7 @@ _PACKAGES = [
     "huggingface_hub",
     "soundfile",
     "sounddevice",
+    "_sounddevice_data",
     "pynput",
     "pyperclip",
     "pyautogui",
@@ -148,6 +209,17 @@ _OPTIONS = {
         # PyInstaller is a build-only tool — never wanted at
         # runtime in a competing bundler's output.
         "pyinstaller",
+        # Qt-приложение не использует Tk. py2app 0.28 всё равно
+        # заходит в tkinter-recipe и на uv Python 3.12 падает,
+        # если в окружении нет полноценного Tcl/Tk runtime.
+        "tkinter", "Tkinter", "_tkinter",
+        # ``rubicon-objc`` installs ``rubicon`` as a namespace
+        # package (no top-level ``__init__.py``). py2app 0.28's
+        # package collector trips over that during release builds
+        # and aborts with ``ImportError: No module named 'rubicon'``
+        # even though our app never imports it. Excluding the
+        # namespace keeps the standalone bundle buildable.
+        "rubicon",
     ],
     # Bundle ``onnxruntime``'s shared libraries instead of leaving
     # them as broken symlinks pointing back into the source venv.

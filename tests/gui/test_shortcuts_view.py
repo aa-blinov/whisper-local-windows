@@ -215,6 +215,35 @@ def test_clear_hf_token_button_emits_request(qtbot):
         qtbot.mouseClick(btn, Qt.LeftButton)
 
 
+# ---- Microphone permission banner -----------------------------------------
+
+
+def test_mic_banner_switches_to_restart_after_grant(qtbot, monkeypatch):
+    """Granting microphone access mid-session must refresh the banner
+    out of the initial 'Allow microphone access' state and into the
+    post-grant 'Restart now' prompt."""
+    import app.gui.views.shortcuts_view as shortcuts_module
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    status = {"value": "not_determined"}
+    monkeypatch.setattr(shortcuts_module, "microphone_authorization_status", lambda: status["value"])
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+
+    assert view._mic_state == "not_determined"
+    assert view._mic_banner_button.text() == "Allow microphone access"
+
+    status["value"] = "authorized"
+    view._on_mic_request_completed(True)
+
+    qtbot.waitUntil(
+        lambda: view._mic_state == "granted"
+        and view._mic_banner_button.text() == "Restart now",
+        timeout=1000,
+    )
+
+
 # ---- Storage card ----------------------------------------------------------
 
 

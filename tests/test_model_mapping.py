@@ -180,6 +180,16 @@ def test_every_registry_entry_has_a_valid_onnx_family():
         )
 
 
+def test_known_coreml_incompatible_models_prefer_cpu_provider():
+    """These models are known to stall/fail on CoreML session-create on
+    macOS, so the registry must steer them straight to CPU."""
+    from app.model_mapping import get_model
+
+    assert get_model("t-one").prefer_cpu_provider is True
+    assert get_model("vosk-ru-small").prefer_cpu_provider is True
+    assert get_model("vosk-ru").prefer_cpu_provider is True
+
+
 def test_registry_preserves_order_between_models_and_aliases():
     from app.model_mapping import MODELS, aliases
 

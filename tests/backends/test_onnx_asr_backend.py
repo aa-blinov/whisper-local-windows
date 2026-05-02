@@ -533,6 +533,26 @@ def test_change_model_accepts_compute_type_for_api_parity(monkeypatch):
     assert backend.status() == "ready"
 
 
+def test_change_model_reloads_when_load_id_changes_on_same_canonical(monkeypatch):
+    """Some registry presets share one HF canonical but differ by the
+    onnx-asr loader id (for example GigaAM CTC vs RNN-T). A
+    canonical-only equality check would skip the reload and leave the
+    old decoder active."""
+    fake_module, _ = _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="same-hf", load_id="decoder-a")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    fake_module.load_model.reset_mock()
+
+    backend.change_model("same-hf", load_id="decoder-b")
+    assert _wait(lambda: backend.status() == "ready")
+    fake_module.load_model.assert_called_once()
+    assert fake_module.load_model.call_args.args[0] == "decoder-b"
+
+
 # ---- Transcription ---------------------------------------------------------
 
 
