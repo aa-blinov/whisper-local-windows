@@ -102,8 +102,68 @@ class RecordingOverlay(QFrame):
     def _show_overlay(self) -> None:
         self.adjustSize()
         self._reposition()
-        self.raise_()
         self.show()
+        if sys.platform == "darwin":
+            self._apply_mac_window_behaviors()
+
+    def _apply_mac_window_behaviors(self) -> None:
+        """Apply native macOS behaviors for visibility in fullscreen apps."""
+        if hasattr(self, "_mac_behaviors_applied"):
+            return
+
+        # Skip if not on a live Cocoa display (e.g. during headless tests)
+        if QGuiApplication.platformName() != "cocoa":
+            return
+
+        try:
+            import objc
+            from AppKit import (
+                NSWindowCollectionBehaviorCanJoinAllSpaces,
+                NSWindowCollectionBehaviorFullScreenAuxiliary,
+                NSStatusWindowLevel,
+            )
+
+            # PySide6 winId() on macOS is the NSView pointer.
+            view_id = int(self.winId())
+            if not view_id:
+                return
+
+            # Wrap as objc object and find its window.
+            ns_view = objc.objc_object(c_void_p=view_id)
+            ns_window = ns_view.window()
+
+            if ns_window:
+                # 1. Allow window to float over fullscreen apps
+                # 2. Allow window to appear on all Spaces/desktops
+                # 3. Ensure it moves to the active space immediately
+                from AppKit import (
+                    NSWindowCollectionBehaviorMoveToActiveSpace,
+                    NSWindowCollectionBehaviorIgnoresCycle,
+                    NSWindowCollectionBehaviorStationary,
+                )
+                ns_window.setCollectionBehavior_(
+                    NSWindowCollectionBehaviorCanJoinAllSpaces
+                    | NSWindowCollectionBehaviorFullScreenAuxiliary
+                    | NSWindowCollectionBehaviorMoveToActiveSpace
+                    | NSWindowCollectionBehaviorIgnoresCycle
+                    | NSWindowCollectionBehaviorStationary
+                )
+                
+                # NSScreenSaverWindowLevel (1000) is very high, usually 
+                # reserved for screen savers and system overlays. 
+                # This ensures we are above the Notch, Menu Bar, and 
+                # Fullscreen app shields.
+                from AppKit import NSScreenSaverWindowLevel
+                ns_window.setLevel_(NSScreenSaverWindowLevel)
+
+                # Prevent the window from being hidden when the app is inactive
+                ns_window.setHidesOnDeactivate_(False)
+                ns_window.setCanHide_(False)
+
+            self._mac_behaviors_applied = True
+        except Exception:
+            # Silently fail if native hooks aren't available
+            pass
 
     def _reposition(self) -> None:
         screen = self.screen() or QGuiApplication.primaryScreen()

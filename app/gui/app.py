@@ -805,9 +805,8 @@ def main() -> int:
                 return
             if window.isVisible():
                 # User just brought the existing window back to
-                # focus — nothing to restore. Still raise it to
-                # make sure it's not under another app's window.
-                window.raise_()
+                # focus — macOS handles the layering for us if the
+                # window is visible.
                 return
             window.showNormal()
             window.raise_()
