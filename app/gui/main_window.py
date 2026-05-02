@@ -21,6 +21,7 @@ from app.gui.views.models_view import ModelsView
 from app.gui.views.placeholder import PlaceholderView
 from app.gui.views.shortcuts_view import ShortcutsView
 from app.gui.views.transcribe_view import TranscribeView
+from app.gui.widgets.recording_overlay import RecordingOverlay
 from app.gui.widgets.sidebar import Sidebar
 from app.gui.widgets.toast import Toast
 from app.gui.widgets.topbar import TopBar
@@ -100,6 +101,11 @@ class MainWindow(QMainWindow):
         # above the views; positioned in the top-right by ``Toast``
         # itself.
         self.toast = Toast(parent=central)
+        # Separate top-level overlay for the active recording state.
+        # Unlike ``toast``, this one is intentionally *not* parented
+        # to the main window so it can stay visible while the window
+        # is hidden or another app has focus.
+        self.recording_overlay = RecordingOverlay()
         central.installEventFilter(self)
 
         # Ctrl+1..4 jump straight to the matching tab — same order as
@@ -143,6 +149,10 @@ class MainWindow(QMainWindow):
             self.hide()
             self.hidden_to_tray.emit()
             return
+        try:
+            self.recording_overlay.hide()
+        except Exception:
+            pass
         super().closeEvent(event)
 
     def _on_nav_selected(self, key: str) -> None:

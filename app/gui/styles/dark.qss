@@ -345,6 +345,39 @@ QLabel[role="toast-body"] {
     font-size: {{font.size_body}};
 }
 
+/* ---- Recording Overlay -------------------------------------------------- */
+
+#RecordingOverlay {
+    background: transparent;
+    border: none;
+}
+
+QFrame[role="recording-overlay-surface"] {
+    background-color: {{color.bg_elevated}};
+    border: 1px solid {{color.border}};
+    border-radius: 24px;
+}
+
+QFrame[role="recording-overlay-dot"] {
+    background-color: {{color.danger}};
+    border-radius: 7px;
+}
+
+QFrame[role="recording-overlay-dot"][state="processing"] {
+    background-color: {{color.warning}};
+}
+
+QLabel[role="recording-overlay-title"] {
+    color: {{color.text_primary}};
+    font-size: {{font.size_small}};
+    font-weight: 700;
+}
+
+QLabel[role="recording-overlay-body"] {
+    color: {{color.text_secondary}};
+    font-size: {{font.size_small}};
+}
+
 /* ---- TopBar -------------------------------------------------------------- */
 
 #TopBar {

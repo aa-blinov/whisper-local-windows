@@ -103,6 +103,16 @@ def test_main_window_has_topbar(qtbot):
     assert window.topbar.parent() is not None
 
 
+def test_main_window_has_recording_overlay(qtbot):
+    from app.gui.main_window import MainWindow
+    from app.gui.widgets.recording_overlay import RecordingOverlay
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert isinstance(window.recording_overlay, RecordingOverlay)
+    assert window.recording_overlay.parent() is None
+
+
 def test_main_window_uses_history_view_for_history_key(qtbot):
     from app.gui.main_window import MainWindow
     from app.gui.views.history_view import HistoryView

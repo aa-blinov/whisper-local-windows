@@ -1679,6 +1679,29 @@ def test_controller_updates_sidebar_recording_pill_on_state_change(qtbot):
     assert pill.property("state") == "idle"
 
 
+def test_controller_updates_recording_overlay_on_state_change(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+
+    rec.state_changed.emit("recording")
+    assert window.recording_overlay.isVisible()
+    assert window.recording_overlay.state() == "recording"
+
+    rec.state_changed.emit("processing")
+    assert window.recording_overlay.isVisible()
+    assert window.recording_overlay.state() == "processing"
+
+    rec.state_changed.emit("idle")
+    assert not window.recording_overlay.isVisible()
+
+
 def test_controller_routes_topbar_cancel_to_recording_controller(qtbot):
     """The topbar's Cancel button emits ``cancel_load_requested``; the
     AppController must wire that into ``recording.cancel_model_change``

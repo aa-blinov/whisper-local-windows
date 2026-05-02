@@ -969,6 +969,7 @@ class AppController(
         recording.state_changed.connect(
             self._window.sidebar.recording_status.set_recording_state
         )
+        recording.state_changed.connect(self._window.recording_overlay.set_state)
         recording.state_changed.connect(self._on_recording_state_changed)
         recording.history_updated.connect(self._on_history_updated_signal)
         # Optional: download progress (only the real RecordingController
@@ -985,6 +986,11 @@ class AppController(
         self._window.topbar.cancel_load_requested.connect(
             self._on_cancel_load_requested
         )
+        try:
+            current_state = recording.current_state()
+        except Exception:
+            current_state = "idle"
+        self._window.recording_overlay.set_state(current_state)
 
     def _on_cancel_load_requested(self) -> None:
         if self._recording is None:
