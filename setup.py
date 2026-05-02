@@ -172,7 +172,7 @@ _PLIST = {
     "CFBundleShortVersionString": "0.0.1",
     "CFBundleExecutable": "Lazy to Text",
     "LSMinimumSystemVersion": "12.0",
-    "LSUIElement": False,
+    "LSUIElement": True,
     "NSHighResolutionCapable": True,
     "NSMicrophoneUsageDescription": (
         "Lazy to Text records audio from the microphone to "

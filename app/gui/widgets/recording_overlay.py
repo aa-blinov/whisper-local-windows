@@ -120,6 +120,9 @@ class RecordingOverlay(QFrame):
             from AppKit import (
                 NSWindowCollectionBehaviorCanJoinAllSpaces,
                 NSWindowCollectionBehaviorFullScreenAuxiliary,
+                NSWindowCollectionBehaviorMoveToActiveSpace,
+                NSWindowCollectionBehaviorIgnoresCycle,
+                NSWindowCollectionBehaviorStationary,
                 NSStatusWindowLevel,
             )
 
@@ -136,11 +139,7 @@ class RecordingOverlay(QFrame):
                 # 1. Allow window to float over fullscreen apps
                 # 2. Allow window to appear on all Spaces/desktops
                 # 3. Ensure it moves to the active space immediately
-                from AppKit import (
-                    NSWindowCollectionBehaviorMoveToActiveSpace,
-                    NSWindowCollectionBehaviorIgnoresCycle,
-                    NSWindowCollectionBehaviorStationary,
-                )
+                # 4. Hide from Cmd+Tab and stationary during swipe
                 ns_window.setCollectionBehavior_(
                     NSWindowCollectionBehaviorCanJoinAllSpaces
                     | NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -149,20 +148,22 @@ class RecordingOverlay(QFrame):
                     | NSWindowCollectionBehaviorStationary
                 )
                 
-                # NSScreenSaverWindowLevel (1000) is very high, usually 
-                # reserved for screen savers and system overlays. 
-                # This ensures we are above the Notch, Menu Bar, and 
-                # Fullscreen app shields.
-                from AppKit import NSScreenSaverWindowLevel
-                ns_window.setLevel_(NSScreenSaverWindowLevel)
+                # NSStatusWindowLevel is high enough to be above fullscreen 
+                # apps but below the Notch/Menu Bar area. 
+                ns_window.setLevel_(NSStatusWindowLevel)
 
                 # Prevent the window from being hidden when the app is inactive
                 ns_window.setHidesOnDeactivate_(False)
                 ns_window.setCanHide_(False)
+                
+                # Force it to front
+                ns_window.orderFrontRegardless()
 
             self._mac_behaviors_applied = True
-        except Exception:
-            # Silently fail if native hooks aren't available
+        except Exception as e:
+            # Silently fail but log to a temp file for debugging
+            with open("/tmp/ltt-overlay.log", "a") as f:
+                f.write(f"Overlay behavior error: {e}\n")
             pass
 
     def _reposition(self) -> None:
