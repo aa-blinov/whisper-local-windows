@@ -1987,9 +1987,11 @@ def test_controller_routes_model_select_through_recording_when_present(qtbot):
     assert ("whisper", "model", "vosk-ru-small") in config.writes
     # compute_type written too — the registry tells us each card's preference
     assert ("whisper", "compute_type", "float16") in config.writes
-    # AND recording stack was asked to actually switch (with compute_type)
+    # AND recording stack was asked to actually switch using the
+    # registry alias, because multiple presets can share one canonical
+    # repo but still differ by backend load_id / decoder choice.
     assert rec.model_change_requests == [
-        ("alphacep/vosk-model-small-ru", "float16"),
+        ("vosk-ru-small", "float16"),
     ]
 
 
@@ -2240,6 +2242,50 @@ def test_controller_restart_requested_uses_execv_outside_frozen_macos(
     assert execv_calls == [
         ("/Users/me/project/.venv/bin/python", ["/Users/me/project/.venv/bin/python", "lazy-to-text-ui"])
     ]
+
+
+def test_controller_refreshes_macos_permissions_live(qtbot):
+    from PySide6.QtWidgets import QComboBox
+
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    class _HotkeyListener:
+        def __init__(self):
+            self.stop_calls = 0
+            self.start_calls = 0
+
+        def stop_listening(self):
+            self.stop_calls += 1
+
+        def start_listening(self):
+            self.start_calls += 1
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    recorder = FakeAudioRecorder()
+    recorder.device = 7
+    rec = FakeRecordingController(
+        state_manager=FakeStateManager(audio_recorder=recorder),
+    )
+    rec.list_input_devices = lambda: [(7, "USB Mic"), (9, "AirPods Mic")]
+    rec.current_input_device = lambda: 7
+    rec._hotkey_listener = _HotkeyListener()
+
+    controller = AppController(config=config, window=window, recording=rec)
+
+    combo = window.shortcuts_view.findChild(QComboBox, "MicrophoneCombo")
+    combo.clear()
+    combo.addItem("stale", None)
+
+    controller._on_macos_permissions_changed()
+
+    assert combo.count() == 3
+    assert combo.itemText(1) == "[7] USB Mic"
+    assert combo.currentData() == 7
+    assert rec._hotkey_listener.stop_calls == 1
+    assert rec._hotkey_listener.start_calls == 1
 
 
 def test_controller_forwards_recording_state_to_tray(qtbot):

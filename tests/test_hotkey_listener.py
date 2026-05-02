@@ -98,7 +98,7 @@ def test_stop_listening_joins_pynput_threads(monkeypatch):
     listener._ptt_listener = ptt_thread
     listener._ptt_held = True
 
-    monkeypatch.setattr(hotkey_listener.sys, "platform", "darwin")
+    monkeypatch.setattr(hotkey_listener.sys, "platform", "linux")
 
     listener.stop_listening()
 

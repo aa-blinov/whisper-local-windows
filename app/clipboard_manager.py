@@ -5,6 +5,8 @@ from typing import Optional
 
 import pyperclip
 
+from app.macos_permissions import is_post_event_access_trusted
+
 if sys.platform == "win32":
     import win32api
     import win32con
@@ -21,6 +23,7 @@ else:
 # to reach into the Carbon framework just for two integers.
 _MAC_KEYCODE_V = 0x09        # ANSI_V
 _MAC_KEYCODE_RETURN = 0x24   # ANSI_Return
+_MAC_KEYCODE_LEFT_COMMAND = 0x37
 
 
 class ClipboardManager:
@@ -43,64 +46,34 @@ class ClipboardManager:
             raise
 
     def _check_mac_post_event_access(self) -> None:
-        """Probe whether macOS will let us post synthetic keystrokes.
+        """Probe whether macOS will let us drive auto-paste keystrokes.
 
-        macOS 14+ introduced a separate TCC gate for synthetic event
-        injection — an Accessibility-granted process is **not**
-        automatically allowed to call ``CGEventPost``.  The new
-        ``CGPreflightPostEventAccess()`` reports the live state, and
-        ``CGRequestPostEventAccess()`` triggers the system prompt
-        when access is missing.
-
-        On older macOS versions (or when the symbol isn't bound by
-        the installed pyobjc), the call short-circuits with a
-        debug-level log and we keep going — Accessibility was
-        sufficient there.
-
-        This is purely diagnostic on the calling side: a denied
-        access state explains why ``execute_auto_paste`` would log
-        "Auto-pasted via key simulation" but the focused app never
-        receives a paste — Quartz silently swallows the event when
-        the post-event grant is missing.
+        This is intentionally *diagnostic only*. We no longer auto-fire
+        the system permission prompt from startup code — the Settings UI
+        owns that interaction so the user sees a clear explanation of
+        why auto-paste is unavailable.
         """
         if sys.platform != "darwin":
             return
-        try:
-            from Quartz import (
-                CGPreflightPostEventAccess,
-                CGRequestPostEventAccess,
-            )
-        except ImportError:
+        granted = is_post_event_access_trusted()
+        if granted is None:
             self.logger.debug(
-                "CGPreflight/RequestPostEventAccess unavailable in this "
-                "pyobjc — skipping post-event TCC probe (older macOS "
-                "doesn't gate this anyway)."
+                "macOS Accessibility probe unavailable in this runtime "
+                "(older macOS or older pyobjc) — skipping dedicated "
+                "auto-paste permission check."
             )
             return
-
-        try:
-            if CGPreflightPostEventAccess():
-                self.logger.info(
-                    "macOS post-event access: granted — auto-paste "
-                    "synthetic keystrokes will be delivered."
-                )
-                return
-            self.logger.warning(
-                "macOS post-event access: NOT granted — auto-paste "
-                "Cmd+V will be silently dropped by Quartz.  Triggering "
-                "the system prompt now;  approve in System Settings → "
-                "Privacy & Security → Accessibility for Lazy to Text "
-                "to enable auto-paste.",
+        if granted:
+            self.logger.info(
+                "macOS keyboard-control access: granted — auto-paste "
+                "keystrokes can be delivered to the focused app."
             )
-            # Async: pops the system dialog without blocking init.
-            # Returns True if access is already granted (which the
-            # preflight above already negated, so log the result for
-            # diagnostics only).
-            CGRequestPostEventAccess()
-        except Exception as exc:
-            self.logger.debug(
-                "macOS post-event TCC probe failed (non-fatal): %s", exc,
-            )
+            return
+        self.logger.warning(
+            "macOS keyboard-control access: NOT granted — auto-paste "
+            "Cmd+V will not reach the focused app until the user "
+            "allows Lazy to Text under Accessibility."
+        )
     
     def _print_status(self):
         if sys.platform == "darwin":
@@ -286,18 +259,12 @@ class ClipboardManager:
         Windows: raw ``win32api.keybd_event`` Ctrl+V — works against
         every Win32 app, no permission prompts.
 
-        macOS: ``pynput.keyboard.Controller`` Cmd+V — same Quartz
-        CGEvent path the global hotkey listener uses, so once the
-        user has granted Accessibility once (for Ctrl+F8…F10) the
-        same permission powers paste delivery.  ``pyautogui.hotkey``
-        on Mac was unreliable: the events posted to the HID tap
-        without the application-targeting context that real key
-        presses carry, so a fraction of macOS apps (notably
-        Telegram, some Electron-based editors) treated them as
-        non-keystrokes and dropped the paste silently.  Going
-        through ``pynput.keyboard.Controller`` builds a proper
-        Cocoa-style key event with ``kCGEventFlagMaskCommand`` set,
-        which every paste-handling app respects.
+        macOS: first try ``AXUIElementPostKeyboardEvent`` against the
+        active app through the Accessibility API. That targets the
+        focused application directly and is more reliable for a
+        background helper app than spraying a generic Quartz event
+        into the session. If that path isn't available, fall back to
+        the lower-level Quartz ``CGEventPost`` implementation.
 
         Linux: keep ``pyautogui`` (X11 / Wayland backend).
         """
@@ -316,7 +283,16 @@ class ClipboardManager:
             return
 
         if sys.platform == "darwin":
-            self._send_mac_keystroke_with_cmd(_MAC_KEYCODE_V, "Cmd+V")
+            if not self._send_mac_accessibility_key_sequence(
+                [
+                    (0, _MAC_KEYCODE_LEFT_COMMAND, True),
+                    (ord("v"), _MAC_KEYCODE_V, True),
+                    (ord("v"), _MAC_KEYCODE_V, False),
+                    (0, _MAC_KEYCODE_LEFT_COMMAND, False),
+                ],
+                "Cmd+V",
+            ):
+                self._send_mac_keystroke_with_cmd(_MAC_KEYCODE_V, "Cmd+V")
             return
 
         # Linux — pyautogui with X11 / Wayland.
@@ -340,7 +316,14 @@ class ClipboardManager:
             return
 
         if sys.platform == "darwin":
-            self._send_mac_keystroke(_MAC_KEYCODE_RETURN, "Enter")
+            if not self._send_mac_accessibility_key_sequence(
+                [
+                    (0x0D, _MAC_KEYCODE_RETURN, True),
+                    (0x0D, _MAC_KEYCODE_RETURN, False),
+                ],
+                "Enter",
+            ):
+                self._send_mac_keystroke(_MAC_KEYCODE_RETURN, "Enter")
             return
 
         try:
@@ -352,6 +335,61 @@ class ClipboardManager:
             self.logger.error(f"Failed to send ENTER: {e}")
 
     # ---- macOS keystroke helpers --------------------------------------------
+
+    def _send_mac_accessibility_key_sequence(
+        self,
+        steps: list[tuple[int, int, bool]],
+        label: str,
+    ) -> bool:
+        """Send keys to the active macOS app via Accessibility APIs.
+
+        This path targets the focused application directly instead of
+        posting low-level events into the generic Quartz stream. It is
+        more reliable for background helper apps like ours because the
+        destination stays the active app rather than the current
+        process.
+        """
+        try:
+            from ApplicationServices import (
+                AXUIElementCreateSystemWide,
+                AXUIElementPostKeyboardEvent,
+            )
+        except ImportError as exc:
+            self.logger.debug(
+                "Accessibility keyboard API unavailable for %s: %s",
+                label,
+                exc,
+            )
+            return False
+
+        try:
+            target = AXUIElementCreateSystemWide()
+            for key_char, key_code, key_down in steps:
+                result = AXUIElementPostKeyboardEvent(
+                    target,
+                    key_char,
+                    key_code,
+                    bool(key_down),
+                )
+                if int(result) != 0:
+                    self.logger.debug(
+                        "Accessibility key send failed for %s "
+                        "(char=%s keycode=%s down=%s result=%s)",
+                        label,
+                        key_char,
+                        key_code,
+                        key_down,
+                        result,
+                    )
+                    return False
+                time.sleep(0.01)
+            time.sleep(max(0.02, self.key_simulation_delay))
+            return True
+        except Exception as exc:
+            self.logger.debug(
+                "Accessibility key send raised for %s: %s", label, exc
+            )
+            return False
 
     def _send_mac_keystroke(
         self, key_code: int, label: str, flags: int = 0

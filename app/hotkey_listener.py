@@ -184,10 +184,11 @@ class HotkeyListener:
           would otherwise be the same combo).
         - ``"push_to_talk"`` — hold ``push_to_talk_key`` to record,
           release to stop and transcribe.  The PTT path uses a raw
-          ``pynput.keyboard.Listener`` on macOS/Linux and the
-          documented ``global_hotkeys`` press/release callbacks on
-          Windows, because that platform already routes the normal
-          hotkey path through ``global-hotkeys``.
+          native event monitor on macOS, ``pynput.keyboard.Listener``
+          on Linux, and the documented ``global_hotkeys``
+          press/release callbacks on Windows, because that platform
+          already routes the normal hotkey path through
+          ``global-hotkeys``.
           Bindings shorter than ``push_to_talk_min_hold_seconds``
           are treated as accidental taps and cancel the recording
           before transcription, so a glancing right-Cmd press
@@ -207,14 +208,19 @@ class HotkeyListener:
         self.push_to_talk_min_hold_seconds = float(push_to_talk_min_hold_seconds)
         self.is_listening = False
         self.logger = logging.getLogger(__name__)
+        # macOS path: native AppKit event monitors instead of pynput.
+        self._mac_monitor = None
+        self._mac_hotkeys = []
+        self._mac_ptt_spec = None
         # Non-Windows path: pynput's GlobalHotKeys instance (created
         # by ``_setup_hotkeys`` and started by ``start_listening``).
+        # Linux keeps this path; macOS now uses ``_mac_monitor``.
         self._pynput_listener = None
         self._pynput_callbacks: dict[str, callable] = {}
         # Non-Windows push-to-talk: separate ``pynput.keyboard.Listener``
-        # that tracks raw on_press / on_release for the configured key.
-        # Lives alongside the GlobalHotKeys instance (which registers
-        # the cancel combo, if any).
+        # that tracks raw on_press / on_release for the configured
+        # key on Linux. macOS uses the native AppKit monitor for both
+        # combos and push-to-talk.
         self._ptt_listener = None
         self._ptt_windows_binding = None
         self._ptt_target_key = None  # pynput.keyboard.Key enum
@@ -232,19 +238,28 @@ class HotkeyListener:
     
     def _setup_hotkeys(self):
         hotkey_configs = []
+        self._ptt_windows_binding = None
+        self._ptt_target_key = None
+        self._mac_ptt_spec = None
 
         if self.mode == "push_to_talk":
             # PTT path:  the press/release listener is set up
-            # separately on macOS/Linux via ``pynput``;  on Windows
-            # we keep everything inside ``global-hotkeys`` and bind a
-            # press + release callback pair for the PTT key itself.
-            self._ptt_windows_binding = None
-            self._ptt_target_key = None
+            # separately on macOS/Linux via a raw key-event path; on
+            # Windows we keep everything inside ``global-hotkeys`` and
+            # bind a press + release callback pair for the PTT key
+            # itself.
             if sys.platform == "win32":
                 self._ptt_windows_binding = self._resolve_windows_ptt_binding(
                     self.push_to_talk_key
                 )
                 ptt_available = self._ptt_windows_binding is not None
+            elif sys.platform == "darwin":
+                from app.macos_hotkeys import resolve_push_to_talk_spec
+
+                self._mac_ptt_spec = resolve_push_to_talk_spec(
+                    self.push_to_talk_key
+                )
+                ptt_available = self._mac_ptt_spec is not None
             else:
                 self._ptt_target_key = self._resolve_pynput_ptt_key(
                     self.push_to_talk_key
@@ -331,6 +346,7 @@ class HotkeyListener:
 
         hotkey_configs.sort(key=self._get_hotkey_combination_specificity, reverse=True)
         self.hotkey_bindings = []
+        self._mac_hotkeys = []
         self._pynput_callbacks = {}
         for config in hotkey_configs:
             if sys.platform == "win32":
@@ -341,12 +357,34 @@ class HotkeyListener:
                     config.get('release_callback') or None,
                     False
                 ])
+            elif sys.platform == "darwin":
+                from app.macos_hotkeys import parse_hotkey_spec
+
+                try:
+                    spec = parse_hotkey_spec(
+                        config['combination'],
+                        config['callback'],
+                        name=config['name'],
+                    )
+                except Exception as exc:
+                    self.logger.warning(
+                        "Skipping unsupported macOS hotkey %r: %s",
+                        config['combination'],
+                        exc,
+                    )
+                    continue
+                self._mac_hotkeys.append(spec)
+                formatted_hotkey = (
+                    f"keycode={spec.key_code} flags={spec.required_flags}"
+                )
             else:
                 formatted_hotkey = self._convert_hotkey_to_pynput_format(config['combination'])
                 self._pynput_callbacks[formatted_hotkey] = config['callback']
             self.logger.info(f"Configured {config['name']} hotkey: {config['combination']} -> {formatted_hotkey}")
         if sys.platform == "win32":
             self.logger.info(f"Total hotkeys configured: {len(self.hotkey_bindings)}")
+        elif sys.platform == "darwin":
+            self.logger.info(f"Total hotkeys configured: {len(self._mac_hotkeys)}")
         else:
             self.logger.info(f"Total hotkeys configured: {len(self._pynput_callbacks)}")
 
@@ -520,6 +558,17 @@ class HotkeyListener:
                     )
                     register_hotkeys(self.hotkey_bindings)
                     start_checking_hotkeys()
+            elif sys.platform == "darwin":
+                from app.macos_hotkeys import MacHotkeyMonitor
+
+                self._mac_monitor = MacHotkeyMonitor(
+                    self._mac_hotkeys,
+                    push_to_talk=self._mac_ptt_spec,
+                    on_push_to_talk_press=self._ptt_press,
+                    on_push_to_talk_release=self._ptt_release,
+                    logger=self.logger,
+                )
+                self._mac_monitor.start()
             else:
                 _patch_pynput_darwin_listener()
                 from pynput import keyboard as _pk
@@ -555,6 +604,11 @@ class HotkeyListener:
                 except (ImportError, AttributeError):
                     # Если функция clear_hotkeys недоступна, используем альтернативный подход
                     self.logger.debug("clear_hotkeys not available, using alternative cleanup")
+            elif sys.platform == "darwin":
+                mac_monitor = getattr(self, "_mac_monitor", None)
+                if mac_monitor is not None:
+                    mac_monitor.stop()
+                    self._mac_monitor = None
             else:
                 if self._pynput_listener is not None:
                     self._stop_pynput_thread(

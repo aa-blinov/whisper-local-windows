@@ -130,12 +130,15 @@ result appear.
 Two system prompts appear the first time you exercise the relevant
 features:
 
-- **Microphone** — requested by `sounddevice` / CoreAudio when the
-  recorder opens the input device. Click *Allow*.
-- **Accessibility** — required by `pynput` for global hotkeys and by
-  `pyautogui` for the auto-paste keystroke. macOS won't prompt for
-  this automatically; open *System Settings → Privacy & Security →
-  Accessibility* and add the binary you launch.
+- **Microphone** — requested from the Settings banner via
+  AVFoundation. Click *Allow*; recording starts working in the same
+  app session, no full restart needed.
+- **Accessibility / keyboard access** — global hotkeys and macOS
+  auto-paste both rely on Accessibility trust for the `.app` bundle.
+  The Settings tab surfaces the relevant banners and can trigger the
+  system request flow. If macOS refuses to prompt,
+  open *System Settings → Privacy & Security → Accessibility* and add
+  the binary you launch.
 
   Recommended path: build the proper `.app` bundle (next section)
   and add **`Lazy to Text.app`** instead of trying to whitelist
@@ -163,7 +166,7 @@ The script invokes [`py2app`](https://py2app.readthedocs.io) in
 the project's venv, so each build takes seconds and source edits
 in `app/` are picked up on the next launch with no rebuild. The
 host process now reports as **Lazy to Text** (not `python3.12`),
-microphone / Accessibility prompts use the bundle identifier
+microphone / keyboard-access prompts use the bundle identifier
 `ai.eora.lazytotext`, and the bundled icon is the same squircle
 the in-app code paints.
 
@@ -251,7 +254,7 @@ Developer ID certificate. macOS therefore treats each rebuilt app as a
 new code identity for privacy permissions. After reinstalling a fresh
 bundle into `/Applications`, you may need to re-grant
 `Accessibility` for `Lazy to Text.app` before global hotkeys and
-synthetic paste keystrokes work again.
+auto-paste keystrokes work again.
 
 #### Windows — portable folder via PyInstaller
 
@@ -527,7 +530,9 @@ app/
 ├── config_manager.py                      ← domain: yaml read/write
 ├── history_manager.py                     ← domain: transcription history JSON
 ├── hotkey_listener.py                     ← domain: cross-platform hotkey binding
-│                                            (global-hotkeys on Win, pynput elsewhere)
+│                                            (global-hotkeys on Win,
+│                                             native AppKit monitor on macOS,
+│                                             pynput on Linux)
 ├── instance_manager.py                    ← domain: single-instance lock
 │                                            (named mutex on Win, filelock elsewhere)
 ├── model_mapping.py                       ← domain: registry of supported models
@@ -626,8 +631,11 @@ session.
 - `sounddevice` for audio capture, `pyperclip` for clipboard text
 - Hotkeys + auto-paste:
   Windows uses `global-hotkeys` + `pywin32` (native `RegisterHotKey`
-  + `keybd_event`); macOS / Linux use [`pynput`](https://pynput.readthedocs.io/)
-  (`GlobalHotKeys` + key simulation through `pyautogui` Cmd/Ctrl+V)
+  + `keybd_event`);
+  macOS uses a native AppKit keyboard monitor for hotkeys plus
+  Accessibility-targeted key delivery for auto-paste (with Quartz as a
+  fallback);
+  Linux uses [`pynput`](https://pynput.readthedocs.io/) for hotkeys
 - Sound feedback: `winsound` (Windows) / [`playsound3`](https://github.com/szmikler/playsound3)
   (macOS via AppKit, Linux via GStreamer)
 - Single-instance lock: native named mutex on Windows, `filelock`

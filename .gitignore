@@ -125,6 +125,10 @@ app/assets/lazy_to_text.icns
 # is interrupted.
 pyproject.toml.bak
 
+# Placeholder file created by setup.py to work around py2app 0.28
+# assuming builtin zlib has a physical extension file.
+.py2app-zlib-built-in-placeholder
+
 # Application logs
 *.log
 logs/

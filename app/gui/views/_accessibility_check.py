@@ -1,56 +1,43 @@
-"""macOS-only Accessibility-permission probe used by the Settings
-banner.
+"""Compatibility wrappers for the macOS keyboard-access probes.
 
-``pynput`` listens for global keyboard events through ``CGEventTap``
-which silently returns no events at all when the host process isn't
-on the system's Accessibility allow-list. The warning ``pynput``
-prints lands in ``logs/app.log`` only — users almost never see it.
-This helper exposes the same check synchronously so the Settings
-view can show a banner explaining why hotkeys aren't firing.
+Historically this module exposed a single
+``is_accessibility_trusted()`` helper backed by
+``AXIsProcessTrusted()``. The app now distinguishes between:
 
-The call goes through ``ApplicationServices.AXIsProcessTrusted``,
-which is part of pyobjc and shipped transitively via ``pynput`` on
-macOS — no extra dependency to declare.
+- listening to global key events (hotkeys)
+- posting synthetic key events (auto-paste)
+
+The canonical implementation lives in :mod:`app.macos_permissions`;
+this module keeps the old import path alive for the Settings view and
+older tests.
 """
 
 from __future__ import annotations
 
-import sys
 from typing import Optional
 
+from app.macos_permissions import (
+    is_listen_event_access_trusted,
+    is_post_event_access_trusted,
+    open_accessibility_settings,
+    request_listen_event_access,
+    request_post_event_access,
+)
 
 def is_accessibility_trusted() -> Optional[bool]:
-    """``True`` when the process can read global keyboard events,
-    ``False`` when the user hasn't granted Accessibility access yet,
-    ``None`` on platforms where the question doesn't apply
-    (Windows / Linux: hotkeys work without an extra permission so
-    we never need to surface a banner)."""
-    if sys.platform != "darwin":
-        return None
-    try:
-        from ApplicationServices import AXIsProcessTrusted
-    except ImportError:  # pragma: no cover — pyobjc is mac-only
-        return None
-    try:
-        return bool(AXIsProcessTrusted())
-    except Exception:  # pragma: no cover — defensive
-        return None
+    """Backward-compatible alias for the listen-event permission."""
+    return is_listen_event_access_trusted()
 
 
-def open_accessibility_settings() -> bool:
-    """Launch the System Settings panel that lists Accessibility
-    clients so the user can toggle our process on without hunting
-    through nested settings panes.
+def request_accessibility_access() -> bool:
+    """Ask macOS to grant hotkey-listening permission."""
+    return request_listen_event_access()
 
-    Returns ``True`` on success.  No-op on non-macOS platforms.
-    """
-    if sys.platform != "darwin":
-        return False
-    import subprocess
 
-    url = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-    try:
-        subprocess.Popen(["open", url])
-        return True
-    except Exception:  # pragma: no cover — defensive
-        return False
+__all__ = [
+    "is_accessibility_trusted",
+    "is_post_event_access_trusted",
+    "open_accessibility_settings",
+    "request_accessibility_access",
+    "request_post_event_access",
+]

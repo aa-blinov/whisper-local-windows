@@ -511,18 +511,15 @@ class AppController(
 
         # Populate the microphone dropdown if a recording stack is wired in.
         if self._recording is not None and hasattr(self._recording, "list_input_devices"):
-            try:
-                devices = self._recording.list_input_devices()
-                current = self._recording.current_input_device()
-            except Exception:
-                devices, current = [], None
-            view.set_devices(devices, current)
+            self._refresh_shortcuts_devices()
 
         view.save_requested.connect(self._on_shortcuts_save)
         view.hotkeys_reset_requested.connect(self._on_hotkeys_reset)
         view.hf_token_reset_requested.connect(self._on_hf_token_reset)
         view.test_mic_requested.connect(self._on_test_mic_requested)
-        view.restart_requested.connect(self._on_restart_requested)
+        view.mac_permissions_changed.connect(
+            self._on_macos_permissions_changed
+        )
 
         # Storage card — connect signals + paint resolved path / size.
         # The whole behaviour lives in ``StorageMixin``; calling
@@ -816,6 +813,31 @@ class AppController(
         if sm is None:
             return None
         return getattr(sm, "clipboard_manager", None)
+
+    def _refresh_shortcuts_devices(self) -> None:
+        if self._recording is None or not hasattr(
+            self._recording, "list_input_devices"
+        ):
+            return
+        try:
+            devices = self._recording.list_input_devices()
+            current = self._recording.current_input_device()
+        except Exception:
+            devices, current = [], None
+        self._window.shortcuts_view.set_devices(devices, current)
+
+    def _on_macos_permissions_changed(self) -> None:
+        """Refresh macOS runtime pieces that can start working
+        immediately after a TCC permission grant."""
+        self._refresh_shortcuts_devices()
+        listener = self._resolve_hotkey_listener()
+        if listener is None:
+            return
+        try:
+            listener.stop_listening()
+            listener.start_listening()
+        except Exception as exc:  # pragma: no cover - defensive
+            log.warning("Failed to refresh macOS hotkey listener: %s", exc)
 
     def _on_restart_requested(self) -> None:
         """Clean-shutdown + relaunch the process.

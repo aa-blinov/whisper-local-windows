@@ -104,6 +104,23 @@ def _ptt_solo_keys_for_platform(platform: str) -> frozenset[str]:
     return _NON_WINDOWS_PTT_SOLO_KEYS
 
 
+def is_push_to_talk_solo_key(
+    text: str, *, platform: str | None = None
+) -> bool:
+    """Return whether ``text`` is one of the platform's supported
+    solo push-to-talk modifier keys.
+
+    Kept separate from :func:`validate_hotkey` so other UI code can
+    branch on the active binding shape without re-running the full
+    validation routine.
+    """
+    raw = (text or "").strip().lower()
+    if not raw:
+        return False
+    resolved_platform = platform or sys.platform
+    return raw in _ptt_solo_keys_for_platform(resolved_platform)
+
+
 def validate_hotkey(
     text: str,
     *,
@@ -136,7 +153,9 @@ def validate_hotkey(
     # vocabulary up-front, before normal parsing splits on ``+``.
     # ``right_cmd`` doesn't have a ``+`` separator, and the modifier
     # check below would reject it because nothing precedes the key.
-    if push_to_talk and raw.lower() in _ptt_solo_keys_for_platform(resolved_platform):
+    if push_to_talk and is_push_to_talk_solo_key(
+        raw, platform=resolved_platform
+    ):
         return None
 
     raw_parts = [p.strip().lower() for p in raw.split("+")]

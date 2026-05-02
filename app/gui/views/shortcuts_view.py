@@ -14,16 +14,22 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.gui.smooth_scroll import apply_smooth_scroll
 from app.gui.views._accessibility_check import (
     is_accessibility_trusted,
+    is_post_event_access_trusted,
     open_accessibility_settings,
+    request_accessibility_access,
+    request_post_event_access,
 )
-from app.gui.views._hotkey_validation import validate_all
+from app.gui.views._hotkey_validation import (
+    is_push_to_talk_solo_key,
+    validate_all,
+)
 from app.gui.views._microphone_check import (
     microphone_authorization_status,
     open_microphone_settings,
     request_microphone_access,
 )
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -89,11 +95,10 @@ class ShortcutsView(QWidget):
     # Hugging Face card — fired on focus loss after the user edits
     # the token field. Controller persists + applies to env.
     hf_token_changed = Signal(str)
-    # macOS-only — the user clicked "Restart now" on the
-    # Accessibility-permission banner after granting access.  The
-    # controller is responsible for the actual relaunch (clean
-    # backend shutdown + ``os.execv`` swap).
-    restart_requested = Signal()
+    # macOS-only — a permission changed in a way that may require
+    # lightweight runtime refresh (e.g. re-enumerate microphones or
+    # rebuild the hotkey monitor), but not a full app restart.
+    mac_permissions_changed = Signal()
     # macOS-only — bridges the asynchronous AVFoundation microphone
     # permission callback back onto the GUI thread. Emitting a Qt
     # signal from the background completion handler is reliable;
@@ -121,6 +126,9 @@ class ShortcutsView(QWidget):
         # — ``set_values`` skips it because the values come from
         # config and don't need a "previous" copy.
         self._previous_stop_hotkey: Optional[str] = None
+        self._last_accessibility_trusted = is_accessibility_trusted()
+        self._last_mic_status = microphone_authorization_status()
+        self._last_post_event_trusted = is_post_event_access_trusted()
 
         # Outer layout = top hint pinned + scrollable card stack.
         # Without the scroll area Qt tried to fit every card into
@@ -172,10 +180,7 @@ class ShortcutsView(QWidget):
         # ``sounddevice.InputStream.start`` returns silence with no
         # exception, so recording "works" but every transcription
         # comes back empty. Surface the state explicitly with a
-        # banner that walks the user through grant → restart.
-        self._mic_was_unauthorized_at_start = (
-            microphone_authorization_status() not in (None, "authorized")
-        )
+        # banner that walks the user through grant.
         self._mic_banner = QFrame(audio_card)
         self._mic_banner.setObjectName("MicrophoneWarningBanner")
         self._mic_banner.setProperty("role", "warning-banner")
@@ -195,8 +200,7 @@ class ShortcutsView(QWidget):
         mic_banner_layout.addWidget(self._mic_banner_button, 0)
         self._mic_banner.setVisible(False)
         # State machine: ``"not_determined"`` (Allow access) /
-        # ``"denied"`` (Open Microphone settings) / ``"granted"``
-        # (Restart now) / ``"hidden"``.
+        # ``"denied"`` (Open Microphone settings) / ``"hidden"``.
         self._mic_state = "hidden"
         audio_form.addRow(self._mic_banner)
         self._refresh_mic_banner()
@@ -269,13 +273,8 @@ class ShortcutsView(QWidget):
         # ``pynput``'s already-installed event tap was attached
         # under the old untrusted state and won't pick up new
         # events without a relaunch — so we flip the banner to a
-        # "Restart now" prompt rather than hiding it.  Hiding the
-        # banner the moment the API says trusted would mislead the
-        # user into thinking hotkeys work when they actually still
-        # silently fail.
-        self._accessibility_was_untrusted_at_start = (
-            is_accessibility_trusted() is False
-        )
+        # now allow us to rebuild the listener live, so the banner
+        # can simply disappear once permission is granted.
         self._accessibility_banner = QFrame(hotkeys_card)
         self._accessibility_banner.setObjectName("AccessibilityWarningBanner")
         self._accessibility_banner.setProperty("role", "warning-banner")
@@ -307,8 +306,8 @@ class ShortcutsView(QWidget):
         # The form's row spans both columns — the banner runs full
         # card width, not nested under the field column.
         hotkeys_form.addRow(self._accessibility_banner)
-        # State machine: ``"untrusted"`` (Open Accessibility
-        # settings) / ``"granted"`` (Restart now) / ``"hidden"``.
+        # State machine: ``"untrusted"`` (request/open settings) /
+        # ``"hidden"``.
         self._accessibility_state = "hidden"
         self._refresh_accessibility_banner()
 
@@ -422,6 +421,31 @@ class ShortcutsView(QWidget):
         # ---- Clipboard card ---------------------------------------------
         clipboard_card, clipboard_form = _make_section_card("Clipboard", self)
 
+        # macOS 14+ can gate synthetic key posting separately from
+        # global hotkey listening. Surface that state next to the
+        # auto-paste toggle so the user sees why text is copied but
+        # not inserted into the focused app.
+        self._post_event_banner = QFrame(clipboard_card)
+        self._post_event_banner.setObjectName("PostEventWarningBanner")
+        self._post_event_banner.setProperty("role", "warning-banner")
+        post_event_layout = QHBoxLayout(self._post_event_banner)
+        post_event_layout.setContentsMargins(12, 10, 12, 10)
+        post_event_layout.setSpacing(12)
+        self._post_event_banner_text = QLabel("", self._post_event_banner)
+        self._post_event_banner_text.setWordWrap(True)
+        self._post_event_banner_text.setProperty("role", "warning-banner-text")
+        post_event_layout.addWidget(self._post_event_banner_text, 1)
+        self._post_event_banner_button = QPushButton("", self._post_event_banner)
+        self._post_event_banner_button.setObjectName("PostEventActionButton")
+        self._post_event_banner_button.setFocusPolicy(Qt.NoFocus)
+        self._post_event_banner_button.clicked.connect(
+            self._on_post_event_banner_clicked,
+        )
+        post_event_layout.addWidget(self._post_event_banner_button, 0)
+        self._post_event_banner.setVisible(False)
+        self._post_event_state = "hidden"
+        clipboard_form.addRow(self._post_event_banner)
+
         self._auto_paste_cb = QCheckBox(
             "Auto-paste transcription into the focused window",
             clipboard_card,
@@ -431,6 +455,7 @@ class ShortcutsView(QWidget):
         # Single full-width row — no left label needed for a checkbox
         # whose own text already describes it.
         clipboard_form.addRow(self._auto_paste_cb)
+        self._refresh_post_event_banner()
         root.addWidget(clipboard_card)
 
         # ---- Storage card -----------------------------------------------
@@ -679,6 +704,8 @@ class ShortcutsView(QWidget):
         # values.  Doing it inside the suspend block would skip the
         # repaint triggered by the property change.
         self._refresh_hotkey_validation()
+        self._refresh_accessibility_banner()
+        self._refresh_post_event_banner()
 
     def set_devices(
         self,
@@ -832,6 +859,8 @@ class ShortcutsView(QWidget):
         # to fix it without the controller getting stuck on a
         # partial edit.
         self._refresh_hotkey_validation()
+        self._refresh_accessibility_banner()
+        self._refresh_post_event_banner()
         self.save_requested.emit(self.values())
 
     def _refresh_hotkey_validation(self) -> None:
@@ -892,68 +921,79 @@ class ShortcutsView(QWidget):
             edit.style().polish(edit)
 
     def _on_auto_paste_toggled(self, _checked: bool) -> None:
+        self._refresh_post_event_banner()
         self._emit_save()
 
     def _refresh_accessibility_banner(self) -> None:
         """Update the macOS Accessibility banner based on current
-        permission state and whether we started this session as
-        untrusted.
+        listen-event permission state.
 
         State transitions:
 
         - ``trusted is None``                                       → hidden
           (non-macOS — no permission gate to worry about)
         - ``trusted is False``                                      → "untrusted"
-          ("Open Accessibility settings" button)
-        - ``trusted is True`` AND ``_accessibility_was_untrusted_at_start`` → "granted"
-          ("Restart now" button — pynput's event tap is still
-          stuck under the old untrusted state and needs a
-          process relaunch to pick up the new permission)
-        - ``trusted is True`` AND ``not _accessibility_was_untrusted_at_start``
-                                                                    → hidden
-          (started this session already trusted — nothing to
-          surface)
+          ("Allow hotkeys access" button)
+        - ``trusted is True``                                       → hidden
         """
         trusted = is_accessibility_trusted()
+        previous = self._last_accessibility_trusted
+        self._last_accessibility_trusted = trusted
         if trusted is None:
+            self._accessibility_state = "hidden"
+            self._accessibility_banner.setVisible(False)
+            return
+        if self._can_current_mac_hotkey_mode_work_without_banner():
             self._accessibility_state = "hidden"
             self._accessibility_banner.setVisible(False)
             return
         if trusted is False:
             self._accessibility_state = "untrusted"
             self._accessibility_banner_text.setText(
-                "macOS hasn't granted Accessibility access yet — global "
-                "hotkeys won't fire until you add this app's terminal / "
-                "IDE under System Settings → Privacy & Security → "
-                "Accessibility, then restart it."
+                "macOS hasn't granted keyboard-listening access yet — "
+                "global hotkeys won't fire until you allow Lazy to Text "
+                "under System Settings → Privacy & Security → "
+                "Accessibility."
             )
-            self._accessibility_banner_button.setText("Open Accessibility settings")
-            self._accessibility_banner.setVisible(True)
-            return
-        # trusted is True
-        if self._accessibility_was_untrusted_at_start:
-            self._accessibility_state = "granted"
-            self._accessibility_banner_text.setText(
-                "Accessibility access granted. Restart Lazy to Text to "
-                "let global hotkeys start firing — pynput's event tap "
-                "was attached before the permission and can't pick it up "
-                "live."
-            )
-            self._accessibility_banner_button.setText("Restart now")
+            self._accessibility_banner_button.setText("Allow hotkeys access")
             self._accessibility_banner.setVisible(True)
             return
         self._accessibility_state = "hidden"
         self._accessibility_banner.setVisible(False)
+        if previous is False and trusted is True:
+            self.mac_permissions_changed.emit()
+
+    def _can_current_mac_hotkey_mode_work_without_banner(self) -> bool:
+        """Return whether the active macOS hotkey mode is already on
+        the known-working modifier-only push-to-talk path.
+
+        ``right_cmd`` / ``right_alt`` / similar solo modifiers use
+        ``flagsChanged`` rather than a normal combo ``keyDown``
+        binding. In practice that path is what the user actually uses
+        in push-to-talk mode, and showing the generic "global hotkeys
+        won't fire" banner for it is misleading once the workflow is
+        demonstrably working.
+        """
+        if not hasattr(self, "_mode_combo") or not hasattr(self, "_ptt_edit"):
+            return False
+        if self._current_mode() != "push_to_talk":
+            return False
+        return is_push_to_talk_solo_key(
+            self.push_to_talk_key(), platform="darwin"
+        )
 
     def _on_accessibility_banner_clicked(self) -> None:
-        """Banner button dispatch — opens System Settings while
-        untrusted, asks the controller to relaunch the process
-        once permission has been granted."""
+        """Banner button dispatch for global-hotkey read access."""
         if self._accessibility_state == "untrusted":
-            open_accessibility_settings()
-            return
-        if self._accessibility_state == "granted":
-            self.restart_requested.emit()
+            granted = request_accessibility_access()
+            # Even when the CoreGraphics request path exists, macOS
+            # can return ``False`` without surfacing a visible prompt
+            # (for example after a prior denial). In that case, open
+            # the Settings pane explicitly so the click never feels
+            # like a no-op.
+            if not granted:
+                open_accessibility_settings()
+            QTimer.singleShot(250, self.refresh_macos_permission_banners)
 
     def _refresh_mic_banner(self) -> None:
         """Show / hide / restate the macOS Microphone-permission
@@ -968,13 +1008,11 @@ class ShortcutsView(QWidget):
         - ``denied`` / ``restricted`` → "Open Microphone settings"
           (system won't show a fresh prompt — only the toggle in
           System Settings can flip the state)
-        - ``authorized`` AND ``_mic_was_unauthorized_at_start``
-          → "Restart now" (sounddevice grabbed an audio device
-          handle under the old denied state and won't pick up
-          the grant without a relaunch)
-        - ``authorized`` AND already trusted at start → hidden
+        - ``authorized`` → hidden
         """
         status = microphone_authorization_status()
+        previous = self._last_mic_status
+        self._last_mic_status = status
         if status is None:
             self._mic_state = "hidden"
             self._mic_banner.setVisible(False)
@@ -995,30 +1033,19 @@ class ShortcutsView(QWidget):
                 "Microphone access is blocked — recordings come "
                 "back empty. Toggle Lazy to Text on under System "
                 "Settings → Privacy & Security → Microphone, then "
-                "restart it."
+                "return to the app."
             )
             self._mic_banner_button.setText("Open Microphone settings")
             self._mic_banner.setVisible(True)
             return
-        # authorized
-        if self._mic_was_unauthorized_at_start:
-            self._mic_state = "granted"
-            self._mic_banner_text.setText(
-                "Microphone access granted. Restart Lazy to Text "
-                "to let recording start picking up audio — "
-                "sounddevice already opened the device under the "
-                "previous denied state."
-            )
-            self._mic_banner_button.setText("Restart now")
-            self._mic_banner.setVisible(True)
-            return
         self._mic_state = "hidden"
         self._mic_banner.setVisible(False)
+        if previous not in (None, "authorized") and status == "authorized":
+            self.mac_permissions_changed.emit()
 
     def _on_mic_banner_clicked(self) -> None:
         """Banner button dispatch — first time fires the system
-        prompt, post-deny opens System Settings, post-grant asks
-        the controller to relaunch."""
+        prompt, post-deny opens System Settings."""
         if self._mic_state == "not_determined":
             request_microphone_access(
                 on_result=self._on_mic_request_completed,
@@ -1027,8 +1054,6 @@ class ShortcutsView(QWidget):
         if self._mic_state == "denied":
             open_microphone_settings()
             return
-        if self._mic_state == "granted":
-            self.restart_requested.emit()
 
     def _on_mic_request_completed(self, granted: bool) -> None:
         """Called from a background thread once the user dismisses
@@ -1045,16 +1070,55 @@ class ShortcutsView(QWidget):
         del granted
         self._refresh_mic_banner()
 
-    def showEvent(self, event):  # noqa: N802 — Qt naming
-        """Re-check both Accessibility and Microphone TCC status
-        every time the Settings tab becomes visible.  Permission
-        changes need a process restart to take effect on Mac, but
-        the API calls themselves are cheap and cover the case
-        where the user opened Settings, hit the Allow button,
-        granted access, and is now back in our window."""
-        super().showEvent(event)
+    def _refresh_post_event_banner(self) -> None:
+        """Render the synthetic-keyboard-event permission banner.
+
+        Only relevant on macOS and only while auto-paste is enabled.
+        """
+        if not self.auto_paste():
+            self._post_event_state = "hidden"
+            self._post_event_banner.setVisible(False)
+            return
+        granted = is_post_event_access_trusted()
+        self._last_post_event_trusted = granted
+        if granted is None or granted is True:
+            self._post_event_state = "hidden"
+            self._post_event_banner.setVisible(False)
+            return
+        self._post_event_state = "untrusted"
+        self._post_event_banner_text.setText(
+            "macOS hasn't granted keyboard-control access yet — "
+            "the app can copy text to the clipboard, but auto-paste "
+            "Cmd+V will not reach the focused window until you allow "
+            "Lazy to Text under System Settings → Privacy & Security "
+            "→ Accessibility."
+        )
+        self._post_event_banner_button.setText("Allow auto-paste access")
+        self._post_event_banner.setVisible(True)
+
+    def _on_post_event_banner_clicked(self) -> None:
+        if self._post_event_state != "untrusted":
+            return
+        granted = request_post_event_access()
+        if not granted:
+            open_accessibility_settings()
+        QTimer.singleShot(250, self.refresh_macos_permission_banners)
+
+    def refresh_macos_permission_banners(self) -> None:
         self._refresh_accessibility_banner()
         self._refresh_mic_banner()
+        self._refresh_post_event_banner()
+
+    def showEvent(self, event):  # noqa: N802 — Qt naming
+        """Re-check macOS permission banners every time the Settings
+        tab becomes visible."""
+        super().showEvent(event)
+        self.refresh_macos_permission_banners()
+
+    def event(self, event):  # noqa: N802 - Qt naming
+        if event.type() == QEvent.WindowActivate:
+            self.refresh_macos_permission_banners()
+        return super().event(event)
 
     def _current_mode(self) -> str:
         """Read the active recording mode from the combo box.  Returns
