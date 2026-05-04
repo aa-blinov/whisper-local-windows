@@ -52,6 +52,37 @@ def _is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def _try_inject_nvidia_pip_dll_paths() -> None:
+    """If NVIDIA CUDA libraries were installed via pip (e.g.
+    ``nvidia-cublas-cu12``, ``nvidia-cudnn-cu12``, …) but the host
+    does **not** have CUDA in the system ``PATH``, ONNX Runtime's
+    C++ provider DLL cannot resolve its dependencies.
+
+    This helper prepends the pip package ``bin/`` directories to
+    ``PATH`` *before* the first ``import onnxruntime``.  It is a
+    no-op on non-Windows platforms or when the packages are absent.
+    """
+    if sys.platform != "win32":
+        return
+    nvidia_dirs: list[str] = []
+    for sp in sys.path:
+        if not sp or not os.path.isdir(sp):
+            continue
+        nvidia_base = os.path.join(sp, "nvidia")
+        if not os.path.isdir(nvidia_base):
+            continue
+        for pkg in os.listdir(nvidia_base):
+            bin_dir = os.path.join(nvidia_base, pkg, "bin")
+            if os.path.isdir(bin_dir):
+                nvidia_dirs.append(bin_dir)
+    if not nvidia_dirs:
+        return
+    current = os.environ.get("PATH", "")
+    os.environ["PATH"] = os.pathsep.join(
+        nvidia_dirs + ([current] if current else [])
+    )
+
+
 def get_project_logs_path():
     """Return the directory log files are written to.
 
@@ -203,24 +234,30 @@ def move_cached_dir(src: str, dst: str) -> dict:
         log.info("Moved %s → %s (intra-volume rename)", src, dst)
         return {"moved": True, "bytes": bytes_moved}
     except OSError as rename_exc:
-        # Cross-volume rename, or some other rename-time error;
-        # fall back to copy + delete via shutil.move.
+        # Cross-volume rename — fall back to copy + delete so an
+        # interrupted operation leaves the *source* intact (we delete
+        # only after the copy succeeds).  ``shutil.move`` does not
+        # offer that guarantee because it deletes incrementally.
         log.info(
-            "os.rename failed (%s) — falling back to shutil.move for %s → %s",
+            "os.rename failed (%s) — copy+delete fallback for %s → %s",
             rename_exc, src, dst,
         )
         try:
-            shutil.move(str(src_path), str(dst_path))
-            log.info("Moved %s → %s (copy + delete)", src, dst)
-            return {"moved": True, "bytes": bytes_moved}
-        except (OSError, shutil.Error) as move_exc:
-            log.error(
-                "Failed to move %s → %s: %s", src, dst, move_exc,
-            )
+            shutil.copytree(str(src_path), str(dst_path), dirs_exist_ok=True)
+        except (OSError, shutil.Error) as copy_exc:
+            log.error("Copy failed %s → %s: %s", src, dst, copy_exc)
             return {
                 "moved": False,
-                "reason": f"move failed: {move_exc}",
+                "reason": f"copy failed: {copy_exc}",
             }
+        # Source is now fully backed-up at destination.  Delete the
+        # original, ignoring files that are locked by a running model.
+        try:
+            shutil.rmtree(str(src_path), ignore_errors=True)
+            log.info("Moved %s → %s (copy + delete)", src, dst)
+        except (OSError, shutil.Error) as rm_exc:
+            log.warning("Partial delete of %s: %s", src, rm_exc)
+        return {"moved": True, "bytes": bytes_moved}
 
 
 def get_models_root(configured: Optional[str]) -> str:

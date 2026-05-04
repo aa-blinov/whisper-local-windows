@@ -47,13 +47,13 @@ dependencies = [
     "nvidia-ml-py>=12.0; platform_system=='Windows'",
     # The single ASR backend.  ``onnx-asr`` covers Whisper, GigaAM v3
     # and Parakeet TDT v3 via ONNX Runtime — no PyTorch, no NeMo, no
-    # CTranslate2.  ``[gpu,hub]`` pulls ``onnxruntime-gpu`` (CUDA) on
-    # Windows; ``[cpu,hub]`` pulls plain ``onnxruntime`` (which on
-    # macOS auto-includes the CoreMLExecutionProvider) on every
-    # other platform.  Both drop install size from ~4 GB (torch +
-    # NeMo) to ~700 MB.
-    "onnx-asr[gpu,hub]>=0.11.0; platform_system=='Windows'",
-    "onnx-asr[cpu,hub]>=0.11.0; platform_system!='Windows'",
+    # CTranslate2.  We start with ``[cpu,hub]`` everywhere (macOS gets
+    # CoreML via the plain ``onnxruntime`` wheel).  On Windows with an
+    # NVIDIA GPU the startup bootstrap silently upgrades to
+    # ``onnxruntime-gpu`` + the CUDA redistributables.  This keeps the
+    # initial ``uv sync`` lightweight (~15 MB for the CPU wheel) while
+    # still giving GPU users a one-click upgrade path.
+    "onnx-asr[cpu,hub]>=0.11.0",
     # Cross-platform XDG / ~/Library / %LOCALAPPDATA% resolver —
     # replaces the hand-rolled ``_user_local_data_dir`` helper.
     "platformdirs>=4.0",
@@ -72,10 +72,21 @@ dependencies = [
 
 [project.scripts]
 lazy-to-text-ui = "app.gui.app:main"
+lazy-to-text-ui-cuda = "app.gui.app:main_cuda"
 
 [project.optional-dependencies]
 darwin = [
     "pyobjc-framework-avfoundation>=12.1",
+]
+cuda = [
+    # NVIDIA CUDA redistributables for ONNX Runtime on Windows.
+    # Installed automatically when the user runs ``uv sync --extra cuda``
+    # (or ``pip install \"lazy-to-text[cuda]\"``).  Adds ~1 GB download
+    # but removes the need for a system-wide CUDA Toolkit install.
+    "nvidia-cublas-cu12>=12.0",
+    "nvidia-cuda-runtime-cu12>=12.0",
+    "nvidia-cudnn-cu12>=9.0",
+    "nvidia-cufft-cu12>=11.0",
 ]
 
 [tool.setuptools.packages.find]

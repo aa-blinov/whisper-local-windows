@@ -333,19 +333,7 @@ def _apply_storage_path(configured: Optional[str]) -> str:
     return root
 
 
-# Minimal valid ONNX model: float32[1] → Identity → float32[1].
-# Generated once with raw protobuf wire encoding; verified with
-# ``onnxruntime.InferenceSession(bytes, ...).run(...)``.
-# Used as a dummy graph to force OnnxRuntime to initialise its
-# execution-provider DLLs (DirectML, CUDA, CPU) at app startup so the
-# first real model load doesn't acquire the Win32 DLL loader-lock on
-# the main thread and freeze the window.
-_WARMUP_ONNX_BYTES: bytes = (
-    b'\x08\x08:4\n\x10\n\x01x\x12\x01y"\x08Identity'
-    b'Z\x0f\n\x01x\x12\n\n\x08\x08\x01\x12\x04\n\x02\x08\x01'
-    b'b\x0f\n\x01y\x12\n\n\x08\x08\x01\x12\x04\n\x02\x08\x01'
-    b'B\x04\n\x00\x10\x0b'
-)
+from app.backends.onnx_backend import _WARMUP_ONNX_BYTES
 
 
 def _do_onnx_asr_preimport() -> None:
@@ -387,6 +375,9 @@ def _do_onnx_asr_preimport() -> None:
     try:
         import onnxruntime as _ort
         import numpy as _np
+
+        # Keep missing-CUDA-DLL noise off stderr during warmup.
+        _ort.set_default_logger_severity(4)
 
         _opts = _ort.SessionOptions()
         _opts.log_severity_level = 4  # silence ORT — errors only
@@ -588,6 +579,17 @@ def main() -> int:
     # in dev (``uv run``) — it only takes effect when ``sys.frozen``
     # is set, which py2app does inside the bundle.
     multiprocessing.freeze_support()
+
+    # Auto-install CUDA redistributables on Windows when an NVIDIA
+    # GPU is present but the runtime DLLs are missing.  This keeps
+    # ``uv run lazy-to-text-ui`` as the single entry point — no
+    # manual ``pip install [cuda]`` required.  Fast no-op (<10 ms)
+    # when CUDA already works or no GPU exists.
+    try:
+        from app.cuda_bootstrap import ensure_cuda
+        ensure_cuda()
+    except Exception:
+        pass  # never block startup over bootstrap noise
 
     # Read the configured ``storage.models_dir`` (may be empty for
     # 'use the default') from config.yaml, then plant ``HF_HOME``
@@ -845,6 +847,37 @@ def main() -> int:
             backend.shutdown()
         if tray is not None:
             tray.setVisible(False)
+
+
+def main_cuda() -> int:
+    """Entry point for GPU-accelerated launch (``lazy-to-text-ui-cuda``).
+
+    On Windows: unconditionally installs ``onnxruntime-gpu`` + CUDA
+    redistributables if they are missing, then delegates to ``main()``.
+    On other platforms this is identical to ``main()``.
+    """
+    if sys.platform == "win32":
+        from app.cuda_bootstrap import (
+            _cuda_probe,
+            _install_cuda_redist,
+            _install_onnxruntime_gpu,
+        )
+        from app.utils import _try_inject_nvidia_pip_dll_paths
+
+        _try_inject_nvidia_pip_dll_paths()
+        if not _cuda_probe():
+            print("Setting up GPU acceleration for NVIDIA...")
+            if not _install_onnxruntime_gpu():
+                print("Failed to install onnxruntime-gpu, falling back to CPU.")
+            elif not _install_cuda_redist():
+                print("Failed to install CUDA libraries, falling back to CPU.")
+            else:
+                _try_inject_nvidia_pip_dll_paths()
+                if _cuda_probe():
+                    print("GPU acceleration ready.")
+                else:
+                    print("GPU setup incomplete, falling back to CPU.")
+    return main()
 
 
 if __name__ == "__main__":

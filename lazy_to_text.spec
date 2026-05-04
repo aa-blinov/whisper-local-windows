@@ -40,7 +40,10 @@ for sub in (assets_src, app_dir / "gui" / "styles"):
         continue
     for p in sub.rglob("*"):
         if p.is_file():
-            rel = p.relative_to(app_dir)
+            # Preserve the full ``app/…`` prefix so runtime paths like
+            # ``Path(__file__).parent / "styles"`` resolve correctly in
+            # the frozen bundle.
+            rel = p.relative_to(project_root)
             datas.append((str(p), str(rel.parent)))
 
 # ``config.yaml`` is intentionally NOT bundled — whatever sits in
@@ -52,6 +55,7 @@ for sub in (assets_src, app_dir / "gui" / "styles"):
 # first launch — that's the source of truth for portable builds.
 
 import importlib.util
+import sys
 from PyInstaller.utils.hooks import collect_submodules
 
 # Imports PyInstaller's static analyser misses.  Each of these is
@@ -95,11 +99,67 @@ from PyInstaller.building.build_main import Analysis, PYZ, EXE, COLLECT
 _runtime_hook = project_root / "scripts" / "pyi_runtime_hook.py"
 runtime_hooks = [str(_runtime_hook)] if _runtime_hook.is_file() else []
 
+# When the ``[cuda]`` extra is installed, the nvidia-* wheels drop
+# their DLLs into ``site-packages/nvidia/<pkg>/bin/``.  PyInstaller
+# sometimes auto-collects these when it resolves dependencies of
+# ``onnxruntime_providers_cuda.dll``, but only if they happen to be
+# on the host PATH at build time.  To guarantee they ship regardless
+# of the build environment, we explicitly bundle them as data files
+# (preserving the ``nvidia/<pkg>/bin`` directory structure).  The
+# runtime hook then prepends every ``bin/`` path to PATH so the
+# Windows loader finds them at launch.
+_datas = list(datas)
+for _sp in sys.path:
+    _nvidia_base = Path(_sp) / "nvidia"
+    if not _nvidia_base.is_dir():
+        continue
+    for _pkg_dir in _nvidia_base.iterdir():
+        _bin_dir = _pkg_dir / "bin"
+        if not _bin_dir.is_dir():
+            continue
+        for _dll in _bin_dir.glob("*.dll"):
+            # Strip the leading ``site-packages/`` (or ``Lib/``) so
+            # the DLLs land at ``_internal/nvidia/<pkg>/bin/`` rather
+            # than ``_internal/site-packages/nvidia/<pkg>/bin/``.
+            _rel = _dll.relative_to(_nvidia_base.parent)
+            _dest = str(_rel.parent).replace("site-packages\\", "").replace("Lib\\", "")
+            _datas.append((str(_dll), _dest))
+            print(f"[spec] Bundling CUDA DLL: {_dll.name} -> {_dest}")
+
+# ``onnx_asr`` uses ``importlib.metadata`` at import time to read its
+# own version from ``onnx_asr-*.dist-info``.  PyInstaller does not
+# auto-collect ``.dist-info`` directories, so the import crashes in
+# the frozen build with "No package metadata was found for onnx-asr".
+# We explicitly ship the dist-info folder so metadata queries work.
+for _sp in sys.path:
+    _sp_path = Path(_sp)
+    if not _sp_path.is_dir():
+        continue
+    for _di in _sp_path.glob("onnx_asr-*.dist-info"):
+        if _di.is_dir():
+            _rel = _di.relative_to(_sp_path)
+            _datas.append((str(_di), str(_rel)))
+            print(f"[spec] Bundling dist-info: {_rel}")
+
+    # ``onnx_asr`` also bundles small ONNX preprocessor graphs inside
+    # ``preprocessors/data/`` (resample kernels, feature extractors,
+    # …).  PyInstaller does not auto-collect them because they're
+    # loaded at runtime via ``Path(__file__).parent / "data"`` rather
+    # than imported as Python modules.  Ship the whole subtree so
+    # every model family works out of the box.
+    _onnx_asr_pkg = _sp_path / "onnx_asr"
+    if _onnx_asr_pkg.is_dir():
+        for _data_file in _onnx_asr_pkg.rglob("*"):
+            if _data_file.is_file() and _data_file.suffix not in (".py", ".pyc") and "__pycache__" not in _data_file.parts:
+                _rel = _data_file.relative_to(_sp_path)
+                _datas.append((str(_data_file), str(_rel.parent)))
+                print(f"[spec] Bundling onnx_asr data: {_rel}")
+
 analysis = Analysis(
     ["lazy-to-text-ui.py"],
     pathex=[str(app_dir)],
     binaries=[],
-    datas=datas,
+    datas=_datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -122,12 +182,16 @@ import os as _os
 # crashes that don't reach the file logger).  Default is windowed.
 _console_flag = (_os.environ.get("LAZYTOTEXT_DEBUG_CONSOLE", "0") == "1")
 
+# Allow wrapper scripts to produce differently-named bundles so CPU
+# and CUDA variants can coexist in ``dist/`` without overwriting.
+_build_name = _os.environ.get("LAZYTOTEXT_BUILD_NAME", "LazyToText")
+
 exe = EXE(
     pyz,
     analysis.scripts,
     [],
     exclude_binaries=True,
-    name="LazyToText",
+    name=_build_name,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -146,5 +210,5 @@ coll = COLLECT(
     analysis.datas,
     strip=False,
     upx=False,
-    name="LazyToText",  # → dist/LazyToText/
+    name=_build_name,  # → dist/<_build_name>/
 )

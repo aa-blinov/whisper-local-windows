@@ -296,10 +296,14 @@ class StorageMixin:
         chosen = str(ctx.get("chosen", ""))
 
         def worker() -> None:
-            result = _ctrl_module().move_cached_dir(
-                str(Path(old_root) / "hub"),
-                str(Path(chosen) / "hub"),
-            )
+            try:
+                result = _ctrl_module().move_cached_dir(
+                    str(Path(old_root) / "hub"),
+                    str(Path(chosen) / "hub"),
+                )
+            except Exception as exc:  # pragma: no cover — defensive
+                log.exception("Unexpected error during cache move")
+                result = {"moved": False, "reason": f"unexpected error: {exc}"}
             payload = dict(ctx)
             payload["move_outcomes"] = [("hub", result)]
             try:
@@ -352,7 +356,16 @@ class StorageMixin:
                         # — that's the normal case for Whisper-only
                         # users and would clutter the dialog.
                         continue
-                    summary_lines.append(f"  • {name}: skipped ({reason})")
+                    # Friendly translation of technical reasons.
+                    if "destination already exists" in reason:
+                        friendly = "new folder already has cached models"
+                    elif "copy failed" in reason:
+                        friendly = "copy interrupted — old weights are still intact"
+                    elif "permission" in reason.lower() or "access" in reason.lower():
+                        friendly = "some files are in use — restart the app and try again, or delete old weights manually"
+                    else:
+                        friendly = reason
+                    summary_lines.append(f"  • {name}: skipped ({friendly})")
             summary_lines.append("")
         elif old_size > 0:
             summary_lines.append(

@@ -71,8 +71,34 @@ if sys.stderr is None:
     sys.stderr = _NullStream()  # type: ignore[assignment]
 
 
-# Suppress subprocess console flashes on Windows.
+# 3. NVIDIA CUDA redistributables — pip-installed wheels drop their
+# DLLs into ``site-packages/nvidia/<pkg>/bin/``.  PyInstaller copies
+# them into ``_internal/nvidia/<pkg>/bin/`` as data files.  The
+# Windows DLL loader does NOT search subdirectories of the executable
+# directory, so we prepend every ``nvidia/*/bin`` path to ``PATH``
+# (and call ``os.add_dll_directory`` on 3.8+) before ``onnxruntime``
+# gets imported.
 if sys.platform == "win32":
+    import os as _os
+    from pathlib import Path as _Path
+
+    _MEI = getattr(sys, "_MEIPASS", None)
+    if _MEI is not None:
+        _nvidia_base = _Path(_MEI) / "nvidia"
+        if _nvidia_base.is_dir():
+            _cuda_bins = [str(d) for d in _nvidia_base.rglob("bin") if d.is_dir()]
+            if _cuda_bins:
+                _os.environ["PATH"] = _os.pathsep.join(
+                    _cuda_bins + [_os.environ.get("PATH", "")]
+                )
+                if hasattr(_os, "add_dll_directory"):
+                    for _cb in _cuda_bins:
+                        try:
+                            _os.add_dll_directory(_cb)
+                        except Exception:
+                            pass
+
+    # Suppress subprocess console flashes on Windows.
     import subprocess as _subprocess
 
     _CREATE_NO_WINDOW = 0x08000000

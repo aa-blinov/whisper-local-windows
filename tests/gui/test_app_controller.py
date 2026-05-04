@@ -1,5 +1,6 @@
 """Tests for the AppController wiring Models view to config storage."""
 
+import sys
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -183,6 +184,7 @@ def test_controller_preserves_alias_for_shared_canonical_model_change(qtbot):
     AppController(config=config, window=window, recording=rec)
     window.models_view.model_selected.emit("gigaam-v3-rnnt")
 
+    qtbot.waitUntil(lambda: len(rec.model_change_requests) > 0)
     assert rec.model_change_requests[-1] == ("gigaam-v3-rnnt", "float16")
 
 
@@ -2013,6 +2015,7 @@ def test_controller_routes_model_select_through_recording_when_present(qtbot):
     # AND recording stack was asked to actually switch using the
     # registry alias, because multiple presets can share one canonical
     # repo but still differ by backend load_id / decoder choice.
+    qtbot.waitUntil(lambda: len(rec.model_change_requests) > 0)
     assert rec.model_change_requests == [
         ("vosk-ru-small", "float16"),
     ]
@@ -2146,21 +2149,29 @@ def test_controller_quit_requested_calls_request_quit_and_app_quit(qtbot, monkey
     assert app_quit_calls == [None]
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin", reason="macOS-only path resolution test"
+)
 def test_resolve_macos_bundle_path_finds_enclosing_app():
     from app.gui.controllers.app_controller import _resolve_macos_bundle_path
+    from pathlib import Path
 
     assert (
         _resolve_macos_bundle_path(
             "/Applications/Lazy to Text.app/Contents/MacOS/python"
         )
-        == "/Applications/Lazy to Text.app"
+        == str(Path("/Applications/Lazy to Text.app"))
     )
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin", reason="macOS-only path resolution test"
+)
 def test_controller_restart_requested_relaunches_frozen_macos_bundle(
     qtbot, monkeypatch
 ):
     import sys
+    from pathlib import Path
 
     from PySide6.QtWidgets import QApplication
 
@@ -2220,7 +2231,7 @@ def test_controller_restart_requested_relaunches_frozen_macos_bundle(
 
     controller._on_restart_requested()
 
-    assert popen_calls == [["/usr/bin/open", "-n", "/Applications/Lazy to Text.app"]]
+    assert popen_calls == [["/usr/bin/open", "-n", str(Path("/Applications/Lazy to Text.app"))]]
     assert quit_calls == [None]
     assert app_quit_calls == [None]
     assert execv_calls == []

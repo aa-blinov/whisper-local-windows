@@ -8,22 +8,18 @@ This file is your project quickstart — keep it skim-able.
 
 ```bash
 uv sync                          # bootstrap venv from uv.lock
-uv run lazy-to-text-ui           # launch the app in dev mode
+uv run lazy-to-text-ui           # launch the app in dev mode (CPU)
+uv run lazy-to-text-ui-cuda      # launch with GPU auto-setup (Windows+NVIDIA)
 
 # Portable bundle — wrapper picks the right tool per OS:
 ./scripts/build-macos.sh         # py2app alias .app, 5–10 s (Mac)
 ./scripts/build-macos.sh --release   # py2app full .app, 5–10 min (Mac)
-.\scripts\build-windows.ps1      # PyInstaller folder bundle (Win)
-.\scripts\build-windows.ps1 -OneFile  # PyInstaller single .exe (Win)
-
-# Tests — always with offscreen Qt platform plugin so Cocoa /
-# WinAPI never opens a real window in CI
-QT_QPA_PLATFORM=offscreen uv run python -m pytest tests/
-QT_QPA_PLATFORM=offscreen uv run python -m pytest tests/gui/    # GUI subset (~25s)
-QT_QPA_PLATFORM=offscreen uv run python -m pytest tests/backends/test_subprocess_backend.py    # ~90s, real spawn
+.\scripts\build-windows.ps1        # PyInstaller folder bundle, CPU-only  -> dist/LazyToText/    (~400 MB)
+.\scripts\build-windows-cuda.ps1   # PyInstaller folder bundle, GPU/CUDA  -> dist/LazyToText-CUDA/ (~3.0 GB)
+.\scripts\build-windows.ps1 -OneFile  # PyInstaller single .exe, CPU-only (Win)
 ```
 
-The full suite is **624 passed, 10 skipped** at last commit. Skipped
+The full suite is **670 passed, 8 skipped** at last commit. Skipped
 tests are mostly engine-specific paths that need a real model.
 
 ## Where things live

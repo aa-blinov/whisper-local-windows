@@ -45,8 +45,33 @@ import numpy as np
 
 from app.backends._progress import install_tqdm_progress, set_progress_callback
 from app.inference_settings import InferenceSettings, ParakeetInferenceSettings
+from app.utils import _try_inject_nvidia_pip_dll_paths
+
+# If the user installed NVIDIA CUDA libraries via pip (e.g.
+# nvidia-cublas-cu12, nvidia-cudnn-cu12, …) but they are not on the
+# system PATH, onnxruntime's C++ provider DLL cannot find them.
+# We inject the pip package bin/ directories into PATH before the
+# first onnxruntime import so CUDA works out of the box on Windows.
+_try_inject_nvidia_pip_dll_paths()
 
 log = logging.getLogger(__name__)
+
+# Minimal valid ONNX model: float32[1] -> Identity -> float32[1].
+# Generated once with raw protobuf wire encoding; verified with
+# ``onnxruntime.InferenceSession(bytes, ...).run(...)``.
+# Used as a dummy graph to probe whether an execution provider
+# (CUDA, DirectML, etc.) is actually functional without loading
+# a real model.
+_WARMUP_ONNX_BYTES: bytes = (
+    b'\x08\x08:4\n\x10\n\x01x\x12\x01y"\x08Identity'
+    b'Z\x0f\n\x01x\x12\n\n\x08\x08\x01\x12\x04\n\x02\x08\x01'
+    b'b\x0f\n\x01y\x12\n\n\x08\x08\x01\x12\x04\n\x02\x08\x01'
+    b'B\x04\n\x00\x10\x0b'
+)
+
+# Cache for the Windows/Linux ``device='auto'`` provider probe so we
+# only pay the dummy-session cost once per process.
+_AUTO_PROVIDER_CACHE: Optional[list] = None
 
 # 25 s @ 16 kHz.  Whisper / GigaAM / Parakeet ONNX models are trained on
 # sequences up to ~30 s; 25 s gives a comfortable margin and keeps chunk
@@ -446,7 +471,8 @@ class OnnxAsrBackend:
         # NVIDIA driver is present, otherwise CPU.
         if sys.platform == "darwin":
             return [_coreml_provider_entry(), "CPUExecutionProvider"]
-        return None
+        return _resolve_auto_providers_non_darwin()
+
 
     def _do_load(self, model_name: str) -> None:
         install_tqdm_progress()
@@ -500,9 +526,7 @@ class OnnxAsrBackend:
             # (best outcome — model is at least usable, just slower)
             # or fails for a model-level reason that the first
             # attempt would have hit anyway.
-            wants_accelerator = self._device in ("cuda", "coreml") or (
-                self._device == "auto" and sys.platform == "darwin"
-            )
+            wants_accelerator = self._device in ("cuda", "coreml", "auto")
             if (
                 wants_accelerator
                 and not self._shutdown
@@ -581,6 +605,94 @@ class OnnxAsrBackend:
                 "OnnxAsr model %s ready (provider=%s)",
                 model_name, detected_provider or "CPU (fallback/unknown)",
             )
+
+
+def _resolve_auto_providers_non_darwin() -> list:
+    """Return a provider list for ``device='auto'`` on Windows / Linux.
+
+    Probes CUDA with a dummy session; if it works we return
+    ``["CUDAExecutionProvider", "CPUExecutionProvider"]`` so the model
+    loads on the GPU. If CUDA is unavailable (missing driver / DLL) we
+    return ``["CPUExecutionProvider"]`` and skip the noisy TensorRT/CUDA
+    fallback dance entirely.
+
+    TensorRT is ignored for ``auto`` because it requires a separate SDK
+    install and almost never works out-of-the-box.
+    """
+    global _AUTO_PROVIDER_CACHE
+    if _AUTO_PROVIDER_CACHE is not None:
+        return _AUTO_PROVIDER_CACHE
+
+    try:
+        import onnxruntime as ort
+        import numpy as np
+    except Exception:
+        _AUTO_PROVIDER_CACHE = ["CPUExecutionProvider"]
+        return _AUTO_PROVIDER_CACHE
+
+    # Suppress ORT's default C++ logger so missing-CUDA-DLL messages
+    # don't spam stderr during the probe (or during any later session
+    # creation in this process).
+    ort.set_default_logger_severity(4)
+
+    available = ort.get_available_providers()
+
+    # Never auto-pick TensorRT — it needs a separate SDK and spams
+    # the console with missing-cublas errors when the DLLs aren't
+    # present.
+    if "CUDAExecutionProvider" not in available:
+        _AUTO_PROVIDER_CACHE = ["CPUExecutionProvider"]
+        return _AUTO_PROVIDER_CACHE
+
+    opts = ort.SessionOptions()
+    opts.log_severity_level = 4  # silence ORT console spam
+    x = np.array([0.0], dtype=np.float32)
+
+    try:
+        sess = ort.InferenceSession(
+            _WARMUP_ONNX_BYTES,
+            sess_options=opts,
+            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+        )
+        sess.run(None, {"x": x})
+        # ORT silently falls back to CPU when the CUDA DLLs are
+        # missing; session creation succeeds but get_providers()
+        # reveals the real EP.  Only cache CUDA when the session
+        # actually bound to it.
+        if sess.get_providers() and sess.get_providers()[0] == "CUDAExecutionProvider":
+            _AUTO_PROVIDER_CACHE = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            return _AUTO_PROVIDER_CACHE
+        # GPU driver says CUDA is available, but the runtime DLLs
+        # (cublasLt64_12.dll, cudnn64_9.dll, …) are not on PATH.
+        # Log a one-time pointer so the user knows how to enable GPU.
+        _warn_missing_cuda_redist()
+        _AUTO_PROVIDER_CACHE = ["CPUExecutionProvider"]
+        return _AUTO_PROVIDER_CACHE
+    except Exception:
+        _warn_missing_cuda_redist()
+        _AUTO_PROVIDER_CACHE = ["CPUExecutionProvider"]
+        return _AUTO_PROVIDER_CACHE
+
+
+_CUDA_REDIST_WARNED: bool = False
+
+
+def _warn_missing_cuda_redist() -> None:
+    """Log a one-time hint when a GPU is present but CUDA runtime DLLs
+    are missing so the model falls back to CPU."""
+    global _CUDA_REDIST_WARNED
+    if _CUDA_REDIST_WARNED:
+        return
+    _CUDA_REDIST_WARNED = True
+    log.warning(
+        "NVIDIA GPU detected, but CUDA runtime libraries are missing "
+        "(cublasLt64_12.dll, cudnn64_9.dll, …).  "
+        "The model will run on CPU.  "
+        "To enable GPU acceleration, install the pip CUDA packages:\n"
+        "    uv pip install --extra cuda\n"
+        "or on non-uv workflows:\n"
+        "    pip install \"lazy-to-text[cuda]\""
+    )
 
 
 # ---- module-level helpers (testable without a backend instance) ------------
