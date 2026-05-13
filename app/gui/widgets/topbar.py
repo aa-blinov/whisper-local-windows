@@ -103,15 +103,19 @@ class TopBar(QWidget):
         layout.setContentsMargins(28, 10, 20, 10)
         layout.setSpacing(12)
 
-        # Resource stats — anchored to the leading edge of the
-        # content area, immediately right of the divider.
+        self._recording_state = "idle"
+
+        # Resource stats anchored to the leading edge of the content
+        # area, immediately right of the divider.  The engine pill
+        # used to live here too but moved into the sidebar's bottom
+        # status chip — it reads as a sibling of the recording-state
+        # pill (both reflect the live backend) better than as a
+        # neighbour of CPU / RAM.
         self._resources = ResourceWidget(content)
         layout.addWidget(self._resources)
 
         # Push the model pill cluster to the right edge.
         layout.addStretch(1)
-
-        self._recording_state = "idle"
 
         # Model pill: empty / loading / active. ``loading`` shows
         # download progress + elapsed time inline so the topbar

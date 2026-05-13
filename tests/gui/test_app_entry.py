@@ -122,12 +122,16 @@ class _FakeBackend:
     def __init__(self, model: str) -> None:
         self._model = model
         self.load_called = 0
+        self.changed_to: list[str] = []
 
     def current_model(self) -> str:
         return self._model
 
     def load(self) -> None:
         self.load_called += 1
+
+    def change_model(self, model: str) -> None:
+        self.changed_to.append(model)
 
 
 def test_autoload_kicks_off_load_when_model_is_cached(monkeypatch):
@@ -175,6 +179,62 @@ def test_autoload_falls_back_to_canonical_check_for_unknown_model(monkeypatch):
 
     app_module._autoload_persisted_model(backend)
     assert backend.load_called == 1
+
+
+def test_autoload_prefers_persisted_alias_over_backend_canonical(monkeypatch):
+    """Shared-canonical presets such as GigaAM CTC/RNN-T must keep the
+    persisted alias when deciding what is cached + what to log. The
+    backend only surfaces the HF canonical, which would otherwise map
+    back to the registry's first alias and lose the decoder choice."""
+    import app.gui.app as app_module
+
+    class _Config:
+        def get_setting(self, section, key):
+            if (section, key) == ("whisper", "model"):
+                return "gigaam-v3-rnnt"
+            return None
+
+    backend = _FakeBackend("istupakov/gigaam-v3-onnx")
+
+    def _is_cached(info):
+        return info.alias == "gigaam-v3-rnnt"
+
+    monkeypatch.setattr(app_module, "is_cached_for_info", _is_cached)
+    monkeypatch.setattr(
+        app_module,
+        "is_model_cached",
+        lambda canonical: pytest.fail("should use registry alias path"),
+    )
+
+    app_module._autoload_persisted_model(backend, config=_Config())
+    assert backend.load_called == 1
+
+
+def test_autoload_fallback_changes_to_candidate_alias(monkeypatch):
+    """Fallback auto-load must preserve alias-level semantics when it
+    asks the backend to switch. Using the candidate canonical would
+    lose per-alias ``load_id`` differences for shared-canonical
+    presets."""
+    import app.gui.app as app_module
+
+    class _Config:
+        def get_setting(self, section, key):
+            if (section, key) == ("whisper", "model"):
+                return "missing-model"
+            return None
+
+    backend = _FakeBackend("missing-model")
+    monkeypatch.setattr(
+        app_module, "is_model_cached", lambda canonical: False
+    )
+    monkeypatch.setattr(
+        app_module,
+        "is_cached_for_info",
+        lambda info: info.alias == "gigaam-v3-rnnt",
+    )
+
+    app_module._autoload_persisted_model(backend, config=_Config())
+    assert backend.changed_to == ["gigaam-v3-rnnt"]
 
 
 def test_autoload_no_op_when_backend_is_none():
@@ -409,107 +469,9 @@ def test_preload_onnx_asr_warms_up_ort_providers():
     )
 
 
-# ---- AUMID icon registry registration --------------------------------------
-
-
-def test_register_aumid_icon_writes_hkcu_entry_when_frozen(monkeypatch, tmp_path):
-    """Without an HKCU\\AppUserModelId\\<id> entry pointing at our exe,
-    Windows shows a generic document icon for taskbar entries grouped
-    under our AppUserModelID — confirmed empirically on a fresh
-    install. Registering at startup is a no-op on the source-run dev
-    path (which uses python.exe as host) but mandatory on frozen
-    builds."""
-    import sys
-
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    fake_exe = str(tmp_path / "LazyToText.exe")
-    monkeypatch.setattr(sys, "executable", fake_exe, raising=False)
-
-    captured: dict = {}
-
-    class FakeKey:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_):
-            return False
-
-    def fake_create_key(_root, subkey, _reserved, _access):
-        captured["subkey"] = subkey
-        return FakeKey()
-
-    def fake_set_value(_key, name, _reserved, _typ, value):
-        captured.setdefault("values", {})[name] = (value, _typ)
-
-    fake_winreg = type(sys)("winreg")
-    fake_winreg.HKEY_CURRENT_USER = 0x80000001
-    fake_winreg.KEY_SET_VALUE = 0x0002
-    fake_winreg.REG_SZ = 1
-    fake_winreg.REG_EXPAND_SZ = 2
-    fake_winreg.CreateKeyEx = fake_create_key
-    fake_winreg.SetValueEx = fake_set_value
-    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
-
-    from app.gui.app import _register_aumid_icon
-
-    _register_aumid_icon("LazyToText.App")
-
-    assert captured.get("subkey") == "Software\\Classes\\AppUserModelId\\LazyToText.App"
-    values = captured.get("values", {})
-    assert values["DisplayName"][0] == "Lazy to Text"
-    assert values["IconResource"][0] == f"{fake_exe},0"
-    assert values["IconUri"][0] == fake_exe
-
-
-def test_register_aumid_icon_noop_when_not_frozen(monkeypatch):
-    """Source-run path uses python.exe as the host process — pointing
-    Windows at python.exe's icon resource would be hostile. Function
-    must short-circuit before touching the registry."""
-    import sys
-
-    monkeypatch.setattr(sys, "frozen", False, raising=False)
-
-    fake_winreg = type(sys)("winreg")
-    fake_winreg.HKEY_CURRENT_USER = 0x80000001
-    fake_winreg.KEY_SET_VALUE = 0x0002
-    fake_winreg.REG_SZ = 1
-    fake_winreg.REG_EXPAND_SZ = 2
-
-    touched: list = []
-    fake_winreg.CreateKeyEx = lambda *_args, **_kw: touched.append("create")
-    fake_winreg.SetValueEx = lambda *_args, **_kw: touched.append("set")
-    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
-
-    from app.gui.app import _register_aumid_icon
-
-    _register_aumid_icon("LazyToText.App")
-    assert touched == [], (
-        "should not write registry on source-run dev path"
-    )
-
-
-def test_register_aumid_icon_swallows_oserror(monkeypatch, tmp_path):
-    """Registry writes can fail under restrictive group policies or
-    locked-down enterprise installs. Don't bring the app down — the
-    visual fallback is just a generic icon, not catastrophic."""
-    import sys
-
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", str(tmp_path / "x.exe"), raising=False)
-
-    fake_winreg = type(sys)("winreg")
-    fake_winreg.HKEY_CURRENT_USER = 0x80000001
-    fake_winreg.KEY_SET_VALUE = 0x0002
-    fake_winreg.REG_SZ = 1
-    fake_winreg.REG_EXPAND_SZ = 2
-
-    def boom(*_args, **_kw):
-        raise OSError("ERROR_ACCESS_DENIED")
-    fake_winreg.CreateKeyEx = boom
-    fake_winreg.SetValueEx = boom
-    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
-
-    from app.gui.app import _register_aumid_icon
-
-    # Must not raise — defensive against Group Policy / locked HKCU.
-    _register_aumid_icon("LazyToText.App")
+# AUMID icon registry registration: previously covered three tests
+# for ``_register_aumid_icon`` and ``_force_window_icon``. Both
+# helpers were removed when the PyInstaller bundle path was dropped
+# (the dev-only ``uv run`` flow doesn't need taskbar AUMID binding —
+# Qt's ``setWindowIcon`` is sufficient when the host process is the
+# project's own venv interpreter rather than a system python.exe).

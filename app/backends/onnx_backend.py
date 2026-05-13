@@ -1,10 +1,10 @@
 """Unified ONNX inference backend for every supported ASR model family.
 
-Uses ``onnx-asr`` (``pip install "onnx-asr[gpu,hub]"``) with ONNX-exported
-weights from HuggingFace.  One backend class drives Whisper, GigaAM v3
-and Parakeet TDT v3 by switching a small ``family`` parameter; ONNX
-Runtime handles everything below — no NeMo, PyTorch, Lightning, or
-CTranslate2 in the dependency tree.
+Uses ``onnx-asr`` with ONNX-exported weights from HuggingFace.  One
+backend class drives Whisper, GigaAM v3 and Parakeet TDT v3 by
+switching a small ``family`` parameter; ONNX Runtime handles
+everything below — no NeMo, PyTorch, Lightning, or CTranslate2 in
+the dependency tree.
 
 Supported families
 ------------------
@@ -22,17 +22,22 @@ Lifecycle
 
 Provider selection
 ------------------
-``device='auto'`` (default) lets ONNX Runtime pick.  ``device='cuda'``
-explicitly requests CUDA with a CPU fallback in the providers list,
-plus a runtime retry-on-CPU if the first load fails with a CUDA-related
-error (handles the case where ``onnxruntime-gpu`` is installed but no
-NVIDIA driver is present).  ``device='cpu'`` pins to CPU.
+``device='auto'`` (default) is platform-aware: on macOS it stages
+``CoreMLExecutionProvider`` (Neural Engine + GPU) ahead of CPU; on
+Windows / Linux it leaves the choice to onnx-asr / ORT (which picks
+CUDA when ``onnxruntime-gpu`` is installed).  ``device='cuda'`` and
+``device='coreml'`` are explicit overrides — both come with a CPU
+fallback baked into the providers list, plus a runtime retry on CPU
+if the accelerator fails at session-create time (handles the case
+where the GPU library is installed but the driver / hardware is
+missing). ``device='cpu'`` pins to CPU.
 """
 
 from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 import threading
 from typing import Callable, Optional
 
@@ -40,8 +45,33 @@ import numpy as np
 
 from app.backends._progress import install_tqdm_progress, set_progress_callback
 from app.inference_settings import InferenceSettings, ParakeetInferenceSettings
+from app.utils import _try_inject_nvidia_pip_dll_paths
+
+# If the user installed NVIDIA CUDA libraries via pip (e.g.
+# nvidia-cublas-cu12, nvidia-cudnn-cu12, …) but they are not on the
+# system PATH, onnxruntime's C++ provider DLL cannot find them.
+# We inject the pip package bin/ directories into PATH before the
+# first onnxruntime import so CUDA works out of the box on Windows.
+_try_inject_nvidia_pip_dll_paths()
 
 log = logging.getLogger(__name__)
+
+# Minimal valid ONNX model: float32[1] -> Identity -> float32[1].
+# Generated once with raw protobuf wire encoding; verified with
+# ``onnxruntime.InferenceSession(bytes, ...).run(...)``.
+# Used as a dummy graph to probe whether an execution provider
+# (CUDA, DirectML, etc.) is actually functional without loading
+# a real model.
+_WARMUP_ONNX_BYTES: bytes = (
+    b'\x08\x08:4\n\x10\n\x01x\x12\x01y"\x08Identity'
+    b'Z\x0f\n\x01x\x12\n\n\x08\x08\x01\x12\x04\n\x02\x08\x01'
+    b'b\x0f\n\x01y\x12\n\n\x08\x08\x01\x12\x04\n\x02\x08\x01'
+    b'B\x04\n\x00\x10\x0b'
+)
+
+# Cache for the Windows/Linux ``device='auto'`` provider probe so we
+# only pay the dummy-session cost once per process.
+_AUTO_PROVIDER_CACHE: Optional[list] = None
 
 # 25 s @ 16 kHz.  Whisper / GigaAM / Parakeet ONNX models are trained on
 # sequences up to ~30 s; 25 s gives a comfortable margin and keeps chunk
@@ -83,6 +113,7 @@ class OnnxAsrBackend:
         device: str = "auto",
         quantization: Optional[str] = None,
         load_id: Optional[str] = None,
+        prefer_cpu_provider: bool = False,
     ) -> None:
         if family not in _FAMILIES:
             raise ValueError(
@@ -100,6 +131,11 @@ class OnnxAsrBackend:
         self._language = language
         self._device = device
         self._quantization = quantization
+        # Skip the accelerator EP entirely for models known to break
+        # ORT's CoreML / CUDA adapters at session-init time.  Set by
+        # the registry from ``ModelInfo.prefer_cpu_provider`` — see
+        # ``_resolve_providers`` for the full rationale.
+        self._prefer_cpu_provider = bool(prefer_cpu_provider)
 
         self._model = None
         self._status = "stopped"
@@ -110,6 +146,14 @@ class OnnxAsrBackend:
         # blocked on a network read or ONNX init), but its result is
         # discarded at the publish step.  Reset on each fresh ``load()``.
         self._cancel_requested = False
+        # Pretty-printed name of the ONNX Runtime EP actually used by
+        # the loaded model's ``InferenceSession`` (``"CUDA"``,
+        # ``"CoreML"``, ``"CPU"``, …) — populated from
+        # ``_detect_active_provider`` after a successful ``load_model``
+        # so the UI can display the real EP rather than the requested
+        # one (which lies after a CPU retry).  ``None`` until first
+        # successful load.
+        self._active_provider: Optional[str] = None
         self._inference_settings = ParakeetInferenceSettings()
 
     # ---- public API ---------------------------------------------------------
@@ -143,6 +187,15 @@ class OnnxAsrBackend:
     def health_check(self) -> bool:
         return self.status() == "ready"
 
+    def active_provider(self) -> Optional[str]:
+        """Pretty-printed name of the EP actually backing the loaded
+        model — ``"CUDA"`` / ``"CoreML"`` / ``"CPU"`` / ``"TensorRT"`` /
+        ``"DirectML"`` / etc., or ``None`` while the model is unloaded
+        / loading / errored.  This is the *real* EP after any retry-
+        on-CPU fallback, not the EP we initially requested."""
+        with self._lock:
+            return self._active_provider
+
     def load(self) -> None:
         """Begin loading the model in a background thread (idempotent)."""
         with self._lock:
@@ -175,12 +228,14 @@ class OnnxAsrBackend:
             self._cancel_requested = True
             self._model = None
             self._status = "stopped"
+            self._active_provider = None
 
     def change_model(
         self,
         model: str,
         compute_type: Optional[str] = None,  # API parity, ignored
         load_id: Optional[str] = None,
+        prefer_cpu_provider: Optional[bool] = None,
     ) -> None:
         """Switch to a different ONNX model. Triggers a background reload.
 
@@ -188,17 +243,32 @@ class OnnxAsrBackend:
         loader identifier when the new model's onnx-asr id differs
         from its HF canonical (T-One, GigaAM e2e, NeMo short names).
         Defaults to ``model``.
+
+        ``prefer_cpu_provider=None`` means "leave the existing flag
+        as-is" — the in-family swap path in ``RegistryBackend`` keeps
+        the same ``ModelInfo.prefer_cpu_provider`` for both old and
+        new model anyway (Whisper-base → Whisper-turbo: both False;
+        GigaAM CTC → GigaAM RNN-T: both True), so unspecified is
+        safe.  Pass an explicit value when crossing the boundary.
         """
         del compute_type
+        requested_load_id = load_id or model
         with self._lock:
             if self._shutdown:
                 return
-            if model == self._model_name and self._status == "ready":
+            if (
+                model == self._model_name
+                and requested_load_id == self._load_id
+                and self._status == "ready"
+            ):
                 return
             self._model_name = model
-            self._load_id = load_id or model
+            self._load_id = requested_load_id
+            if prefer_cpu_provider is not None:
+                self._prefer_cpu_provider = bool(prefer_cpu_provider)
             self._model = None
             self._status = "stopped"
+            self._active_provider = None
         self.load()
 
     def update_inference_settings(self, settings) -> None:
@@ -344,6 +414,7 @@ class OnnxAsrBackend:
             self._shutdown = True
             self._model = None
             self._status = "stopped"
+            self._active_provider = None
 
     @staticmethod
     def set_progress_callback(
@@ -362,19 +433,46 @@ class OnnxAsrBackend:
             kwargs["providers"] = providers
         return kwargs
 
-    def _resolve_providers(self) -> Optional[list[str]]:
+    def _resolve_providers(self) -> Optional[list]:
         """Map ``self._device`` to an ONNX Runtime providers list.
 
-        ``auto`` returns None so onnx-asr / ORT pick from what's installed.
+        Returns a list that ``onnx_asr.load_model`` accepts directly
+        (``Sequence[str | tuple[str, dict]]``).  CPU is appended as a
+        fallback after every accelerator entry so ORT can still build
+        the session if the primary provider's session-create fails
+        (driver missing, unsupported op for this model, etc.).
+        Returning ``None`` lets onnx-asr / ORT pick from whatever is
+        registered in the installed ``onnxruntime`` wheel.
+
+        ``prefer_cpu_provider`` short-circuits the accelerator branches
+        for models we know will fail mid-compilation:  GigaAM v3 CTC
+        and RNN-T burn ~75 s in ``MLModel.compileModelAtURL`` before
+        ORT raises ``HandleNegativeAxis … axis 2 is not in valid
+        range`` and the retry-on-CPU path kicks in.  The wait is the
+        same on Windows + CUDA for the same models (CUDA EP also
+        rejects the CTC op).  Skipping straight to CPU saves the user
+        a 75-second freeze on every model load — same eventual
+        outcome, no wasted compilation.  Honoured for ``auto``,
+        ``cuda`` and ``coreml`` selections;  an explicit ``cpu`` is
+        already CPU.
         """
+        if self._prefer_cpu_provider and self._device != "cpu":
+            return ["CPUExecutionProvider"]
         if self._device == "cuda":
-            # CPU is a fallback if CUDA fails at session-create time
-            # (e.g. driver missing) — ORT will use the first viable
-            # provider in the list.
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        if self._device == "coreml":
+            return [_coreml_provider_entry(), "CPUExecutionProvider"]
         if self._device == "cpu":
             return ["CPUExecutionProvider"]
-        return None
+        # ``auto``: prefer CoreML on Apple Silicon (it is the only
+        # accelerator path that actually exercises the Neural Engine
+        # / GPU on macOS); on Windows / Linux let ORT pick — it will
+        # use CUDA if ``onnxruntime-gpu`` is installed and a working
+        # NVIDIA driver is present, otherwise CPU.
+        if sys.platform == "darwin":
+            return [_coreml_provider_entry(), "CPUExecutionProvider"]
+        return _resolve_auto_providers_non_darwin()
+
 
     def _do_load(self, model_name: str) -> None:
         install_tqdm_progress()
@@ -383,10 +481,13 @@ class OnnxAsrBackend:
         try:
             import onnx_asr  # type: ignore[import]
         except ImportError as exc:
+            extras = (
+                "[gpu,hub]" if sys.platform == "win32" else "[cpu,hub]"
+            )
             log.error(
                 "onnx-asr is not installed: %s\n"
-                "Install it with:  pip install \"onnx-asr[gpu,hub]\"",
-                exc,
+                "Install it with:  pip install \"onnx-asr%s\"",
+                exc, extras,
             )
             with self._lock:
                 if not self._shutdown and self._model_name == model_name:
@@ -399,22 +500,41 @@ class OnnxAsrBackend:
             "Loading ONNX model %s (load_id=%s, family=%s, providers=%s, quantization=%s)…",
             model_name, load_id, self._family, providers, self._quantization,
         )
+        forced_provider: Optional[str] = None
+        if providers == ["CPUExecutionProvider"]:
+            forced_provider = "CPU"
+
         try:
             model = onnx_asr.load_model(
                 load_id, **self._build_load_kwargs(providers)
             )
         except Exception as exc:
-            # Fallback path: user asked for CUDA but the CUDA provider
-            # isn't actually available.  Retry with CPU only so the user
+            # Fallback path: an accelerator provider (CUDA / CoreML)
+            # was requested or auto-selected but failed at
+            # session-create time — retry with CPU only so the user
             # ends up with a working backend instead of an error pill.
+            #
+            # We don't try to classify the exception any further:
+            # ONNX Runtime surfaces accelerator-specific failures in
+            # at least three different shapes — "CUDAExecutionProvider
+            # not available …", CoreML's "model_builder.cc … Unable
+            # to get shape for output …" (unsupported op), TensorRT
+            # build errors, etc. — and a string-keyword match
+            # inevitably misses one. Retrying on CPU when an
+            # accelerator was the request is always safe: CPU is the
+            # universal EP, so the second attempt either succeeds
+            # (best outcome — model is at least usable, just slower)
+            # or fails for a model-level reason that the first
+            # attempt would have hit anyway.
+            wants_accelerator = self._device in ("cuda", "coreml", "auto")
             if (
-                self._device == "cuda"
-                and _is_cuda_provider_error(exc)
+                wants_accelerator
                 and not self._shutdown
                 and not self._cancel_requested
             ):
                 log.warning(
-                    "CUDA provider unavailable (%s) — retrying on CPU",
+                    "Accelerator provider failed for this model (%s) — "
+                    "retrying on CPU",
                     exc,
                 )
                 try:
@@ -422,6 +542,11 @@ class OnnxAsrBackend:
                         load_id,
                         **self._build_load_kwargs(["CPUExecutionProvider"]),
                     )
+                    # Mark the active provider as CPU explicitly — the
+                    # detection probe below would also resolve to CPU,
+                    # but stamping it here keeps the source of truth
+                    # close to the retry that produced it.
+                    forced_provider = "CPU"
                 except Exception as cpu_exc:
                     log.error(
                         "CPU fallback also failed for %s: %s",
@@ -451,6 +576,13 @@ class OnnxAsrBackend:
                         self._status = "error"
                 return
 
+        # Probe the loaded model for the EP its InferenceSession actually
+        # bound to.  The retry-on-CPU branch already pre-stamps
+        # ``forced_provider``; otherwise we sniff the model object
+        # (encoder / model attribute → ``session.get_providers()[0]``)
+        # so the UI shows the real EP rather than the requested one.
+        detected_provider = forced_provider or _detect_active_provider(model)
+
         with self._lock:
             if self._shutdown:
                 return
@@ -468,7 +600,99 @@ class OnnxAsrBackend:
                 return
             self._model = model
             self._status = "ready"
-            log.info("OnnxAsr model %s ready", model_name)
+            self._active_provider = detected_provider
+            log.info(
+                "OnnxAsr model %s ready (provider=%s)",
+                model_name, detected_provider or "CPU (fallback/unknown)",
+            )
+
+
+def _resolve_auto_providers_non_darwin() -> list:
+    """Return a provider list for ``device='auto'`` on Windows / Linux.
+
+    Probes CUDA with a dummy session; if it works we return
+    ``["CUDAExecutionProvider", "CPUExecutionProvider"]`` so the model
+    loads on the GPU. If CUDA is unavailable (missing driver / DLL) we
+    return ``["CPUExecutionProvider"]`` and skip the noisy TensorRT/CUDA
+    fallback dance entirely.
+
+    TensorRT is ignored for ``auto`` because it requires a separate SDK
+    install and almost never works out-of-the-box.
+    """
+    global _AUTO_PROVIDER_CACHE
+    if _AUTO_PROVIDER_CACHE is not None:
+        return _AUTO_PROVIDER_CACHE
+
+    try:
+        import onnxruntime as ort
+        import numpy as np
+    except Exception:
+        _AUTO_PROVIDER_CACHE = ["CPUExecutionProvider"]
+        return _AUTO_PROVIDER_CACHE
+
+    # Suppress ORT's default C++ logger so missing-CUDA-DLL messages
+    # don't spam stderr during the probe (or during any later session
+    # creation in this process).
+    ort.set_default_logger_severity(4)
+
+    available = ort.get_available_providers()
+
+    # Never auto-pick TensorRT — it needs a separate SDK and spams
+    # the console with missing-cublas errors when the DLLs aren't
+    # present.
+    if "CUDAExecutionProvider" not in available:
+        _AUTO_PROVIDER_CACHE = ["CPUExecutionProvider"]
+        return _AUTO_PROVIDER_CACHE
+
+    opts = ort.SessionOptions()
+    opts.log_severity_level = 4  # silence ORT console spam
+    x = np.array([0.0], dtype=np.float32)
+
+    try:
+        sess = ort.InferenceSession(
+            _WARMUP_ONNX_BYTES,
+            sess_options=opts,
+            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+        )
+        sess.run(None, {"x": x})
+        # ORT silently falls back to CPU when the CUDA DLLs are
+        # missing; session creation succeeds but get_providers()
+        # reveals the real EP.  Only cache CUDA when the session
+        # actually bound to it.
+        if sess.get_providers() and sess.get_providers()[0] == "CUDAExecutionProvider":
+            _AUTO_PROVIDER_CACHE = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+            return _AUTO_PROVIDER_CACHE
+        # GPU driver says CUDA is available, but the runtime DLLs
+        # (cublasLt64_12.dll, cudnn64_9.dll, …) are not on PATH.
+        # Log a one-time pointer so the user knows how to enable GPU.
+        _warn_missing_cuda_redist()
+        _AUTO_PROVIDER_CACHE = ["CPUExecutionProvider"]
+        return _AUTO_PROVIDER_CACHE
+    except Exception:
+        _warn_missing_cuda_redist()
+        _AUTO_PROVIDER_CACHE = ["CPUExecutionProvider"]
+        return _AUTO_PROVIDER_CACHE
+
+
+_CUDA_REDIST_WARNED: bool = False
+
+
+def _warn_missing_cuda_redist() -> None:
+    """Log a one-time hint when a GPU is present but CUDA runtime DLLs
+    are missing so the model falls back to CPU."""
+    global _CUDA_REDIST_WARNED
+    if _CUDA_REDIST_WARNED:
+        return
+    _CUDA_REDIST_WARNED = True
+    log.warning(
+        "NVIDIA GPU detected, but CUDA runtime libraries are missing "
+        "(cublasLt64_12.dll, cudnn64_9.dll, …).  "
+        "The model will run on CPU.  "
+        "To enable GPU acceleration, install the pip CUDA packages:\n"
+        "    uv pip install --extra cuda\n"
+        "or on non-uv workflows:\n"
+        "    pip install \"lazy-to-text[cuda]\""
+    )
 
 
 # ---- module-level helpers (testable without a backend instance) ------------
@@ -637,14 +861,138 @@ def _resample(
         ).astype(np.float32)
 
 
-def _is_cuda_provider_error(exc: BaseException) -> bool:
-    """Heuristic: does the exception text suggest a CUDA-provider issue?
+def _coreml_provider_entry() -> tuple[str, dict]:
+    """CoreML provider entry tuned for Apple Silicon.
 
-    onnx_asr.load_model raises plain ``RuntimeError`` with messages like
-    ``[E:onnxruntime] CUDAExecutionProvider not available …`` when the
-    requested provider isn't loadable.  We use a string match because
-    ORT doesn't expose a typed exception for this case.
+    Provider options
+    ~~~~~~~~~~~~~~~~
+    - ``ModelFormat='MLProgram'`` — the modern Core ML 5 container
+      (macOS 12+).  ORT 1.18+ defaults to it but we pin explicitly
+      so a future ORT release that flips the default back to the
+      legacy ``NeuralNetwork`` format doesn't change our behaviour
+      silently.
+    - ``MLComputeUnits='ALL'`` — let CoreML's dispatcher route ops
+      between Neural Engine, GPU and CPU per-op.  Apple's
+      recommendation for mixed-workload models like ASR.
+    - ``RequireStaticInputShapes='0'`` / ``EnableOnSubgraphs='0'``
+      — current ORT defaults, pinned defensively so a future
+      version change doesn't break dynamic-shape models that today
+      load fine.
+
+    Known model compatibility (empirical + ORT issue tracker as
+    of ORT 1.25)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    - Whisper Large v3 / Turbo, Canary 1B v2 (Transformer ED) —
+      load successfully on CoreML.
+    - GigaAM v3 CTC / RNN-T (Conformer with static shapes) —
+      expected to work; not exhaustively tested on every Mac.
+    - Parakeet TDT v3 — unstable on CoreML, see ORT issue #26355
+      ("CoreML execution provider fails during inference with the
+      Parakeet CTC ASR model").
+    - T-One (Russian Conformer-CTC) — fails at session-create with
+      ``axis 2 is not in valid range [-2,1]`` (unsupported op).
+    - Vosk-RU / Vosk Small (Zipformer streaming) — fails at
+      session-create with ``Unable to get shape for output:
+      tmp_9`` (CoreML EP can't handle streaming chunk dynamic
+      shapes).
+
+    The retry-on-CPU branch in :meth:`OnnxAsrBackend._do_load`
+    catches every accelerator failure and silently re-loads the
+    model on CPU, so the failure modes above surface to the user
+    only as a one-line "Accelerator provider failed … retrying on
+    CPU" warning in the Logs view; the Engine pill ends up
+    reflecting the real EP (CPU).
     """
-    msg = str(exc).lower()
-    keywords = ("cuda", "cudaexecutionprovider", "provider", "tensorrt")
-    return any(k in msg for k in keywords)
+    return (
+        "CoreMLExecutionProvider",
+        {
+            "ModelFormat": "MLProgram",
+            "MLComputeUnits": "ALL",
+            "RequireStaticInputShapes": "0",
+            "EnableOnSubgraphs": "0",
+        },
+    )
+
+
+# Maps ORT's verbose provider names to short labels for the UI pill.
+_PROVIDER_PRETTY = {
+    "CUDAExecutionProvider": "CUDA",
+    "CoreMLExecutionProvider": "CoreML",
+    "CPUExecutionProvider": "CPU",
+    "TensorrtExecutionProvider": "TensorRT",
+    "DmlExecutionProvider": "DirectML",
+    "AzureExecutionProvider": "Azure",
+    "ROCMExecutionProvider": "ROCm",
+}
+
+
+def _pretty_provider(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    return _PROVIDER_PRETTY.get(raw, raw.replace("ExecutionProvider", ""))
+
+
+def _detect_active_provider(model) -> Optional[str]:
+    """Return the EP name actually backing ``model``'s InferenceSession."""
+    if model is None:
+        return None
+
+    # Log internal structure to find the session in wrapped adapters
+    log.info("Probing model of type %s. dir() contents: %s", type(model), dir(model))
+
+    # Handle onnx-asr adapters (e.g. TextResultsAsrAdapter) that wrap the real model.
+    # These often have a .model attribute containing the actual ASR object.
+    if hasattr(model, "model") and not hasattr(model, "get_providers"):
+        log.info("Unwrapping model adapter: %s", type(model))
+        model = model.model
+
+    # Probe order: common attribute names used by onnx-asr
+    probe_attrs = (
+        "encoder", "_encoder",
+        "model", "_model",
+        "decoder", "_decoder",
+        "session", "_session",
+        "inference_session"
+    )
+
+    # 1. Check if the model itself is the session
+    if hasattr(model, "get_providers"):
+        try:
+            providers = model.get_providers()
+            if providers:
+                res = _pretty_provider(providers[0])
+                log.info("Found provider on model root: %s", res)
+                return res
+        except Exception:
+            pass
+
+    # 2. Check attributes
+    for attr in probe_attrs:
+        sess = getattr(model, attr, None)
+        if sess is None:
+            continue
+
+        log.info("Probing attribute '%s' for session...", attr)
+
+        # Some onnx-asr models wrap the session in another object
+        # that has a 'session' attribute.
+        if not hasattr(sess, "get_providers") and hasattr(sess, "session"):
+            log.info("Attribute '%s' is a wrapper, using .session", attr)
+            sess = sess.session
+
+        get_providers = getattr(sess, "get_providers", None)
+        if not callable(get_providers):
+            continue
+        try:
+            providers = get_providers()
+            if providers:
+                res = _pretty_provider(providers[0])
+                log.info("Found provider on attribute '%s': %s", attr, res)
+                return res
+        except Exception as e:
+            log.info("Failed to get providers from '%s': %s", attr, e)
+            continue
+
+    log.info("No session/provider found in model %s", type(model))
+    return None
+

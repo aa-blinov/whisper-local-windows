@@ -42,7 +42,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 # Late-bound at module level so tests can monkey-patch them with
 # fakes without touching the real implementations.  ``RegistryBackend``
@@ -143,15 +143,19 @@ def _worker_main(child_conn: "Connection") -> None:
     stop_broadcaster = threading.Event()
 
     def _status_broadcaster() -> None:
-        """Push status changes to the parent so it doesn't have to poll.
+        """Push status / provider changes to the parent so it doesn't have to poll.
 
-        Polls the inner backend's ``status()`` every 100 ms, sends a
-        ``("status_change", new_status)`` message on transition only.
-        100 ms is invisible to the user (typical state transitions
-        last 1-10 s) but fast enough that the UI's loading pill
-        repaints almost immediately when the model goes ready.
+        Polls the inner backend's ``status()`` and ``active_provider()``
+        every 100 ms, sends ``("status_change", new_status)`` /
+        ``("provider_change", provider_name | None)`` messages on
+        transition only. 100 ms is invisible to the user (typical
+        state transitions last 1-10 s) but fast enough that the UI's
+        loading pill / engine pill repaint almost immediately when
+        the model goes ready.
         """
-        last = None
+        last_status = None
+        last_provider: Optional[str] = None
+        provider_seen_once = False
         while not stop_broadcaster.is_set():
             b = backend_holder[0]
             if b is not None:
@@ -159,9 +163,29 @@ def _worker_main(child_conn: "Connection") -> None:
                     cur = b.status()
                 except Exception:  # pragma: no cover — defensive
                     cur = None
-                if cur is not None and cur != last:
+                if cur is not None and cur != last_status:
                     safe_send(("status_change", cur))
-                    last = cur
+                    last_status = cur
+
+                provider_getter = getattr(b, "active_provider", None)
+                if callable(provider_getter):
+                    try:
+                        cur_provider = provider_getter()
+                    except Exception as e:  # pragma: no cover — defensive
+                        log.warning("active_provider() raised: %s", e)
+                        cur_provider = None
+                    # Push on every transition (including ready→stopped
+                    # which clears the pill back to None) and once at
+                    # the start so the parent always has a definitive
+                    # answer instead of the default ``None`` cache.
+                    if (
+                        not provider_seen_once
+                        or cur_provider != last_provider
+                    ):
+                        log.info("Worker pushing provider_change: %s", cur_provider)
+                        safe_send(("provider_change", cur_provider))
+                        last_provider = cur_provider
+                        provider_seen_once = True
             stop_broadcaster.wait(0.1)
 
     threading.Thread(

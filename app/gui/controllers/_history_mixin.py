@@ -21,8 +21,11 @@ to that mixin too.
 from __future__ import annotations
 
 import logging
+import threading
 
 from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+
+from app.gui.widgets.dialogs import confirm, notify
 
 
 log = logging.getLogger(__name__)
@@ -47,14 +50,11 @@ class HistoryMixin:
         entries = self._history.get_entries()
         if not entries:
             return
-        answer = QMessageBox.question(
+        if not confirm(
             self._window,
             "Clear history?",
             f"Delete all {len(entries)} transcriptions? This cannot be undone.",
-            QMessageBox.Yes | QMessageBox.Cancel,
-            QMessageBox.Cancel,
-        )
-        if answer != QMessageBox.Yes:
+        ):
             return
         self._history.clear_history()
         self._window.history_view.set_entries(self._history.get_entries())
@@ -62,9 +62,11 @@ class HistoryMixin:
     def _on_history_export(self) -> None:
         if self._history is None:
             return
+        if getattr(self, "_history_export_in_progress", False):
+            return
         entries = self._history.get_entries()
         if not entries:
-            QMessageBox.information(
+            notify(
                 self._window,
                 "Nothing to export",
                 "Your history is empty — record a transcription first.",
@@ -78,24 +80,52 @@ class HistoryMixin:
         )
         if not path:
             return
-        try:
-            ok = bool(self._history.export_to_text(path))
-        except Exception as exc:
-            log.warning("History export raised: %s", exc)
-            ok = False
+        self._history_export_in_progress = True
+        self._window.history_view.set_export_busy(True)
+
+        def worker() -> None:
+            try:
+                ok = bool(self._history.export_to_text(path))
+            except Exception as exc:
+                log.warning("History export raised: %s", exc)
+                payload = {"ok": False, "path": path, "count": len(entries)}
+                try:
+                    self._history_export_finished.emit(payload)
+                except RuntimeError:
+                    pass
+                return
+            payload = {"ok": ok, "path": path, "count": len(entries)}
+            try:
+                self._history_export_finished.emit(payload)
+            except RuntimeError:
+                pass
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name="export-history",
+        ).start()
+
+    def _on_history_export_finished(self, payload: dict) -> None:
+        self._history_export_in_progress = False
+        self._window.history_view.set_export_busy(False)
+        ok = bool(payload.get("ok"))
+        path = str(payload.get("path", ""))
+        count = int(payload.get("count", 0))
         if ok:
-            QMessageBox.information(
+            notify(
                 self._window,
                 "History exported",
-                f"Saved {len(entries)} transcriptions to:\n{path}",
+                f"Saved {count} transcriptions to:\n{path}",
             )
-        else:
-            QMessageBox.warning(
-                self._window,
-                "Export failed",
-                "Could not write the history file. Check the destination "
-                "path and permissions.",
-            )
+            return
+        notify(
+            self._window,
+            "Export failed",
+            "Could not write the history file. Check the destination "
+            "path and permissions.",
+            kind="warning",
+        )
 
     def _on_history_copy(self, text: str) -> None:
         QApplication.clipboard().setText(text)

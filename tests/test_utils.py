@@ -7,6 +7,8 @@ covered side by side here.
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -357,132 +359,54 @@ def test_move_cached_dir_short_circuits_when_src_equals_dst(tmp_path):
     assert (src / "model.bin").exists()
 
 
-# ---- Frozen-mode user data dirs --------------------------------------------
+def test_move_cached_dir_falls_back_to_copy_on_cross_volume(tmp_path, monkeypatch):
+    """When ``os.rename`` raises (cross-volume), the helper must copy
+    everything first and only then delete the source.  An interrupted
+    operation therefore leaves the source intact."""
+    import os
+
+    from app.utils import move_cached_dir
+
+    src = tmp_path / "src" / "hub"
+    src.mkdir(parents=True)
+    (src / "model.bin").write_bytes(b"cross" * 200)
+
+    dst = tmp_path / "dst" / "hub"
+
+    # Force ``os.rename`` to fail so we exercise the copy+delete path.
+    monkeypatch.setattr(os, "rename", lambda _s, _d: (_ for _ in ()).throw(OSError(18, "cross-device")))
+
+    result = move_cached_dir(str(src), str(dst))
+
+    assert result["moved"] is True
+    assert result["bytes"] >= 1000
+    assert (dst / "model.bin").exists()
+    # Source should have been removed after successful copy.
+    assert not src.exists()
 
 
-def test_get_project_logs_path_dev_unchanged(monkeypatch):
-    """Dev mode (non-frozen) keeps the existing project-root
-    behaviour — walks up from the module file to find
-    ``pyproject.toml``."""
-    import sys
+# ---- Dev-mode user data dirs -----------------------------------------------
 
-    monkeypatch.delattr(sys, "frozen", raising=False)
 
+def test_get_project_logs_path_dev_unchanged():
+    """Dev mode walks up from the module file to find
+    ``pyproject.toml`` and returns ``<project>/logs``."""
     from app.utils import get_project_logs_path
 
     result = get_project_logs_path()
-    # Project's own logs dir; never a hidden APPDATA path in dev.
+    # Project's own logs dir; never a hidden user-data path in dev.
     assert "AppData" not in result
+    assert "Application Support" not in result
     assert "logs" in result.lower()
 
 
-def test_get_project_logs_path_frozen_uses_local_appdata(
-    tmp_path, monkeypatch,
-):
-    """Frozen build → ``%LOCALAPPDATA%/LazyToText/logs`` so the
-    runtime can write logs even when installed in
-    ``Program Files`` (read-only without admin)."""
-    import sys
-
-    local_appdata = tmp_path / "local-appdata"
-    local_appdata.mkdir()
-    monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(
-        sys, "executable",
-        "C:/Program Files/LazyToText/LazyToText.exe",
-        raising=False,
-    )
-
-    from app.utils import get_project_logs_path
-
-    result = Path(get_project_logs_path())
-    assert result == local_appdata / "LazyToText" / "logs"
-    assert result.is_dir()
-
-
-def test_get_project_logs_path_frozen_falls_back_when_localappdata_missing(
-    tmp_path, monkeypatch,
-):
-    """Sandboxed shells without ``%LOCALAPPDATA%`` fall back to
-    ``~/AppData/Local/LazyToText/logs``."""
-    import sys
-
-    monkeypatch.delenv("LOCALAPPDATA", raising=False)
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", "C:/foo/LazyToText.exe", raising=False)
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
-
-    from app.utils import get_project_logs_path
-
-    result = Path(get_project_logs_path())
-    expected = tmp_path / "fake_home" / "AppData" / "Local" / "LazyToText" / "logs"
-    assert result == expected
-    assert result.is_dir()
-
-
-def test_get_project_models_path_dev_unchanged(monkeypatch):
-    import sys
-
-    monkeypatch.delattr(sys, "frozen", raising=False)
-
+def test_get_project_models_path_dev_unchanged():
     from app.utils import get_project_models_path
 
     result = get_project_models_path()
     assert "AppData" not in result
+    assert "Application Support" not in result
     assert "models" in result.lower()
-
-
-def test_get_project_models_path_frozen_uses_local_appdata(
-    tmp_path, monkeypatch,
-):
-    """Frozen build → ``%LOCALAPPDATA%/LazyToText/models``. Models
-    are gigabytes — LOCAL appdata (not Roaming) is the right
-    bucket; users with roaming profiles don't want 5 GB of weights
-    syncing across machines."""
-    import sys
-
-    local_appdata = tmp_path / "local-appdata"
-    local_appdata.mkdir()
-    monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(
-        sys, "executable",
-        "C:/Program Files/LazyToText/LazyToText.exe",
-        raising=False,
-    )
-
-    from app.utils import get_project_models_path
-
-    result = Path(get_project_models_path())
-    assert result == local_appdata / "LazyToText" / "models"
-    # ``get_project_models_path`` is a pure path-resolver now; the
-    # consumer (HF Hub / GigaAM / mover script) creates the directory
-    # on first download. The caller should NOT see a side-effect dir
-    # appear just from probing the configured path.
-    assert not result.exists(), (
-        "path resolver must not create the directory as a side effect"
-    )
-
-
-def test_get_project_models_path_frozen_falls_back_when_localappdata_missing(
-    tmp_path, monkeypatch,
-):
-    import sys
-
-    monkeypatch.delenv("LOCALAPPDATA", raising=False)
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", "C:/foo/LazyToText.exe", raising=False)
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
-
-    from app.utils import get_project_models_path
-
-    result = Path(get_project_models_path())
-    expected = tmp_path / "fake_home" / "AppData" / "Local" / "LazyToText" / "models"
-    assert result == expected
-    assert not result.exists(), (
-        "path resolver must not create the directory as a side effect"
-    )
 
 
 # ---- is_onnx_model_cached ---------------------------------------------------
@@ -575,3 +499,60 @@ def test_is_cached_for_info_uses_onnx_check_for_onnx_models(tmp_path, monkeypatc
             / "snapshots" / "deadbeef")
     (snap / "model.onnx").write_bytes(b"weights")
     assert is_cached_for_info(info) is True
+
+
+# ---- _try_inject_nvidia_pip_dll_paths ---------------------------------------
+
+
+def test_inject_nvidia_paths_is_noop_on_non_windows(monkeypatch):
+    """The helper must short-circuit on macOS / Linux."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    original_path = os.environ.get("PATH", "")
+
+    from app.utils import _try_inject_nvidia_pip_dll_paths
+
+    _try_inject_nvidia_pip_dll_paths()
+    assert os.environ.get("PATH", "") == original_path
+
+
+def test_inject_nvidia_paths_adds_bin_dirs_on_windows(tmp_path, monkeypatch):
+    """When ``site-packages/nvidia/<pkg>/bin/`` directories exist, prepend
+    them to PATH in deterministic order."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    original_path = os.environ.get("PATH", "")
+
+    # Create a fake site-packages tree.
+    nvidia = tmp_path / "nvidia"
+    (nvidia / "cublas" / "bin").mkdir(parents=True)
+    (nvidia / "cudnn" / "bin").mkdir(parents=True)
+    (nvidia / "cufft" / "bin").mkdir(parents=True)
+
+    # Temporarily inject the fake site-packages into sys.path.
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+    from app.utils import _try_inject_nvidia_pip_dll_paths
+
+    _try_inject_nvidia_pip_dll_paths()
+
+    new_path = os.environ.get("PATH", "")
+    assert new_path != original_path
+    assert str(nvidia / "cublas" / "bin") in new_path
+    assert str(nvidia / "cudnn" / "bin") in new_path
+    assert str(nvidia / "cufft" / "bin") in new_path
+
+    # Cleanup: restore PATH so other tests aren't polluted.
+    os.environ["PATH"] = original_path
+
+
+def test_inject_nvidia_paths_skips_when_no_nvidia_packages(monkeypatch):
+    """If the user never installed the ``[cuda]`` extra, the helper is a
+    no-op rather than crashing on a missing directory."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    # Hide the real venv site-packages so the helper sees no nvidia packages.
+    monkeypatch.setattr(sys, "path", [])
+    original_path = os.environ.get("PATH", "")
+
+    from app.utils import _try_inject_nvidia_pip_dll_paths
+
+    _try_inject_nvidia_pip_dll_paths()
+    assert os.environ.get("PATH", "") == original_path

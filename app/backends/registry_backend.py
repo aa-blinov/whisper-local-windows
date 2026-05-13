@@ -78,6 +78,7 @@ def _build_onnx_asr(
     device: str = "auto",
     quantization: Optional[str] = None,
     load_id: Optional[str] = None,
+    prefer_cpu_provider: bool = False,
     **_ignored,
 ) -> TranscriptionBackend:
     # Late import: keeps onnx-asr off the module-load path of tests
@@ -92,6 +93,7 @@ def _build_onnx_asr(
         device=device,
         quantization=quantization,
         load_id=load_id,
+        prefer_cpu_provider=prefer_cpu_provider,
     )
 
 
@@ -125,11 +127,12 @@ class RegistryBackend:
             Callable[[int, int, str], None]
         ] = None
 
-        canonical, onnx_family, load_id = self._resolve_for(model)
+        canonical, onnx_family, load_id, prefer_cpu = self._resolve_for(model)
         self._inner = _build_onnx_asr(
             canonical,
             onnx_family=onnx_family,
             load_id=load_id,
+            prefer_cpu_provider=prefer_cpu,
             **self._kwargs,
         )
 
@@ -141,6 +144,16 @@ class RegistryBackend:
     def health_check(self) -> bool:
         return self._inner.health_check()
 
+    def active_provider(self) -> Optional[str]:
+        # Pass-through; the inner OnnxAsrBackend exposes the EP that
+        # its loaded model is actually using (post-fallback). Returns
+        # ``None`` when no model is loaded or the inner backend
+        # doesn't surface the field (older fakes in unit tests).
+        getter = getattr(self._inner, "active_provider", None)
+        if callable(getter):
+            return getter()
+        return None
+
     def load(self) -> None:
         self._inner.load()
 
@@ -149,7 +162,7 @@ class RegistryBackend:
         model: str,
         compute_type: Optional[str] = None,
     ) -> None:
-        canonical, onnx_family, load_id = self._resolve_for(model)
+        canonical, onnx_family, load_id, prefer_cpu = self._resolve_for(model)
 
         # Same family — let the inner backend swap models without a
         # rebuild.  The onnx-asr session can be re-pointed to a new
@@ -158,7 +171,10 @@ class RegistryBackend:
         current_family = getattr(self._inner, "_family", None)
         if current_family == onnx_family:
             self._inner.change_model(
-                canonical, compute_type=compute_type, load_id=load_id,
+                canonical,
+                compute_type=compute_type,
+                load_id=load_id,
+                prefer_cpu_provider=prefer_cpu,
             )
             return
 
@@ -181,6 +197,7 @@ class RegistryBackend:
             canonical,
             onnx_family=onnx_family,
             load_id=load_id,
+            prefer_cpu_provider=prefer_cpu,
             **self._kwargs,
         )
         if self._progress_callback is not None:
@@ -246,22 +263,40 @@ class RegistryBackend:
 
     # ---- helpers ------------------------------------------------------------
 
-    def _resolve_for(self, model: str) -> tuple[str, str, Optional[str]]:
+    def _resolve_for(
+        self, model: str
+    ) -> tuple[str, str, Optional[str], bool]:
         """Map an alias / canonical id to ``(canonical, onnx_family,
-        onnx_load_id)``.
+        onnx_load_id, prefer_cpu_provider)``.
 
         ``onnx_load_id`` is what to pass to ``onnx_asr.load_model`` —
         usually the same as ``canonical`` (the HF repo path), but
         overridden in the registry when onnx-asr knows the model under
         a different identifier (T-One, GigaAM e2e variants, NeMo
-        short names).  Falls back to ``("…", "auto", None)`` for
-        unknown ids so a bare Hugging Face repo path still loads.
+        short names).
+
+        ``prefer_cpu_provider`` short-circuits the provider list to
+        CPU-only at load time for models that ORT's CoreML / CUDA
+        adapters can't run (currently GigaAM CTC / RNN-T — they
+        compile fine for ~75 s and then crash on a CTC op).  Without
+        this flag the backend would still recover via the
+        retry-on-CPU branch in ``_do_load``, but only after wasting
+        the full compilation time on every load — visible to the
+        user as a UI freeze.
+
+        Falls back to ``("…", "auto", None, False)`` for unknown ids
+        so a bare Hugging Face repo path still loads.
         """
         try:
             info = get_model(alias_for(model))
         except KeyError:
-            return canonical_for(model), "auto", None
-        return info.canonical, info.onnx_family, info.onnx_load_id
+            return canonical_for(model), "auto", None, False
+        return (
+            info.canonical,
+            info.onnx_family,
+            info.onnx_load_id,
+            info.prefer_cpu_provider,
+        )
 
 
 def _quantization_for(compute_type: Optional[str]) -> Optional[str]:

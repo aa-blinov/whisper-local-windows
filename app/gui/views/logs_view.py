@@ -94,7 +94,7 @@ SEARCH_DEBOUNCE_MS = 200  # ms to wait after the last keystroke before re-render
 
 
 class LogsView(QWidget):
-    DEFAULT_MAX_LINES = 5000
+    DEFAULT_MAX_LINES = 1000
 
     def __init__(
         self,
@@ -159,9 +159,7 @@ class LogsView(QWidget):
         # invisible.
         self._text.setLineWrapMode(QPlainTextEdit.WidgetWidth)
         self._text.setWordWrapMode(QTextOption.WrapAnywhere)
-        # Smooth wheel scrolling — default jumps a couple of lines per
-        # notch which feels stuttery in a tall log.
-        self._text.verticalScrollBar().setSingleStep(20)
+
         # Cosine-eased wheel animation matching the rest of the app.
         # ``QPlainTextEdit`` is a ``QAbstractScrollArea`` so the helper
         # binds to its viewport directly.

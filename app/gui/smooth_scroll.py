@@ -37,8 +37,8 @@ from PySide6.QtWidgets import QAbstractScrollArea
 from app.gui.refresh_rate import display_refresh_rate, tick_interval_ms
 
 _DURATION_MS = 400            # total animation length per notch
-_PX_PER_NOTCH = 100.0         # base pixels per standard notch (angleDelta=120)
-_STEP_RATIO = 1.5             # multiplier — 100 * 1.5 = 150 px/notch
+_PX_PER_NOTCH = 40.0          # reduced from 100.0 for more precision
+_STEP_RATIO = 1.0             # reduced from 1.5
 
 
 def _sub_delta(delta: float, steps_left: int, steps_total: int) -> float:

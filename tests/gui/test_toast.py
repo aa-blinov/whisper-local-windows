@@ -32,6 +32,7 @@ def test_toast_show_message_truncates_long_previews(qtbot):
 
     parent = QWidget()
     qtbot.addWidget(parent)
+    parent.show()
     toast = Toast(parent=parent)
     long_text = "a" * 200
     toast.show_message(long_text)
@@ -46,6 +47,7 @@ def test_toast_ignores_empty_text(qtbot):
 
     parent = QWidget()
     qtbot.addWidget(parent)
+    parent.show()
     toast = Toast(parent=parent)
     toast.show_message("")
     assert not toast.isVisible()

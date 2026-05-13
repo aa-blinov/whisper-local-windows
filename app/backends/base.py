@@ -35,6 +35,20 @@ class TranscriptionBackend(Protocol):
         """``True`` if the backend is loaded and ready to transcribe."""
         ...
 
+    def active_provider(self) -> Optional[str]:
+        """Pretty-printed ONNX Runtime EP that the loaded model is
+        actually using (e.g. ``"CUDA"``, ``"CoreML"``, ``"CPU"``,
+        ``"TensorRT"``, ``"DirectML"``). Returns ``None`` while no
+        model is loaded — including the loading and error states —
+        so the UI can hide / dim the indicator until inference is
+        actually possible.
+
+        The value reflects the *real* EP after any retry-on-CPU
+        fallback, not the one originally requested via
+        ``device='auto'`` / ``device='cuda'``.
+        """
+        ...
+
     def load(self) -> None:
         """Begin loading the configured model (idempotent, non-blocking)."""
         ...

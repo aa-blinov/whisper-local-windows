@@ -345,6 +345,39 @@ QLabel[role="toast-body"] {
     font-size: {{font.size_body}};
 }
 
+/* ---- Recording Overlay -------------------------------------------------- */
+
+#RecordingOverlay {
+    background: transparent;
+    border: none;
+}
+
+QFrame[role="recording-overlay-surface"] {
+    background-color: {{color.bg_elevated}};
+    border: 1px solid {{color.border}};
+    border-radius: 24px;
+}
+
+QFrame[role="recording-overlay-dot"] {
+    background-color: {{color.danger}};
+    border-radius: 7px;
+}
+
+QFrame[role="recording-overlay-dot"][state="processing"] {
+    background-color: {{color.warning}};
+}
+
+QLabel[role="recording-overlay-title"] {
+    color: {{color.text_primary}};
+    font-size: {{font.size_small}};
+    font-weight: 700;
+}
+
+QLabel[role="recording-overlay-body"] {
+    color: {{color.text_secondary}};
+    font-size: {{font.size_small}};
+}
+
 /* ---- TopBar -------------------------------------------------------------- */
 
 #TopBar {
@@ -379,6 +412,32 @@ QLabel[role="model-pill"][state="loading"] {
     background-color: {{color.warning}};
     color: {{color.bg_primary}};
     border: 1px solid {{color.warning}};
+}
+
+/* Engine pill — ONNX Runtime EP (CoreML / CUDA / CPU / …).  Mirrors
+   model-pill geometry but with its own colour states so the user can
+   immediately tell whether the loaded model is on the accelerator
+   (success / accent) or fell back to CPU (muted). */
+QLabel[role="engine-pill"] {
+    background-color: #14331f;
+    color: #7fe0a3;
+    border: 1px solid #1f5234;
+    border-radius: {{radius.sm}};
+    padding: 4px {{space.md}};
+    font-size: {{font.size_small}};
+    font-weight: 600;
+}
+
+QLabel[role="engine-pill"][state="empty"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_muted}};
+    border: 1px solid {{color.border}};
+}
+
+QLabel[role="engine-pill"][state="cpu"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_secondary}};
+    border: 1px solid {{color.border}};
 }
 
 QLabel[role="recording-pill"] {
@@ -585,6 +644,57 @@ QPlainTextEdit:focus,
 QTextEdit:focus,
 QComboBox:focus {
     border-color: {{color.accent}};
+}
+
+/* Visually mark a QLineEdit that is mirroring another field (e.g.
+   the Stop hotkey field while "Use one hotkey for both" is on).
+   Muted background + muted text reads as "tracking, not editable"
+   without being completely invisible like a disabled widget. */
+QLineEdit[muted="true"] {
+    background-color: {{color.bg_elevated}};
+    color: {{color.text_muted}};
+    border-color: {{color.border}};
+}
+
+/* Validation feedback: red border when the user typed an
+   unparseable hotkey combination.  Tooltip on the same widget
+   carries the human-readable reason ("ctrl required for letter
+   shortcuts", "f25 is not a valid key", etc.). */
+QLineEdit[invalid="true"] {
+    border-color: {{color.danger}};
+}
+
+QLineEdit[invalid="true"]:focus {
+    border-color: {{color.danger}};
+}
+
+/* Inline warning banner used by the Settings → Hotkeys card to
+   surface "macOS hasn't granted Accessibility access yet". Soft
+   amber tint that draws the eye without alarming red of an error,
+   plus an inline "Open Accessibility settings" button that uses
+   the same QPushButton role styling as elsewhere. */
+QFrame[role="warning-banner"] {
+    background-color: rgba(245, 158, 11, 22);
+    border: 1px solid {{color.warning}};
+    border-radius: {{radius.sm}};
+}
+
+QLabel[role="warning-banner-text"] {
+    color: {{color.text_primary}};
+    background: transparent;
+}
+
+QFrame[role="warning-banner"] QPushButton {
+    background-color: {{color.warning}};
+    color: {{color.bg_primary}};
+    border: none;
+    border-radius: {{radius.sm}};
+    padding: 6px 14px;
+    font-weight: 600;
+}
+
+QFrame[role="warning-banner"] QPushButton:hover {
+    background-color: #fbbf24;
 }
 
 /* Replace the native ``::drop-down`` rendering — Qt's default

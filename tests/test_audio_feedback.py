@@ -1,14 +1,27 @@
 """Tests for the winsound-based AudioFeedback prewarm.
 
-The first ``winsound.PlaySound`` call on a freshly-started Windows process
-spends 100-300 ms opening the multimedia device; an SND_ASYNC sound issued
-during that window is silently dropped. AudioFeedback should fire a no-op
-silent play at construction so the user's first real start sound is heard.
+The first ``winsound.PlaySound`` call on a freshly-started Windows
+process spends 100-300 ms opening the multimedia device; an SND_ASYNC
+sound issued during that window is silently dropped. AudioFeedback
+should fire a no-op silent play at construction so the user's first
+real start sound is heard.
+
+These tests cover the Windows-only branch of ``AudioFeedback`` —
+``winsound`` is part of the Python stdlib but only available on
+Windows. The macOS / Linux branch (``playsound3``) does not have the
+silent-drop pathology and therefore the prewarm is a no-op there;
+nothing to test on those platforms.
 """
 
+import sys
 import time
 
 import pytest
+
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="winsound prewarm only exists on Windows",
+)
 
 
 def test_silent_wav_is_a_valid_riff_buffer():

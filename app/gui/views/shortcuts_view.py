@@ -12,8 +12,24 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.gui.smooth_scroll import apply_smooth_scroll
+from app.gui.views._accessibility_check import (
+    is_accessibility_trusted,
+    is_post_event_access_trusted,
+    open_accessibility_settings,
+    request_accessibility_access,
+    request_post_event_access,
+)
+from app.gui.views._hotkey_validation import (
+    is_push_to_talk_solo_key,
+    validate_all,
+)
+from app.gui.views._microphone_check import (
+    microphone_authorization_status,
+    open_microphone_settings,
+    request_microphone_access,
+)
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -79,14 +95,40 @@ class ShortcutsView(QWidget):
     # Hugging Face card — fired on focus loss after the user edits
     # the token field. Controller persists + applies to env.
     hf_token_changed = Signal(str)
+    # macOS-only — a permission changed in a way that may require
+    # lightweight runtime refresh (e.g. re-enumerate microphones or
+    # rebuild the hotkey monitor), but not a full app restart.
+    mac_permissions_changed = Signal()
+    # macOS-only — bridges the asynchronous AVFoundation microphone
+    # permission callback back onto the GUI thread. Emitting a Qt
+    # signal from the background completion handler is reliable;
+    # trying to schedule a raw callable with QTimer from that thread
+    # can miss the main event loop and leave the banner stale.
+    _mic_request_result = Signal(bool)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("ShortcutsView")
+        self._mic_request_result.connect(
+            self._apply_mic_request_completed,
+        )
 
         # Suppresses save_requested emission while we are populating fields
         # programmatically (e.g. controller prefilling from config).
         self._suspend_emit = False
+        self._storage_is_default = True
+        self._storage_busy = False
+
+        # Snapshot of the user's Stop hotkey taken just before we
+        # mirror the Start value over it on toggle-mode entry, so
+        # un-ticking can restore exactly what was there before.
+        # Only set on user-driven toggle (``_on_toggle_mode_changed``)
+        # — ``set_values`` skips it because the values come from
+        # config and don't need a "previous" copy.
+        self._previous_stop_hotkey: Optional[str] = None
+        self._last_accessibility_trusted = is_accessibility_trusted()
+        self._last_mic_status = microphone_authorization_status()
+        self._last_post_event_trusted = is_post_event_access_trusted()
 
         # Outer layout = top hint pinned + scrollable card stack.
         # Without the scroll area Qt tried to fit every card into
@@ -132,6 +174,36 @@ class ShortcutsView(QWidget):
 
         # ---- Audio input card -------------------------------------------
         audio_card, audio_form = _make_section_card("Audio input", self)
+
+        # macOS-only: similar story to the Accessibility banner —
+        # if the user hasn't granted Microphone access via TCC,
+        # ``sounddevice.InputStream.start`` returns silence with no
+        # exception, so recording "works" but every transcription
+        # comes back empty. Surface the state explicitly with a
+        # banner that walks the user through grant.
+        self._mic_banner = QFrame(audio_card)
+        self._mic_banner.setObjectName("MicrophoneWarningBanner")
+        self._mic_banner.setProperty("role", "warning-banner")
+        mic_banner_layout = QHBoxLayout(self._mic_banner)
+        mic_banner_layout.setContentsMargins(12, 10, 12, 10)
+        mic_banner_layout.setSpacing(12)
+        self._mic_banner_text = QLabel("", self._mic_banner)
+        self._mic_banner_text.setWordWrap(True)
+        self._mic_banner_text.setProperty("role", "warning-banner-text")
+        mic_banner_layout.addWidget(self._mic_banner_text, 1)
+        self._mic_banner_button = QPushButton("", self._mic_banner)
+        self._mic_banner_button.setObjectName("MicrophoneActionButton")
+        self._mic_banner_button.setFocusPolicy(Qt.NoFocus)
+        self._mic_banner_button.clicked.connect(
+            self._on_mic_banner_clicked,
+        )
+        mic_banner_layout.addWidget(self._mic_banner_button, 0)
+        self._mic_banner.setVisible(False)
+        # State machine: ``"not_determined"`` (Allow access) /
+        # ``"denied"`` (Open Microphone settings) / ``"hidden"``.
+        self._mic_state = "hidden"
+        audio_form.addRow(self._mic_banner)
+        self._refresh_mic_banner()
 
         self._device_combo = QComboBox(audio_card)
         self._device_combo.setObjectName("MicrophoneCombo")
@@ -187,10 +259,103 @@ class ShortcutsView(QWidget):
         # ---- Hotkeys card -----------------------------------------------
         hotkeys_card, hotkeys_form = _make_section_card("Hotkeys", self)
 
+        # macOS-only: warn the user when the process hasn't been
+        # added to System Settings → Privacy & Security →
+        # Accessibility. Without that, ``pynput``'s CGEventTap
+        # silently returns no events at all and hotkeys "don't
+        # work" with no on-screen explanation.
+        #
+        # The banner has two states.  At startup the process is
+        # either trusted (banner hidden) or untrusted (banner
+        # shows the "grant access" text + "Open Accessibility
+        # settings" button).  After the user grants access the
+        # ``AXIsProcessTrusted()`` call starts returning True, but
+        # ``pynput``'s already-installed event tap was attached
+        # under the old untrusted state and won't pick up new
+        # events without a relaunch — so we flip the banner to a
+        # now allow us to rebuild the listener live, so the banner
+        # can simply disappear once permission is granted.
+        self._accessibility_banner = QFrame(hotkeys_card)
+        self._accessibility_banner.setObjectName("AccessibilityWarningBanner")
+        self._accessibility_banner.setProperty("role", "warning-banner")
+        banner_layout = QHBoxLayout(self._accessibility_banner)
+        banner_layout.setContentsMargins(12, 10, 12, 10)
+        banner_layout.setSpacing(12)
+        self._accessibility_banner_text = QLabel(
+            "", self._accessibility_banner,
+        )
+        self._accessibility_banner_text.setWordWrap(True)
+        self._accessibility_banner_text.setProperty(
+            "role", "warning-banner-text",
+        )
+        banner_layout.addWidget(self._accessibility_banner_text, 1)
+        self._accessibility_banner_button = QPushButton(
+            "", self._accessibility_banner,
+        )
+        self._accessibility_banner_button.setObjectName(
+            "AccessibilityActionButton",
+        )
+        self._accessibility_banner_button.setFocusPolicy(Qt.NoFocus)
+        # Click handler swaps based on banner state — set in
+        # ``_refresh_accessibility_banner``.
+        self._accessibility_banner_button.clicked.connect(
+            self._on_accessibility_banner_clicked,
+        )
+        banner_layout.addWidget(self._accessibility_banner_button, 0)
+        self._accessibility_banner.setVisible(False)
+        # The form's row spans both columns — the banner runs full
+        # card width, not nested under the field column.
+        hotkeys_form.addRow(self._accessibility_banner)
+        # State machine: ``"untrusted"`` (request/open settings) /
+        # ``"hidden"``.
+        self._accessibility_state = "hidden"
+        self._refresh_accessibility_banner()
+
+        # Recording mode picker.  Three options:
+        #
+        #   - "Two keys"     — separate Start and Stop bindings
+        #                      (the historical default; Cancel is
+        #                      independent).
+        #   - "One key (toggle)" — single Start hotkey flips between
+        #                      idle ↔ recording; Stop field is muted.
+        #   - "Push to talk"   — hold a single key (default
+        #                      ``right_cmd`` on Mac, ``right_alt``
+        #                      elsewhere) to record, release to
+        #                      transcribe; Stop field is muted, the
+        #                      PTT key field becomes the active one.
+        #
+        # A QComboBox is more compact than a 3-way radio cluster
+        # and the "select-from-discrete-set" semantic matches what
+        # the user is doing.  ``setCurrentData`` keeps the on-disk
+        # config value (``"two_keys"`` / ``"toggle"`` / ``"push_to_talk"``)
+        # decoupled from the user-facing label.
+        self._mode_combo = QComboBox(hotkeys_card)
+        self._mode_combo.setObjectName("RecordingModeCombo")
+        self._mode_combo.addItem(
+            "Two keys (Start + Stop)", userData="two_keys",
+        )
+        self._mode_combo.addItem(
+            "One key — press to toggle", userData="toggle",
+        )
+        self._mode_combo.addItem(
+            "Push to talk — hold to record", userData="push_to_talk",
+        )
+        self._mode_combo.setToolTip(
+            "Two keys: classic start + stop bindings.\n"
+            "Toggle: one hotkey flips between idle and recording.\n"
+            "Push-to-talk: hold a single key (e.g. right Cmd) to "
+            "record, release to transcribe — best for short dictation."
+        )
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        hotkeys_form.addRow("Recording mode", self._mode_combo)
+
         self._start_edit = QLineEdit(hotkeys_card)
         self._start_edit.setObjectName("StartHotkeyEdit")
         self._start_edit.setPlaceholderText("e.g. ctrl+f2")
         self._start_edit.editingFinished.connect(self._emit_save)
+        # While toggle-mode is on, the Stop field mirrors Start —
+        # listen for live edits to keep them in sync visually.
+        self._start_edit.textChanged.connect(self._mirror_start_into_stop)
         hotkeys_form.addRow("Start recording", self._start_edit)
 
         self._stop_edit = QLineEdit(hotkeys_card)
@@ -198,6 +363,20 @@ class ShortcutsView(QWidget):
         self._stop_edit.setPlaceholderText("e.g. ctrl+f3")
         self._stop_edit.editingFinished.connect(self._emit_save)
         hotkeys_form.addRow("Stop recording", self._stop_edit)
+
+        # Push-to-talk key — only meaningful in PTT mode, but the
+        # row stays in the form so the field's vertical position
+        # matches the others when it appears.  Hidden via
+        # ``setVisible(False)`` from ``_apply_mode`` when the mode
+        # isn't ``"push_to_talk"``.
+        self._ptt_edit = QLineEdit(hotkeys_card)
+        self._ptt_edit.setObjectName("PushToTalkEdit")
+        self._ptt_edit.setPlaceholderText(
+            "e.g. right_cmd, right_alt, fn — solo modifier OK in PTT mode"
+        )
+        self._ptt_edit.editingFinished.connect(self._emit_save)
+        hotkeys_form.addRow("Push-to-talk key", self._ptt_edit)
+        self._ptt_label_widget = hotkeys_form.labelForField(self._ptt_edit)
 
         # "Discard buffer without transcribing" — the runtime has
         # always supported this (StateManager.cancel_active_recording)
@@ -242,6 +421,31 @@ class ShortcutsView(QWidget):
         # ---- Clipboard card ---------------------------------------------
         clipboard_card, clipboard_form = _make_section_card("Clipboard", self)
 
+        # macOS 14+ can gate synthetic key posting separately from
+        # global hotkey listening. Surface that state next to the
+        # auto-paste toggle so the user sees why text is copied but
+        # not inserted into the focused app.
+        self._post_event_banner = QFrame(clipboard_card)
+        self._post_event_banner.setObjectName("PostEventWarningBanner")
+        self._post_event_banner.setProperty("role", "warning-banner")
+        post_event_layout = QHBoxLayout(self._post_event_banner)
+        post_event_layout.setContentsMargins(12, 10, 12, 10)
+        post_event_layout.setSpacing(12)
+        self._post_event_banner_text = QLabel("", self._post_event_banner)
+        self._post_event_banner_text.setWordWrap(True)
+        self._post_event_banner_text.setProperty("role", "warning-banner-text")
+        post_event_layout.addWidget(self._post_event_banner_text, 1)
+        self._post_event_banner_button = QPushButton("", self._post_event_banner)
+        self._post_event_banner_button.setObjectName("PostEventActionButton")
+        self._post_event_banner_button.setFocusPolicy(Qt.NoFocus)
+        self._post_event_banner_button.clicked.connect(
+            self._on_post_event_banner_clicked,
+        )
+        post_event_layout.addWidget(self._post_event_banner_button, 0)
+        self._post_event_banner.setVisible(False)
+        self._post_event_state = "hidden"
+        clipboard_form.addRow(self._post_event_banner)
+
         self._auto_paste_cb = QCheckBox(
             "Auto-paste transcription into the focused window",
             clipboard_card,
@@ -251,6 +455,7 @@ class ShortcutsView(QWidget):
         # Single full-width row — no left label needed for a checkbox
         # whose own text already describes it.
         clipboard_form.addRow(self._auto_paste_cb)
+        self._refresh_post_event_banner()
         root.addWidget(clipboard_card)
 
         # ---- Storage card -----------------------------------------------
@@ -455,18 +660,52 @@ class ShortcutsView(QWidget):
         stop_hotkey: str,
         auto_paste: bool,
         cancel_hotkey: str = "",
+        mode: str = "two_keys",
+        push_to_talk_key: str = "",
     ) -> None:
         # Programmatic update — must not feed back into save_requested.
-        # ``cancel_hotkey`` is keyword-only with a default so callers
-        # written before the field existed keep working unchanged.
+        # ``cancel_hotkey`` / ``mode`` / ``push_to_talk_key`` are
+        # keyword-only with defaults so callers written before the
+        # fields existed keep working unchanged.
         self._suspend_emit = True
         try:
             self._start_edit.setText(start_hotkey)
             self._stop_edit.setText(stop_hotkey)
             self._auto_paste_cb.setChecked(bool(auto_paste))
             self._cancel_edit.setText(cancel_hotkey or "")
+            self._ptt_edit.setText(push_to_talk_key or "")
+
+            # Migration path: legacy configs (pre-mode-field) implicitly
+            # encoded toggle mode by setting Start == Stop.  Honour
+            # that when the explicit ``mode`` field is missing or set
+            # to the default but Start == Stop happens to match.
+            resolved_mode = mode if mode in {"two_keys", "toggle", "push_to_talk"} else "two_keys"
+            same = bool(
+                start_hotkey
+                and start_hotkey.strip().lower() == stop_hotkey.strip().lower()
+            )
+            if resolved_mode == "two_keys" and same:
+                resolved_mode = "toggle"
+
+            # Find and select the combo entry whose userData matches
+            # the resolved mode.  ``setCurrentIndex`` would fire
+            # ``currentIndexChanged`` and through it ``_on_mode_changed``,
+            # but ``_suspend_emit`` is up so the save-cycle stays
+            # quiet.
+            for i in range(self._mode_combo.count()):
+                if self._mode_combo.itemData(i) == resolved_mode:
+                    self._mode_combo.setCurrentIndex(i)
+                    break
+            self._apply_mode(resolved_mode)
         finally:
             self._suspend_emit = False
+        # Run validation once the suspend flag is back down so the
+        # invalid-border / tooltip state matches the freshly-loaded
+        # values.  Doing it inside the suspend block would skip the
+        # repaint triggered by the property change.
+        self._refresh_hotkey_validation()
+        self._refresh_accessibility_banner()
+        self._refresh_post_event_banner()
 
     def set_devices(
         self,
@@ -495,10 +734,41 @@ class ShortcutsView(QWidget):
         return self._start_edit.text().strip()
 
     def stop_hotkey(self) -> str:
+        mode = self._current_mode()
+        # Toggle mode: the stop combo is the start combo (the
+        # HotkeyListener checks equality to decide on a single
+        # toggle handler).  PTT mode: Stop is unused, but we still
+        # write the user's previous stop value to disk so a
+        # later switch back to two_keys restores it.
+        if mode == "toggle":
+            return self._start_edit.text().strip()
         return self._stop_edit.text().strip()
 
     def cancel_hotkey(self) -> str:
+        mode = self._current_mode()
+        # Toggle / PTT modes both disable Cancel — the user picked a
+        # streamlined "one key for everything recording" flow.
+        # Returning an empty string propagates through ``values()`` /
+        # ``save_requested`` so the persisted config drops the
+        # binding and HotkeyListener stops registering it.  The
+        # field text itself is preserved on screen so a later
+        # mode-switch back to two_keys restores the previous value
+        # transparently.
+        if mode in {"toggle", "push_to_talk"}:
+            return ""
         return self._cancel_edit.text().strip()
+
+    def recording_mode(self) -> str:
+        """Active recording mode — ``"two_keys"`` / ``"toggle"`` /
+        ``"push_to_talk"``.  Forwarded to the controller's save
+        bundle so ``HotkeyListener`` rebuilds with the right path."""
+        return self._current_mode()
+
+    def push_to_talk_key(self) -> str:
+        """Push-to-talk binding (e.g. ``"right_cmd"``).  Honoured by
+        the controller only when ``recording_mode() == "push_to_talk"``.
+        """
+        return self._ptt_edit.text().strip()
 
     def auto_paste(self) -> bool:
         return self._auto_paste_cb.isChecked()
@@ -532,12 +802,15 @@ class ShortcutsView(QWidget):
         disables the Reset button (no point resetting when we're
         already on the default).
         """
+        self._storage_is_default = bool(is_default)
         if is_default:
             self._storage_path_label.setText(f"{path}  (default)")
-            self._reset_storage_btn.setEnabled(False)
+            if not self._storage_busy:
+                self._reset_storage_btn.setEnabled(False)
         else:
             self._storage_path_label.setText(path)
-            self._reset_storage_btn.setEnabled(True)
+            if not self._storage_busy:
+                self._reset_storage_btn.setEnabled(True)
 
     def set_storage_size(self, text: str) -> None:
         """Render the human-readable used-space string in the Storage card.
@@ -548,6 +821,20 @@ class ShortcutsView(QWidget):
         """
         self._storage_size_label.setText(text or "…")
 
+    def set_storage_busy(
+        self, busy: bool, status_text: Optional[str] = None
+    ) -> None:
+        """Temporarily disable the Storage card actions while a long-running
+        filesystem operation is in progress."""
+        self._storage_busy = bool(busy)
+        self._change_storage_btn.setEnabled(not self._storage_busy)
+        self._open_storage_btn.setEnabled(not self._storage_busy)
+        self._reset_storage_btn.setEnabled(
+            (not self._storage_busy) and (not self._storage_is_default)
+        )
+        if status_text is not None:
+            self.set_storage_size(status_text)
+
     def values(self) -> Dict[str, Any]:
         return {
             "start_hotkey": self.start_hotkey(),
@@ -555,6 +842,8 @@ class ShortcutsView(QWidget):
             "cancel_hotkey": self.cancel_hotkey(),
             "auto_paste": self.auto_paste(),
             "device": self.device_index(),
+            "mode": self.recording_mode(),
+            "push_to_talk_key": self.push_to_talk_key(),
         }
 
     # ---- internal -----------------------------------------------------------
@@ -562,10 +851,370 @@ class ShortcutsView(QWidget):
     def _emit_save(self) -> None:
         if self._suspend_emit:
             return
+        # Run validation alongside every save so red-border / tooltip
+        # state stays in sync with whatever's currently typed.  We
+        # still emit ``save_requested`` even when fields are invalid
+        # — backend writes a warning to the Logs view, the UI
+        # carries the visual feedback, and the user can keep typing
+        # to fix it without the controller getting stuck on a
+        # partial edit.
+        self._refresh_hotkey_validation()
+        self._refresh_accessibility_banner()
+        self._refresh_post_event_banner()
         self.save_requested.emit(self.values())
 
+    def _refresh_hotkey_validation(self) -> None:
+        """Run :func:`validate_all` over the current field values
+        and toggle the ``invalid`` Qt property + tooltip on each
+        QLineEdit. Pure UI shuffle — no signals.
+
+        In PTT mode, the active "start" field is actually the PTT
+        key edit (not ``_start_edit``), so we feed that value into
+        the validator and stamp the result on ``_ptt_edit`` instead.
+        """
+        mode = self._current_mode()
+        if mode == "push_to_talk":
+            errors = validate_all(
+                start=self._ptt_edit.text(),
+                stop="",
+                cancel=self._cancel_edit.text(),
+                mode="push_to_talk",
+            )
+            field_pairs = (
+                ("start", self._ptt_edit),
+                ("cancel", self._cancel_edit),
+            )
+            # Clear any stale invalid state on the muted Start /
+            # Stop fields — they're not in use, validation noise
+            # there is misleading.
+            for edit in (self._start_edit, self._stop_edit):
+                edit.setProperty("invalid", False)
+                edit.setToolTip("")
+                edit.style().unpolish(edit)
+                edit.style().polish(edit)
+        else:
+            errors = validate_all(
+                start=self._start_edit.text(),
+                stop=self._stop_edit.text(),
+                cancel=self._cancel_edit.text(),
+                mode=mode,
+            )
+            field_pairs = (
+                ("start", self._start_edit),
+                ("stop", self._stop_edit),
+                ("cancel", self._cancel_edit),
+            )
+            # Clear stale invalid state on the hidden PTT field.
+            self._ptt_edit.setProperty("invalid", False)
+            self._ptt_edit.setToolTip("")
+            self._ptt_edit.style().unpolish(self._ptt_edit)
+            self._ptt_edit.style().polish(self._ptt_edit)
+
+        for field_name, edit in field_pairs:
+            err = errors.get(field_name)
+            edit.setProperty("invalid", bool(err))
+            edit.setToolTip(err or "")
+            # ``setProperty`` on a styled widget needs an
+            # unpolish/polish cycle for Qt to repaint with the new
+            # selector match.
+            edit.style().unpolish(edit)
+            edit.style().polish(edit)
+
     def _on_auto_paste_toggled(self, _checked: bool) -> None:
+        self._refresh_post_event_banner()
         self._emit_save()
+
+    def _refresh_accessibility_banner(self) -> None:
+        """Update the macOS Accessibility banner based on current
+        listen-event permission state.
+
+        State transitions:
+
+        - ``trusted is None``                                       → hidden
+          (non-macOS — no permission gate to worry about)
+        - ``trusted is False``                                      → "untrusted"
+          ("Allow hotkeys access" button)
+        - ``trusted is True``                                       → hidden
+        """
+        trusted = is_accessibility_trusted()
+        previous = self._last_accessibility_trusted
+        self._last_accessibility_trusted = trusted
+        if trusted is None:
+            self._accessibility_state = "hidden"
+            self._accessibility_banner.setVisible(False)
+            return
+        if self._can_current_mac_hotkey_mode_work_without_banner():
+            self._accessibility_state = "hidden"
+            self._accessibility_banner.setVisible(False)
+            return
+        if trusted is False:
+            self._accessibility_state = "untrusted"
+            self._accessibility_banner_text.setText(
+                "macOS hasn't granted keyboard-listening access yet — "
+                "global hotkeys won't fire until you allow Lazy to Text "
+                "under System Settings → Privacy & Security → "
+                "Accessibility."
+            )
+            self._accessibility_banner_button.setText("Allow hotkeys access")
+            self._accessibility_banner.setVisible(True)
+            return
+        self._accessibility_state = "hidden"
+        self._accessibility_banner.setVisible(False)
+        if previous is False and trusted is True:
+            self.mac_permissions_changed.emit()
+
+    def _can_current_mac_hotkey_mode_work_without_banner(self) -> bool:
+        """Return whether the active macOS hotkey mode is already on
+        the known-working modifier-only push-to-talk path.
+
+        ``right_cmd`` / ``right_alt`` / similar solo modifiers use
+        ``flagsChanged`` rather than a normal combo ``keyDown``
+        binding. In practice that path is what the user actually uses
+        in push-to-talk mode, and showing the generic "global hotkeys
+        won't fire" banner for it is misleading once the workflow is
+        demonstrably working.
+        """
+        if not hasattr(self, "_mode_combo") or not hasattr(self, "_ptt_edit"):
+            return False
+        if self._current_mode() != "push_to_talk":
+            return False
+        return is_push_to_talk_solo_key(
+            self.push_to_talk_key(), platform="darwin"
+        )
+
+    def _on_accessibility_banner_clicked(self) -> None:
+        """Banner button dispatch for global-hotkey read access."""
+        if self._accessibility_state == "untrusted":
+            granted = request_accessibility_access()
+            # Even when the CoreGraphics request path exists, macOS
+            # can return ``False`` without surfacing a visible prompt
+            # (for example after a prior denial). In that case, open
+            # the Settings pane explicitly so the click never feels
+            # like a no-op.
+            if not granted:
+                open_accessibility_settings()
+            QTimer.singleShot(250, self.refresh_macos_permission_banners)
+
+    def _refresh_mic_banner(self) -> None:
+        """Show / hide / restate the macOS Microphone-permission
+        banner based on the current TCC status.
+
+        States:
+
+        - ``status is None`` → hidden (non-macOS)
+        - ``not_determined`` → "Click to grant" (system prompt
+          only fires from the first ``requestAccess``; we wire
+          that to the button)
+        - ``denied`` / ``restricted`` → "Open Microphone settings"
+          (system won't show a fresh prompt — only the toggle in
+          System Settings can flip the state)
+        - ``authorized`` → hidden
+        """
+        status = microphone_authorization_status()
+        previous = self._last_mic_status
+        self._last_mic_status = status
+        if status is None:
+            self._mic_state = "hidden"
+            self._mic_banner.setVisible(False)
+            return
+        if status == "not_determined":
+            self._mic_state = "not_determined"
+            self._mic_banner_text.setText(
+                "Lazy to Text hasn't asked macOS for microphone "
+                "access yet — recordings would silently come back "
+                "empty. Click below to grant access."
+            )
+            self._mic_banner_button.setText("Allow microphone access")
+            self._mic_banner.setVisible(True)
+            return
+        if status in ("denied", "restricted"):
+            self._mic_state = "denied"
+            self._mic_banner_text.setText(
+                "Microphone access is blocked — recordings come "
+                "back empty. Toggle Lazy to Text on under System "
+                "Settings → Privacy & Security → Microphone, then "
+                "return to the app."
+            )
+            self._mic_banner_button.setText("Open Microphone settings")
+            self._mic_banner.setVisible(True)
+            return
+        self._mic_state = "hidden"
+        self._mic_banner.setVisible(False)
+        if previous not in (None, "authorized") and status == "authorized":
+            self.mac_permissions_changed.emit()
+
+    def _on_mic_banner_clicked(self) -> None:
+        """Banner button dispatch — first time fires the system
+        prompt, post-deny opens System Settings."""
+        if self._mic_state == "not_determined":
+            request_microphone_access(
+                on_result=self._on_mic_request_completed,
+            )
+            return
+        if self._mic_state == "denied":
+            open_microphone_settings()
+            return
+
+    def _on_mic_request_completed(self, granted: bool) -> None:
+        """Called from a background thread once the user dismisses
+        the system Microphone prompt.  Re-render the banner so it
+        flips into the appropriate post-prompt state.
+
+        The completion handler runs on a non-Qt thread; touching
+        widgets from there crashes Qt. Bounce through a Qt signal so
+        the slot is delivered on the GUI thread that owns the view.
+        """
+        self._mic_request_result.emit(bool(granted))
+
+    def _apply_mic_request_completed(self, granted: bool) -> None:
+        del granted
+        self._refresh_mic_banner()
+
+    def _refresh_post_event_banner(self) -> None:
+        """Render the synthetic-keyboard-event permission banner.
+
+        Only relevant on macOS and only while auto-paste is enabled.
+        """
+        if not self.auto_paste():
+            self._post_event_state = "hidden"
+            self._post_event_banner.setVisible(False)
+            return
+        granted = is_post_event_access_trusted()
+        self._last_post_event_trusted = granted
+        if granted is None or granted is True:
+            self._post_event_state = "hidden"
+            self._post_event_banner.setVisible(False)
+            return
+        self._post_event_state = "untrusted"
+        self._post_event_banner_text.setText(
+            "macOS hasn't granted keyboard-control access yet — "
+            "the app can copy text to the clipboard, but auto-paste "
+            "Cmd+V will not reach the focused window until you allow "
+            "Lazy to Text under System Settings → Privacy & Security "
+            "→ Accessibility."
+        )
+        self._post_event_banner_button.setText("Allow auto-paste access")
+        self._post_event_banner.setVisible(True)
+
+    def _on_post_event_banner_clicked(self) -> None:
+        if self._post_event_state != "untrusted":
+            return
+        granted = request_post_event_access()
+        if not granted:
+            open_accessibility_settings()
+        QTimer.singleShot(250, self.refresh_macos_permission_banners)
+
+    def refresh_macos_permission_banners(self) -> None:
+        self._refresh_accessibility_banner()
+        self._refresh_mic_banner()
+        self._refresh_post_event_banner()
+
+    def showEvent(self, event):  # noqa: N802 — Qt naming
+        """Re-check macOS permission banners every time the Settings
+        tab becomes visible."""
+        super().showEvent(event)
+        self.refresh_macos_permission_banners()
+
+    def event(self, event):  # noqa: N802 - Qt naming
+        if event.type() == QEvent.WindowActivate:
+            self.refresh_macos_permission_banners()
+        return super().event(event)
+
+    def _current_mode(self) -> str:
+        """Read the active recording mode from the combo box.  Returns
+        one of ``"two_keys"`` / ``"toggle"`` / ``"push_to_talk"``."""
+        data = self._mode_combo.currentData()
+        if data in {"two_keys", "toggle", "push_to_talk"}:
+            return data
+        return "two_keys"
+
+    def _on_mode_changed(self, _index: int) -> None:
+        """User picked a different recording mode in the combo box.
+
+        Apply the visual shuffle (mute / unmute fields, mirror Start
+        into Stop for toggle, show or hide PTT field), snapshot
+        Stop's previous value when entering toggle mode so we can
+        restore on switch-back, then emit save.
+        """
+        mode = self._current_mode()
+        if mode == "toggle":
+            # Capture Stop's value before we mirror Start in.
+            # Skipped if we're already in toggle (re-emitting the
+            # same mode change) — would snapshot a mirror of Start.
+            if self._previous_stop_hotkey is None:
+                self._previous_stop_hotkey = self._stop_edit.text()
+        else:
+            # Restore the user's previous Stop value when leaving
+            # toggle.  Two_keys honours it directly; push_to_talk
+            # keeps it for visual continuity (Stop field is hidden
+            # but the value is preserved on disk so switching back
+            # to two_keys doesn't reset to defaults).
+            if self._previous_stop_hotkey is not None:
+                self._stop_edit.setText(self._previous_stop_hotkey)
+                self._previous_stop_hotkey = None
+        self._apply_mode(mode)
+        self._emit_save()
+
+    def _apply_mode(self, mode: str) -> None:
+        """Wire field visibility / muting to the active mode.  Pure
+        UI shuffle — no signal emission.
+
+        Read-only (rather than disabled) makes it obvious that the
+        fields are *deactivated by the current mode*, not broken.
+        The ``muted="true"`` Qt property flips the QSS to
+        ``color.bg_elevated`` background + ``text_muted`` foreground
+        so the visual reads as "currently inactive" rather than a
+        normal editable input.
+
+        Field map per mode:
+
+        =================  ==========  ==========  ==========  =======
+                           Start       Stop        PTT key     Cancel
+        =================  ==========  ==========  ==========  =======
+        two_keys           active      active      hidden      active
+        toggle             active      muted       hidden      muted
+        push_to_talk       muted       muted       active      muted
+        =================  ==========  ==========  ==========  =======
+        """
+        is_toggle = mode == "toggle"
+        is_ptt = mode == "push_to_talk"
+
+        # Stop is muted in any mode that doesn't use a separate stop
+        # binding — toggle mirrors Start; PTT doesn't have a stop.
+        for field in (self._stop_edit, self._cancel_edit):
+            muted = is_toggle or is_ptt
+            field.setReadOnly(muted)
+            field.setProperty("muted", muted)
+            field.style().unpolish(field)
+            field.style().polish(field)
+
+        # Start is muted in PTT mode (its value isn't used by the
+        # listener — the PTT key field is the active binding).
+        self._start_edit.setReadOnly(is_ptt)
+        self._start_edit.setProperty("muted", is_ptt)
+        self._start_edit.style().unpolish(self._start_edit)
+        self._start_edit.style().polish(self._start_edit)
+
+        # PTT key field appears only in PTT mode.  Hide both the
+        # input and its form-row label so the form's vertical
+        # spacing collapses cleanly.
+        self._ptt_edit.setVisible(is_ptt)
+        if self._ptt_label_widget is not None:
+            self._ptt_label_widget.setVisible(is_ptt)
+
+        if is_toggle:
+            self._stop_edit.setText(self._start_edit.text())
+
+    def _mirror_start_into_stop(self, new_text: str) -> None:
+        """Keep the Stop field synced with Start while toggle-mode
+        is on.  No-op in any other mode.
+
+        Bypasses ``_suspend_emit`` because this is a UI mirror, not
+        a programmatic load — we explicitly want the user's keystroke
+        in Start to ripple through and persist.
+        """
+        if self._current_mode() == "toggle":
+            self._stop_edit.setText(new_text)
 
     def _on_device_changed(self, _idx: int) -> None:
         self._emit_save()

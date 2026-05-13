@@ -207,12 +207,14 @@ class StateManager:
             self.logger.info("Transcribed: %s", preview, extra={'user_message': True})
 
             self.system_tray.update_state("processing")
-            # Append a trailing space so consecutive transcriptions paste in
-            # without sticking together ("первая фразавторая фраза"). The
-            # history entry below stores the raw text without it so the
-            # History tab and search behave naturally.
+            # Append a trailing non-breaking space so consecutive
+            # transcriptions paste in without sticking together
+            # ("первая фразавторая фраза").  A regular space is trimmed
+            # by some inputs (Chrome URL bar, search boxes, …) so we
+            # use \u00A0 which looks identical but survives.
+            # The history entry below stores the raw text without it.
             success = self.clipboard_manager.deliver_transcription(
-                transcribed_text + " ", use_auto_enter
+                transcribed_text + "\u00A0", use_auto_enter
             )
             self.logger.info(
                 "Clipboard delivery %s",

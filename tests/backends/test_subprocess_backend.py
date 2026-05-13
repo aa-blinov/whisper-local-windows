@@ -382,8 +382,25 @@ def patched_subprocess(monkeypatch):
         return c, c  # parent and child are the same object — tests
                      # write to ``conn``, both sides see it
 
+    # Production code switched from ``multiprocessing.Pipe()`` /
+    # ``multiprocessing.Process()`` to ``ctx = multiprocessing.get_context("spawn")``
+    # + ``ctx.Pipe()`` / ``ctx.Process()`` in the macOS-bundle fix
+    # (commit d05d275).  The context object isn't the same as the
+    # ``multiprocessing`` module — patches on the module never reach
+    # the context's bound methods — so we have to intercept
+    # ``get_context`` itself and return a fake whose ``Pipe`` /
+    # ``Process`` we control.  Patches on the module stay too as a
+    # safety net for any future code path that goes through the
+    # bare module API directly.
+    class _FakeCtx:
+        Pipe = staticmethod(fake_pipe)
+        Process = _FakeProcess
+
     monkeypatch.setattr(mod.multiprocessing, "Pipe", fake_pipe)
     monkeypatch.setattr(mod.multiprocessing, "Process", _FakeProcess)
+    monkeypatch.setattr(
+        mod.multiprocessing, "get_context", lambda _method=None: _FakeCtx
+    )
 
     return {"sent": sent, "conn_holder": conn_holder}
 
@@ -493,9 +510,9 @@ def test_subprocess_backend_error_response_raises(patched_subprocess):
     RuntimeError on the calling thread — otherwise the parent is
     silently broken.
 
-    Uses ``current_model()`` rather than ``status()`` because
-    ``status()`` is now served from the local cache (no IPC) and
-    can't surface a worker-side error.
+    Uses ``current_language()`` rather than ``status()`` because
+    ``status()`` and ``current_model()`` are now served from local
+    caches (no IPC) and can't surface a worker-side error.
     """
     from app.backends.subprocess_backend import SubprocessBackend
 
@@ -504,7 +521,7 @@ def test_subprocess_backend_error_response_raises(patched_subprocess):
 
     conn.push(("error", "RuntimeError: boom"))
     with pytest.raises(RuntimeError, match="boom"):
-        backend.current_model()
+        backend.current_language()
 
 
 def test_subprocess_backend_change_model_sync(patched_subprocess):

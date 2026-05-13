@@ -215,6 +215,219 @@ def test_clear_hf_token_button_emits_request(qtbot):
         qtbot.mouseClick(btn, Qt.LeftButton)
 
 
+# ---- Microphone permission banner -----------------------------------------
+
+
+def test_mic_banner_hides_after_grant(qtbot, monkeypatch):
+    """Granting microphone access mid-session should clear the banner
+    and notify the controller that runtime resources may be refreshed
+    in-process."""
+    import app.gui.views.shortcuts_view as shortcuts_module
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    status = {"value": "not_determined"}
+    monkeypatch.setattr(shortcuts_module, "microphone_authorization_status", lambda: status["value"])
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+
+    assert view._mic_state == "not_determined"
+    assert view._mic_banner_button.text() == "Allow microphone access"
+
+    status["value"] = "authorized"
+    with qtbot.waitSignal(view.mac_permissions_changed, timeout=1000):
+        view._on_mic_request_completed(True)
+
+    qtbot.waitUntil(
+        lambda: view._mic_state == "hidden"
+        and not view._mic_banner.isVisible(),
+        timeout=1000,
+    )
+
+
+def test_accessibility_banner_hides_after_grant(qtbot, monkeypatch):
+    import app.gui.views.shortcuts_view as shortcuts_module
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    trusted = {"value": False}
+    monkeypatch.setattr(
+        shortcuts_module,
+        "is_accessibility_trusted",
+        lambda: trusted["value"],
+    )
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+
+    assert view._accessibility_state == "untrusted"
+    assert view._accessibility_banner_button.text() == "Allow hotkeys access"
+
+    trusted["value"] = True
+    with qtbot.waitSignal(view.mac_permissions_changed, timeout=1000):
+        view._refresh_accessibility_banner()
+
+    assert view._accessibility_state == "hidden"
+    assert view._accessibility_banner.isVisible() is False
+
+
+def test_accessibility_banner_falls_back_to_settings_when_request_stays_denied(
+    qtbot, monkeypatch
+):
+    import app.gui.views.shortcuts_view as shortcuts_module
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    opened = []
+    monkeypatch.setattr(
+        shortcuts_module,
+        "is_accessibility_trusted",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        shortcuts_module,
+        "request_accessibility_access",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        shortcuts_module,
+        "open_accessibility_settings",
+        lambda: opened.append(True) or True,
+    )
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+
+    qtbot.mouseClick(view._accessibility_banner_button, Qt.LeftButton)
+
+    assert opened == [True]
+
+
+def test_accessibility_banner_hides_for_modifier_push_to_talk_mode(
+    qtbot, monkeypatch
+):
+    import app.gui.views.shortcuts_view as shortcuts_module
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    monkeypatch.setattr(
+        shortcuts_module,
+        "is_accessibility_trusted",
+        lambda: False,
+    )
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.set_values(
+        start_hotkey="ctrl+f8",
+        stop_hotkey="ctrl+f9",
+        auto_paste=False,
+        mode="push_to_talk",
+        push_to_talk_key="right_cmd",
+    )
+    view.refresh_macos_permission_banners()
+
+    assert view._accessibility_state == "hidden"
+    assert view._accessibility_banner.isVisible() is False
+
+
+def test_post_event_banner_tracks_auto_paste_permission(qtbot, monkeypatch):
+    import app.gui.views.shortcuts_view as shortcuts_module
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    monkeypatch.setattr(
+        shortcuts_module,
+        "is_post_event_access_trusted",
+        lambda: False,
+    )
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+    view.set_values(
+        start_hotkey="ctrl+f2",
+        stop_hotkey="ctrl+f3",
+        auto_paste=True,
+    )
+    view.refresh_macos_permission_banners()
+
+    assert view._post_event_state == "untrusted"
+    assert view._post_event_banner_button.text() == "Allow auto-paste access"
+    assert view._post_event_banner.isVisible() is True
+
+    view.set_values(
+        start_hotkey="ctrl+f2",
+        stop_hotkey="ctrl+f3",
+        auto_paste=False,
+    )
+    view.refresh_macos_permission_banners()
+
+    assert view._post_event_state == "hidden"
+    assert view._post_event_banner.isVisible() is False
+
+
+def test_post_event_banner_falls_back_to_settings_when_request_stays_denied(
+    qtbot, monkeypatch
+):
+    import app.gui.views.shortcuts_view as shortcuts_module
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    opened = []
+    monkeypatch.setattr(
+        shortcuts_module,
+        "is_post_event_access_trusted",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        shortcuts_module,
+        "request_post_event_access",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        shortcuts_module,
+        "open_accessibility_settings",
+        lambda: opened.append(True) or True,
+    )
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+    view.set_values(
+        start_hotkey="ctrl+f2",
+        stop_hotkey="ctrl+f3",
+        auto_paste=True,
+    )
+    view.refresh_macos_permission_banners()
+
+    qtbot.mouseClick(view._post_event_banner_button, Qt.LeftButton)
+
+    assert opened == [True]
+
+
+def test_post_event_banner_stays_hidden_when_probe_is_unavailable(
+    qtbot, monkeypatch
+):
+    import app.gui.views.shortcuts_view as shortcuts_module
+    from app.gui.views.shortcuts_view import ShortcutsView
+
+    monkeypatch.setattr(
+        shortcuts_module,
+        "is_post_event_access_trusted",
+        lambda: None,
+    )
+
+    view = ShortcutsView()
+    qtbot.addWidget(view)
+    view.show()
+    view.set_values(
+        start_hotkey="ctrl+f2",
+        stop_hotkey="ctrl+f3",
+        auto_paste=True,
+    )
+    view.refresh_macos_permission_banners()
+
+    assert view._post_event_state == "hidden"
+    assert view._post_event_banner.isVisible() is False
+
+
 # ---- Storage card ----------------------------------------------------------
 
 

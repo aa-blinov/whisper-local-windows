@@ -80,17 +80,52 @@ class SubprocessBackend:
     """
 
     def __init__(self, **kwargs: Any) -> None:
-        # Spawn-mode is the only viable start method on Windows.
-        # ``set_start_method`` raises RuntimeError if a different
-        # method has already been chosen — swallow that so we don't
-        # crash when the host app (or a test) configured it earlier.
-        try:
-            multiprocessing.set_start_method("spawn", force=False)
-        except (RuntimeError, AssertionError):
-            pass
+        from app.model_mapping import canonical_for
 
-        self._parent_conn, child_conn = multiprocessing.Pipe(duplex=True)
-        self._proc = multiprocessing.Process(
+        # Use an explicit ``spawn`` context rather than the global
+        # default.  Two reasons:
+        #
+        # 1. ``spawn`` is the only viable start method on Windows
+        #    (fork unavailable) and the safest on macOS — Apple's
+        #    CoreFoundation / Cocoa stack deprecated fork-safety,
+        #    so a fork from a Qt-initialised parent hangs deep
+        #    inside CoreText / CoreServices.
+        # 2. py2app .app bundles need a real Python interpreter
+        #    for the spawn child.  ``sys.executable`` inside the
+        #    bundle is the py2app launcher binary
+        #    (``Contents/MacOS/Lazy to Text``), not a Python
+        #    interpreter — feeding it multiprocessing's bootstrap
+        #    argv produces the cryptic ``Worker pipe closed
+        #    before init`` failure.  py2app symlinks the venv's
+        #    Python at ``Contents/MacOS/python`` in alias mode;
+        #    pointing the spawn context at that path keeps the
+        #    rest of multiprocessing intact.  Setting it on the
+        #    ``ctx`` instead of the global keeps the override
+        #    local to our worker — anything else in-process that
+        #    spawns a child stays on the default executable.
+        import sys as _sys
+
+        ctx = multiprocessing.get_context("spawn")
+        if _sys.platform == "darwin" and getattr(_sys, "frozen", False):
+            from pathlib import Path as _Path
+
+            bundle_python = _Path(_sys.executable).parent / "python"
+            if bundle_python.exists():
+                ctx.set_executable(str(bundle_python))
+                log.info(
+                    "SubprocessBackend: spawn executable redirected "
+                    "to %s (bundle alias mode)", bundle_python,
+                )
+            else:
+                log.warning(
+                    "SubprocessBackend: bundle python symlink missing "
+                    "at %s — spawn will use sys.executable=%s and "
+                    "almost certainly fail",
+                    bundle_python, _sys.executable,
+                )
+
+        self._parent_conn, child_conn = ctx.Pipe(duplex=True)
+        self._proc = ctx.Process(
             target=_worker_main,
             args=(child_conn,),
             name="onnx-worker",
@@ -105,6 +140,12 @@ class SubprocessBackend:
             Callable[[int, int, str], None]
         ] = None
         self._shutdown = False
+        # Fast local cache for "which model is currently configured?".
+        # The worker knows the same value, but answering it via IPC from the
+        # Qt thread (model-card clicks) can stall if the child is still
+        # initialising. Keep the configured canonical in-process instead.
+        self._current_model_cache = canonical_for(str(kwargs.get("model", "")))
+        self._current_model_cache_lock = threading.Lock()
 
         # Status cache populated by ``status_change`` push messages
         # from the worker.  Removes the need for the parent to
@@ -114,6 +155,13 @@ class SubprocessBackend:
         # during model loads.
         self._status_cache: str = "stopped"
         self._status_cache_lock = threading.Lock()
+
+        # Active-EP cache populated by ``provider_change`` push
+        # messages from the worker — see ``active_provider``. ``None``
+        # means either no model is loaded yet or the underlying
+        # backend doesn't surface the field.
+        self._provider_cache: Optional[str] = None
+        self._provider_cache_lock = threading.Lock()
 
         # Async init: don't block the caller waiting for the worker
         # to come up.  ``__init__`` returns immediately; the reader
@@ -188,6 +236,20 @@ class SubprocessBackend:
                     continue
                 with self._status_cache_lock:
                     self._status_cache = new_status
+            elif msg[0] == "provider_change":
+                # Worker pushes the EP that ``onnx_asr.load_model`` is
+                # actually using as soon as it knows (after the
+                # session is built, including any retry-on-CPU
+                # fallback). ``None`` is a valid value — model was
+                # unloaded or never bound to a session.
+                try:
+                    new_provider = msg[1]
+                except Exception:  # pragma: no cover — defensive
+                    continue
+                if new_provider is not None:
+                    new_provider = str(new_provider)
+                with self._provider_cache_lock:
+                    self._provider_cache = new_provider
             elif msg[0] == "log":
                 # Re-emit worker log records through the parent's
                 # logging system so they land in app.log + Logs view.
@@ -260,8 +322,18 @@ class SubprocessBackend:
         # Same fast-path as ``status()`` — no IPC.
         return self.status() == "ready"
 
+    def active_provider(self) -> Optional[str]:
+        # Served from the local cache populated by ``provider_change``
+        # push messages from the worker; no IPC.  ``None`` means
+        # either no model is loaded yet (worker hasn't sent the first
+        # ``provider_change`` since startup) or the inner backend
+        # doesn't expose the field (legacy / fake doubles in tests).
+        with self._provider_cache_lock:
+            return self._provider_cache
+
     def current_model(self) -> str:
-        return self._send_cmd(("current_model",), timeout=_FAST_TIMEOUT)
+        with self._current_model_cache_lock:
+            return self._current_model_cache
 
     def current_language(self) -> Optional[str]:
         return self._send_cmd(
@@ -280,6 +352,10 @@ class SubprocessBackend:
         compute_type: Optional[str] = None,
     ) -> None:
         # Same rationale as ``load`` — fast handshake only.
+        from app.model_mapping import canonical_for
+
+        with self._current_model_cache_lock:
+            self._current_model_cache = canonical_for(model)
         self._send_cmd(
             ("change_model", model, compute_type),
             timeout=_FAST_TIMEOUT,
@@ -330,10 +406,13 @@ class SubprocessBackend:
             return
         self._shutdown = True
         # Politely ask the worker to drop the inner backend and exit
-        # its receive loop, then wait briefly.  Fall back to terminate
-        # if it doesn't quit on its own (stuck in C++ destructor).
+        # its receive loop, then wait briefly.  Don't block on an IPC
+        # response here: app shutdown has nothing useful to do with the
+        # ack, and waiting for it can stall the caller for the full
+        # command timeout if the child is already half-dead.
         try:
-            self._send_cmd(("shutdown_worker",), timeout=_FAST_TIMEOUT)
+            with self._send_lock:
+                self._parent_conn.send(("shutdown_worker",))
         except Exception as exc:  # pragma: no cover — pipe may be dead
             log.debug("shutdown_worker send failed: %s", exc)
         try:

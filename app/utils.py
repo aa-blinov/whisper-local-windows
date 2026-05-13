@@ -25,23 +25,6 @@ def is_installed_package():
     return 'site-packages' in __file__
 
 
-def _user_local_data_dir() -> Path:
-    """Per-user, non-roaming app data directory on Windows.
-
-    Honours ``%LOCALAPPDATA%`` (the canonical Local path); falls
-    back to ``~/AppData/Local/LazyToText`` when the env var isn't
-    exposed (sandboxed shells / unusual envs). Used for things
-    that are large or machine-specific — logs and downloaded
-    model weights — and shouldn't sync via Windows roaming
-    profiles. Config / small settings live under ``%APPDATA%``
-    instead (see ``ConfigManager._user_config_dir``).
-    """
-    local = os.environ.get("LOCALAPPDATA")
-    if local:
-        return Path(local) / "LazyToText"
-    return Path.home() / "AppData" / "Local" / "LazyToText"
-
-
 def _project_root_or_cwd() -> Path:
     """Walk up from this module to the nearest ``pyproject.toml``.
 
@@ -61,40 +44,83 @@ def _project_root_or_cwd() -> Path:
     return current.parent.parent.parent
 
 
+def _is_frozen() -> bool:
+    """``True`` when the process is running inside a py2app /
+    PyInstaller bundle. Sources stop being a writable directory
+    in that mode (the bundle may live in ``/Applications``), so
+    user data has to migrate to the canonical per-user dirs."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def _try_inject_nvidia_pip_dll_paths() -> None:
+    """If NVIDIA CUDA libraries were installed via pip (e.g.
+    ``nvidia-cublas-cu12``, ``nvidia-cudnn-cu12``, …) but the host
+    does **not** have CUDA in the system ``PATH``, ONNX Runtime's
+    C++ provider DLL cannot resolve its dependencies.
+
+    This helper prepends the pip package ``bin/`` directories to
+    ``PATH`` *before* the first ``import onnxruntime``.  It is a
+    no-op on non-Windows platforms or when the packages are absent.
+    """
+    if sys.platform != "win32":
+        return
+    nvidia_dirs: list[str] = []
+    for sp in sys.path:
+        if not sp or not os.path.isdir(sp):
+            continue
+        nvidia_base = os.path.join(sp, "nvidia")
+        if not os.path.isdir(nvidia_base):
+            continue
+        for pkg in os.listdir(nvidia_base):
+            bin_dir = os.path.join(nvidia_base, pkg, "bin")
+            if os.path.isdir(bin_dir):
+                nvidia_dirs.append(bin_dir)
+    if not nvidia_dirs:
+        return
+    current = os.environ.get("PATH", "")
+    os.environ["PATH"] = os.pathsep.join(
+        nvidia_dirs + ([current] if current else [])
+    )
+
+
 def get_project_logs_path():
     """Return the directory log files are written to.
 
-    - **Frozen (PyInstaller)**: ``%LOCALAPPDATA%/LazyToText/logs``.
-      The .exe might be installed in ``Program Files`` — that's
-      read-only for non-admin users, so writing logs next to the
-      binary fails on the very first ``RotatingFileHandler.emit``.
-      LOCAL appdata is always per-user-writable.
-    - **Installed wheel**: CWD ``/logs`` (legacy behaviour;
-      assumes the user launched from a writable cwd).
+    - **Frozen (py2app / PyInstaller)**: ``platformdirs.user_log_dir``
+      → ``~/Library/Logs/LazyToText`` on macOS,
+      ``%LOCALAPPDATA%\\LazyToText\\Logs`` on Windows.  Apple's
+      ``Console.app`` reads from ``~/Library/Logs`` directly, so
+      this is the path Mac users expect when they want to debug.
+    - **Installed wheel**: CWD ``/logs``.
     - **Dev**: project root ``/logs``.
 
     Created if missing.
     """
-    if getattr(sys, 'frozen', False):  # PyInstaller bundle
-        logs_dir = _user_local_data_dir() / 'logs'
+    if _is_frozen():
+        from platformdirs import user_log_dir
+
+        logs_dir = Path(user_log_dir("LazyToText", appauthor=False))
     elif is_installed_package():
-        # For installed packages, place logs in the working directory (where user launched the tool)
-        logs_dir = Path.cwd() / 'logs'
+        logs_dir = Path.cwd() / "logs"
     else:
-        logs_dir = _project_root_or_cwd() / 'logs'
+        logs_dir = _project_root_or_cwd() / "logs"
 
     os.makedirs(logs_dir, exist_ok=True)
     return str(logs_dir)
 
+
 def get_project_models_path() -> str:
     """Return the directory used to cache downloaded model weights.
 
-    - **Frozen (PyInstaller)**: ``%LOCALAPPDATA%/LazyToText/models``.
-      Downloaded weights are gigabytes and would either fail to
-      write (Program Files install, read-only without admin) or
-      bloat the install dir if they did. LOCAL appdata is the
-      right bucket — per-user, writable, NOT synced across
-      machines via roaming profiles.
+    - **Frozen (py2app / PyInstaller)**: ``platformdirs.user_cache_dir``
+      → ``~/Library/Caches/LazyToText/models`` on macOS,
+      ``%LOCALAPPDATA%\\LazyToText\\Cache\\models`` on Windows,
+      ``$XDG_CACHE_HOME/LazyToText/models`` on Linux.  Apple
+      explicitly classifies "files that can be regenerated" as
+      ``~/Library/Caches`` material — Time Machine ignores it
+      (so a 2 GB Whisper Large doesn't bloat user backups), and
+      the OS may purge it under disk pressure (we just
+      re-download from Hugging Face).
     - **Installed wheel**: CWD ``/models``.
     - **Dev**: project root ``/models``.
 
@@ -108,9 +134,13 @@ def get_project_models_path() -> str:
     itself on first download, so probing this function from cache-
     status code shouldn't seed empty ``models/`` dirs as a side effect.
     """
-    if getattr(sys, "frozen", False):
-        base = _user_local_data_dir()
-    elif is_installed_package():
+    if _is_frozen():
+        from platformdirs import user_cache_dir
+
+        return str(
+            Path(user_cache_dir("LazyToText", appauthor=False)) / "models"
+        )
+    if is_installed_package():
         base = Path.cwd()
     else:
         base = _project_root_or_cwd()
@@ -204,24 +234,30 @@ def move_cached_dir(src: str, dst: str) -> dict:
         log.info("Moved %s → %s (intra-volume rename)", src, dst)
         return {"moved": True, "bytes": bytes_moved}
     except OSError as rename_exc:
-        # Cross-volume rename, or some other rename-time error;
-        # fall back to copy + delete via shutil.move.
+        # Cross-volume rename — fall back to copy + delete so an
+        # interrupted operation leaves the *source* intact (we delete
+        # only after the copy succeeds).  ``shutil.move`` does not
+        # offer that guarantee because it deletes incrementally.
         log.info(
-            "os.rename failed (%s) — falling back to shutil.move for %s → %s",
+            "os.rename failed (%s) — copy+delete fallback for %s → %s",
             rename_exc, src, dst,
         )
         try:
-            shutil.move(str(src_path), str(dst_path))
-            log.info("Moved %s → %s (copy + delete)", src, dst)
-            return {"moved": True, "bytes": bytes_moved}
-        except (OSError, shutil.Error) as move_exc:
-            log.error(
-                "Failed to move %s → %s: %s", src, dst, move_exc,
-            )
+            shutil.copytree(str(src_path), str(dst_path), dirs_exist_ok=True)
+        except (OSError, shutil.Error) as copy_exc:
+            log.error("Copy failed %s → %s: %s", src, dst, copy_exc)
             return {
                 "moved": False,
-                "reason": f"move failed: {move_exc}",
+                "reason": f"copy failed: {copy_exc}",
             }
+        # Source is now fully backed-up at destination.  Delete the
+        # original, ignoring files that are locked by a running model.
+        try:
+            shutil.rmtree(str(src_path), ignore_errors=True)
+            log.info("Moved %s → %s (copy + delete)", src, dst)
+        except (OSError, shutil.Error) as rm_exc:
+            log.warning("Partial delete of %s: %s", src, rm_exc)
+        return {"moved": True, "bytes": bytes_moved}
 
 
 def get_models_root(configured: Optional[str]) -> str:
@@ -365,15 +401,12 @@ def delete_cached_for_info(info) -> bool:
 
 
 def resolve_asset_path(relative_path: str) -> str:
-    
+
     if not relative_path or os.path.isabs(relative_path):
         return relative_path
-    
-    if getattr(sys, 'frozen', False): # PyInstaller
-        return str(Path(sys._MEIPASS) / relative_path)
-    
-    if is_installed_package(): # pip / pipx
+
+    if is_installed_package():  # pip / pipx
         files = importlib.resources.files("app")
         return str(files / relative_path)
-    
-    return str(Path(__file__).parent / relative_path) # Development
+
+    return str(Path(__file__).parent / relative_path)  # Development

@@ -1,13 +1,40 @@
 import copy
 import logging
 import os
-import shutil
 import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict
 
 import yaml
+
+
+# macOS reserves ``Ctrl+F1`` through ``Ctrl+F7`` for keyboard
+# navigation (Move focus to menu bar / Dock / window / toolbar /
+# floating window …). Pynput never sees the events because macOS
+# captures them first, so the same defaults that work on Windows
+# silently fail on Mac. Pick free-of-conflict combos per platform.
+if sys.platform == "darwin":
+    _DEFAULT_START_HOTKEY = "ctrl+f8"
+    _DEFAULT_STOP_HOTKEY = "ctrl+f9"
+    _DEFAULT_CANCEL_HOTKEY = "ctrl+f10"
+    # Push-to-talk default: right Cmd is the canonical "thumb"
+    # key on Apple keyboards and rarely used in real shortcuts —
+    # most apps that read Cmd+X look at the modifier mask, not
+    # which physical key produced it, so binding right_cmd alone
+    # to push-to-talk doesn't interfere with regular Cmd+letter
+    # shortcuts (you press left Cmd for those by muscle memory).
+    _DEFAULT_PUSH_TO_TALK_KEY = "right_cmd"
+else:
+    _DEFAULT_START_HOTKEY = "ctrl+f2"
+    _DEFAULT_STOP_HOTKEY = "ctrl+f3"
+    _DEFAULT_CANCEL_HOTKEY = "ctrl+f6"
+    # Windows/Linux push-to-talk: right Alt is the equivalent
+    # "thumb" key — easy to reach, rarely the target of an
+    # existing shortcut.  Right Win is also free but on Linux it
+    # often opens the activities overlay (GNOME / KDE), so we
+    # avoid it.
+    _DEFAULT_PUSH_TO_TALK_KEY = "right_alt"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "whisper": {
@@ -20,15 +47,42 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "beam_size": 5,
     },
     "hotkey": {
-        "start_recording_hotkey": "ctrl+f2",
-        "stop_recording_hotkey": "ctrl+f3",
-        # 'Discard the current buffer without transcribing'. Empty
-        # string means no global key is bound — the runtime feature
-        # works through ``StateManager.cancel_active_recording`` but
-        # nothing fires it. ctrl+f6 sits in the same row as f2/f3
-        # without colliding with Alt+F4 (close window) or F5
-        # (refresh) muscle memory the way ctrl+f4 / ctrl+f5 would.
-        "cancel_recording_hotkey": "ctrl+f6",
+        # Recording mode:
+        #   "two_keys" — separate start / stop bindings (default;
+        #     classical fire-and-forget: tap once to start, tap
+        #     stop to transcribe).
+        #   "toggle" — single ``start_recording_hotkey`` flips
+        #     between idle ↔ recording on each press.
+        #   "push_to_talk" — hold ``push_to_talk_key`` to record,
+        #     release to stop and transcribe.  Only mode that lets
+        #     you bind a solo modifier (``right_cmd`` / ``right_alt``
+        #     etc.) — the listener tracks the press and release
+        #     events directly so the key doesn't have to be a
+        #     standalone non-modifier.
+        "mode": "two_keys",
+        # Defaults chosen per-platform — see the constants above.
+        # Windows: ``ctrl+f2`` / ``ctrl+f3`` / ``ctrl+f6`` (the
+        # original muscle-memory set; nothing else uses them on
+        # Win 10/11). macOS: ``ctrl+f8`` / ``ctrl+f9`` / ``ctrl+f10``
+        # (lower F-keys are claimed by the system's keyboard
+        # navigation). 'cancel' discards the current buffer
+        # without transcribing — empty string disables the binding.
+        "start_recording_hotkey": _DEFAULT_START_HOTKEY,
+        "stop_recording_hotkey": _DEFAULT_STOP_HOTKEY,
+        "cancel_recording_hotkey": _DEFAULT_CANCEL_HOTKEY,
+        # Push-to-talk binding — meaningful only when ``mode`` is
+        # ``"push_to_talk"``.  Solo right-side modifier on macOS
+        # (``right_cmd``) / Windows + Linux (``right_alt``).  Empty
+        # string disables PTT (UI guards against switching to
+        # push_to_talk mode with an empty binding).
+        "push_to_talk_key": _DEFAULT_PUSH_TO_TALK_KEY,
+        # Minimum time (seconds) the PTT key must stay held for
+        # the recording to actually start.  Filters out accidental
+        # taps — without it, a glancing right-Cmd press starts +
+        # stops a recording in the same frame, producing empty
+        # transcriptions and noise.  200 ms is the threshold most
+        # voice apps converge on (Discord PTT, Spokenly).
+        "push_to_talk_min_hold_seconds": 0.2,
     },
     "audio": {
         "channels": 1,
@@ -104,100 +158,36 @@ class ConfigManager:
     def _resolve_base_dir(self) -> Path:
         """Where ``config.yaml`` is read from and written to.
 
-        Frozen build → ``%APPDATA%/LazyToText/`` so the file is
-        per-user, writable without admin even when the binary is
-        installed in ``Program Files``. Falls back to
-        ``~/AppData/Roaming/LazyToText`` if ``APPDATA`` is unset
-        (sandboxed shells / unusual envs).
-
-        Dev build → walks up from CWD to the nearest
-        ``pyproject.toml`` so a developer running ``uv run …`` from
-        anywhere in the repo still reads the project's
-        ``config.yaml``.
+        - **Frozen (py2app / PyInstaller)**: per-user config dir
+          (``~/Library/Application Support/LazyToText`` on macOS,
+          ``%APPDATA%\\LazyToText`` on Windows).  The bundle itself
+          may be in ``/Applications`` which is read-only without
+          admin, so config writes have to go somewhere user-
+          writable that survives across reinstalls.
+        - **Dev**: walks up from CWD to the nearest
+          ``pyproject.toml`` so a developer running ``uv run …``
+          from anywhere in the repo still reads the project's
+          ``config.yaml``.
+        - Final fallback: CWD when no ``pyproject.toml`` is found.
         """
-        if getattr(sys, 'frozen', False):  # PyInstaller frozen
-            return self._user_config_dir()
+        import sys
+
+        if getattr(sys, "frozen", False):
+            from platformdirs import user_config_dir
+
+            base = Path(user_config_dir("LazyToText", appauthor=False))
+            base.mkdir(parents=True, exist_ok=True)
+            return base
+
         cwd = Path.cwd()
         for p in [cwd, *cwd.parents]:
             if (p / 'pyproject.toml').exists():
                 return p
         return cwd
 
-    @staticmethod
-    def _user_config_dir() -> Path:
-        """Per-user config directory on Windows.
-
-        Honours ``%APPDATA%`` (the canonical Roaming path); falls
-        back to ``~/AppData/Roaming/LazyToText`` when the env var
-        isn't exposed (rare).
-        """
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            return Path(appdata) / "LazyToText"
-        return Path.home() / "AppData" / "Roaming" / "LazyToText"
-
-    @staticmethod
-    def _bundled_defaults_path() -> Path:
-        """Where the build's 'factory defaults' ``config.yaml`` lives.
-
-        PyInstaller layout depends on the version: classic onedir
-        builds put datas alongside the exe, PyInstaller 6+ puts
-        them under ``_internal/``. ``sys._MEIPASS`` is the most
-        reliable hint when present. Returns the first candidate
-        that exists; falls back to the exe-dir candidate for the
-        'no bundled config' path so callers' ``.is_file()`` check
-        cleanly returns False.
-        """
-        exe_dir = Path(sys.executable).resolve().parent
-        meipass = getattr(sys, "_MEIPASS", None)
-        candidates = [exe_dir / "config.yaml"]
-        if meipass:
-            candidates.append(Path(meipass) / "config.yaml")
-        candidates.append(exe_dir / "_internal" / "config.yaml")
-        for c in candidates:
-            if c.is_file():
-                return c
-        return candidates[0]
-
     def _load_or_create(self):
         path = self.config_path
         if not path.exists():
-            seeded_from_bundle = False
-            if getattr(sys, 'frozen', False):
-                bundled = self._bundled_defaults_path()
-                if bundled.is_file():
-                    # Seed-copy 'factory defaults' shipped with the
-                    # build into the user dir on first launch — lets
-                    # a customised installer ship pre-tweaked
-                    # settings without requiring write access to
-                    # the install dir at runtime.
-                    try:
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copyfile(bundled, path)
-                        seeded_from_bundle = True
-                        self.logger.info(
-                            "Seeded user config from bundled defaults: %s -> %s",
-                            bundled, path,
-                        )
-                    except OSError as exc:
-                        self.logger.warning(
-                            "Failed to seed bundled defaults from %s: %s "
-                            "— falling back to in-code DEFAULT_CONFIG",
-                            bundled, exc,
-                        )
-            if seeded_from_bundle:
-                # Re-enter the load path to pick up bundled values
-                # through the regular YAML reader + defaults merge.
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        data = yaml.safe_load(f) or {}
-                    self.config = self._fill_defaults(data, DEFAULT_CONFIG)
-                    return
-                except Exception as exc:
-                    self.logger.warning(
-                        "Bundled config %s unreadable (%s); using DEFAULT_CONFIG",
-                        path, exc,
-                    )
             self.logger.warning("config.yaml not found, creating with defaults")
             self.config = DEFAULT_CONFIG.copy()
             self._write_config_file()

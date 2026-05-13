@@ -43,6 +43,7 @@ class Toast(QFrame):
         # The toast floats above sibling widgets; turn off mouse
         # interaction so clicks pass through to whatever is beneath.
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(14, 10, 14, 10)
@@ -73,15 +74,20 @@ class Toast(QFrame):
     ) -> None:
         """Display a confirmation banner with a preview of ``text``.
 
-        Re-arms the auto-hide timer if the toast is already visible.
+        Only shows if the parent window is visible — prevents the main
+        window from popping up when hidden to tray. Re-arms the
+        auto-hide timer if the toast is already visible.
         """
+        host = self.parentWidget()
+        if host is not None and not host.isVisible():
+            return
+
         preview = _truncate(text)
         if not preview:
             return
         self._body.setText(preview)
         self.adjustSize()
         self._reposition()
-        self.raise_()
         self.show()
         self._timer.start(max(500, int(duration_ms)))
 

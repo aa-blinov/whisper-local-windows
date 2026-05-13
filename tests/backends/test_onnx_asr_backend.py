@@ -241,10 +241,23 @@ def test_load_passes_cpu_provider_when_device_cpu(monkeypatch):
     assert kwargs.get("providers") == ["CPUExecutionProvider"]
 
 
-def test_load_omits_providers_when_device_auto(monkeypatch):
-    """``device='auto'`` lets ONNX Runtime pick — don't pass providers
-    so it uses its built-in auto-discovery."""
+def test_load_auto_uses_platform_default_providers(monkeypatch):
+    """``device='auto'`` is platform-aware: macOS stages
+    ``CoreMLExecutionProvider`` ahead of CPU so the Neural Engine /
+    GPU is used; Windows / Linux probe ORT and pass an explicit list
+    (CUDA with CPU fallback when the driver/DLLs are present,
+    otherwise CPU only)."""
+    import sys as _sys
+
     fake_module, _ = _install_fake_onnx_asr(monkeypatch)
+
+    # Pin the auto-probe result so the test is deterministic regardless
+    # of whether onnxruntime-gpu is installed in the CI environment.
+    from app.backends import onnx_backend as _mod
+    monkeypatch.setattr(
+        _mod, "_resolve_auto_providers_non_darwin",
+        lambda: ["CPUExecutionProvider"],
+    )
 
     from app.backends.onnx_backend import OnnxAsrBackend
 
@@ -253,7 +266,153 @@ def test_load_omits_providers_when_device_auto(monkeypatch):
     assert _wait(lambda: backend.status() == "ready")
 
     _args, kwargs = fake_module.load_model.call_args
-    assert "providers" not in kwargs
+    if _sys.platform == "darwin":
+        providers = kwargs.get("providers")
+        assert providers is not None and len(providers) == 2
+        # First entry is the CoreML tuple-form (provider_name, options).
+        assert providers[0][0] == "CoreMLExecutionProvider"
+        assert providers[0][1].get("MLComputeUnits") == "ALL"
+        assert providers[1] == "CPUExecutionProvider"
+    else:
+        assert kwargs.get("providers") == ["CPUExecutionProvider"]
+
+
+def test_load_auto_falls_back_to_cpu_on_windows_when_accelerator_fails(monkeypatch):
+    """``device='auto'`` on Windows/Linux must retry on CPU when the
+    probed accelerator (CUDA) fails at model-load time."""
+    fake_module = types.ModuleType("onnx_asr")
+    fake_model = MagicMock()
+    call_count = {"n": 0}
+
+    def flaky_load(model_name, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise RuntimeError(
+                "[E:onnxruntime] CUDAExecutionProvider not available"
+            )
+        return fake_model
+
+    fake_module.load_model = MagicMock(side_effect=flaky_load)
+    monkeypatch.setitem(sys.modules, "onnx_asr", fake_module)
+
+    from app.backends import onnx_backend as _mod
+    # Pretend the auto-probe picked CUDA.
+    monkeypatch.setattr(
+        _mod, "_resolve_auto_providers_non_darwin",
+        lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="auto")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    # Two load_model attempts: first CUDA (failed), second CPU (succeeded).
+    assert fake_module.load_model.call_count == 2
+    second_call_kwargs = fake_module.load_model.call_args_list[1].kwargs
+    assert second_call_kwargs.get("providers") == ["CPUExecutionProvider"]
+
+
+def test_resolve_auto_providers_skips_tensorrt_and_probes_cuda(monkeypatch):
+    """TensorRT is excluded from ``auto`` because it needs a separate SDK.
+    When CUDA is available and a dummy session succeeds, we get ``[CUDA, CPU]``."""
+    import types
+
+    fake_ort = types.ModuleType("onnxruntime")
+    fake_ort.get_available_providers = lambda: [
+        "TensorrtExecutionProvider",
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    fake_ort.set_default_logger_severity = lambda _lvl: None
+    opts = MagicMock()
+    fake_ort.SessionOptions = lambda: opts
+
+    class _GoodSession:
+        def __init__(self, *_a, **_kw):
+            pass
+
+        def run(self, *_a, **_kw):
+            return [None]
+
+        @staticmethod
+        def get_providers():
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+    fake_ort.InferenceSession = _GoodSession
+    fake_np = types.ModuleType("numpy")
+    fake_np.float32 = "float32"
+    fake_np.array = lambda *a, **kw: [0.0]
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    monkeypatch.setitem(sys.modules, "numpy", fake_np)
+
+    # Reset the module-level cache so the test isn't polluted by
+    # earlier probe results.
+    from app.backends import onnx_backend as _mod
+    monkeypatch.setattr(_mod, "_AUTO_PROVIDER_CACHE", None)
+
+    from app.backends.onnx_backend import _resolve_auto_providers_non_darwin
+    providers = _resolve_auto_providers_non_darwin()
+    assert providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_resolve_auto_providers_falls_back_to_cpu_when_cuda_probe_fails(monkeypatch):
+    """If the dummy CUDA session raises (missing driver / DLL), we should
+    go straight to CPU and never retry CUDA at load time."""
+    import types
+
+    fake_ort = types.ModuleType("onnxruntime")
+    fake_ort.get_available_providers = lambda: [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    fake_ort.set_default_logger_severity = lambda _lvl: None
+    fake_ort.SessionOptions = lambda: MagicMock()
+    fake_ort.InferenceSession = MagicMock(side_effect=RuntimeError("CUDA missing"))
+
+    fake_np = types.ModuleType("numpy")
+    fake_np.float32 = "float32"
+    fake_np.array = lambda *a, **kw: [0.0]
+
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    monkeypatch.setitem(sys.modules, "numpy", fake_np)
+
+    from app.backends import onnx_backend as _mod
+    monkeypatch.setattr(_mod, "_AUTO_PROVIDER_CACHE", None)
+
+    from app.backends.onnx_backend import _resolve_auto_providers_non_darwin
+    providers = _resolve_auto_providers_non_darwin()
+    assert providers == ["CPUExecutionProvider"]
+
+
+def test_load_coreml_explicit_passes_provider_options(monkeypatch):
+    """``device='coreml'`` is the explicit override — same providers
+    list as the macOS ``auto`` path (CoreML w/ MLProgram + ALL
+    compute units, CPU fallback). Available on every platform that
+    has ``onnxruntime`` installed (the EP just won't load on
+    non-Apple hardware and ORT will fall through to CPU)."""
+    fake_module, _ = _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="coreml")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+
+    _args, kwargs = fake_module.load_model.call_args
+    providers = kwargs.get("providers")
+    assert providers is not None and len(providers) == 2
+    assert providers[0][0] == "CoreMLExecutionProvider"
+    options = providers[0][1]
+    assert options["ModelFormat"] == "MLProgram"
+    assert options["MLComputeUnits"] == "ALL"
+    # Defensive defaults pinned to today's ORT defaults so a future
+    # version flip doesn't change behaviour silently.
+    assert options["RequireStaticInputShapes"] == "0"
+    assert options["EnableOnSubgraphs"] == "0"
+    assert providers[1] == "CPUExecutionProvider"
 
 
 def test_load_failure_transitions_to_error(monkeypatch):
@@ -267,6 +426,141 @@ def test_load_failure_transitions_to_error(monkeypatch):
     backend.load()
     assert _wait(lambda: backend.status() == "error")
     assert backend.health_check() is False
+
+
+# ---- active_provider() reporting ------------------------------------------
+
+
+def _install_fake_onnx_asr_with_session(
+    monkeypatch, provider_name: str, session_attr: str = "_encoder",
+):
+    """Install a fake ``onnx_asr`` whose ``load_model`` returns a model
+    object exposing ``<session_attr>.get_providers()`` — exactly the
+    layout ``_detect_active_provider`` probes for in real onnx-asr
+    models (encoder/decoder split or single ``_model`` attribute).
+    """
+    fake_session = MagicMock()
+    fake_session.get_providers.return_value = [provider_name, "CPUExecutionProvider"]
+
+    fake_model = MagicMock(spec=[session_attr, "recognize", "with_timestamps"])
+    setattr(fake_model, session_attr, fake_session)
+    fake_model.recognize.return_value = "fake transcription"
+
+    fake_module = types.ModuleType("onnx_asr")
+    fake_module.load_model = MagicMock(return_value=fake_model)
+    monkeypatch.setitem(sys.modules, "onnx_asr", fake_module)
+    return fake_module, fake_model
+
+
+def test_active_provider_is_none_before_load():
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x")
+    assert backend.active_provider() is None
+
+
+def test_active_provider_reports_coreml_when_session_picks_it(monkeypatch):
+    """Real-world Mac path: requested ``[CoreML, CPU]``, ORT bound the
+    session to CoreML — ``active_provider()`` reports the pretty form."""
+    _install_fake_onnx_asr_with_session(monkeypatch, "CoreMLExecutionProvider")
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="coreml")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    assert backend.active_provider() == "CoreML"
+
+
+def test_active_provider_reports_cuda(monkeypatch):
+    _install_fake_onnx_asr_with_session(monkeypatch, "CUDAExecutionProvider")
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="cuda")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    assert backend.active_provider() == "CUDA"
+
+
+def test_active_provider_probes_single_model_attribute(monkeypatch):
+    """CTC-family models (whisper-CTC, gigaam-CTC, t-one, silero,
+    pyannote, wespeaker) keep a single ``_model`` session instead of
+    encoder/decoder. The probe should fall back to that attribute."""
+    _install_fake_onnx_asr_with_session(
+        monkeypatch, "CPUExecutionProvider", session_attr="_model",
+    )
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="cpu")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    assert backend.active_provider() == "CPU"
+
+
+def test_active_provider_stamps_cpu_after_accelerator_retry(monkeypatch):
+    """First ``load_model`` raises a CUDA-style provider error, second
+    one (forced ``[CPU]``) succeeds — ``active_provider`` must report
+    ``"CPU"`` even though the first request was ``cuda``, so the UI
+    pill reflects the actual fallback rather than the original
+    request."""
+    fake_session = MagicMock()
+    fake_session.get_providers.return_value = ["CPUExecutionProvider"]
+    fake_model = MagicMock(spec=["_encoder", "recognize"])
+    fake_model._encoder = fake_session
+    fake_model.recognize.return_value = ""
+
+    fake_module = types.ModuleType("onnx_asr")
+    # First call raises a CUDA-flavoured error so the backend's retry
+    # branch fires; second call (with providers=[CPUExecutionProvider])
+    # returns the fake model.
+    fake_module.load_model = MagicMock(side_effect=[
+        RuntimeError("CUDAExecutionProvider not available"),
+        fake_model,
+    ])
+    monkeypatch.setitem(sys.modules, "onnx_asr", fake_module)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="cuda")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    assert backend.active_provider() == "CPU"
+    # Sanity: load_model called twice — the original CUDA attempt and
+    # the CPU retry.
+    assert fake_module.load_model.call_count == 2
+
+
+def test_active_provider_is_cleared_on_change_model(monkeypatch):
+    """Switching models drops the cached EP back to ``None`` so the
+    UI pill empties out while the new model loads (and gets
+    re-stamped once the new session binds)."""
+    _install_fake_onnx_asr_with_session(monkeypatch, "CoreMLExecutionProvider")
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="coreml")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    assert backend.active_provider() == "CoreML"
+
+    backend.change_model("y")
+    # ``change_model`` clears the field synchronously before the new
+    # load thread starts; we don't have to wait for the next ``ready``.
+    assert backend.active_provider() in (None, "CoreML")
+
+
+def test_active_provider_is_cleared_on_shutdown(monkeypatch):
+    _install_fake_onnx_asr_with_session(monkeypatch, "CoreMLExecutionProvider")
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="x", device="coreml")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    backend.shutdown()
+    assert backend.active_provider() is None
 
 
 def test_import_error_transitions_to_error(monkeypatch):
@@ -355,6 +649,26 @@ def test_change_model_accepts_compute_type_for_api_parity(monkeypatch):
     assert _wait(lambda: backend.status() == "ready")
     backend.change_model("x", compute_type="float16")
     assert backend.status() == "ready"
+
+
+def test_change_model_reloads_when_load_id_changes_on_same_canonical(monkeypatch):
+    """Some registry presets share one HF canonical but differ by the
+    onnx-asr loader id (for example GigaAM CTC vs RNN-T). A
+    canonical-only equality check would skip the reload and leave the
+    old decoder active."""
+    fake_module, _ = _install_fake_onnx_asr(monkeypatch)
+
+    from app.backends.onnx_backend import OnnxAsrBackend
+
+    backend = OnnxAsrBackend(model="same-hf", load_id="decoder-a")
+    backend.load()
+    assert _wait(lambda: backend.status() == "ready")
+    fake_module.load_model.reset_mock()
+
+    backend.change_model("same-hf", load_id="decoder-b")
+    assert _wait(lambda: backend.status() == "ready")
+    fake_module.load_model.assert_called_once()
+    assert fake_module.load_model.call_args.args[0] == "decoder-b"
 
 
 # ---- Transcription ---------------------------------------------------------

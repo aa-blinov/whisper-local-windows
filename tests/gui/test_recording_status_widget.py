@@ -117,11 +117,13 @@ def test_processing_state_shows_pill_keeps_meter_at_zero(qtbot):
     assert w._vu_meter.current_level() == 0.0
 
 
-def test_model_loading_state_falls_back_to_idle_appearance(qtbot):
-    """``model_loading`` is reflected in the topbar's model pill,
-    not here — but the slot still has to fill its placeholder, so
-    show it the same way Idle does. Hiding everything would create
-    visual hole in the sidebar."""
+def test_model_loading_state_shows_explicit_loading_label(qtbot):
+    """``model_loading`` must surface explicitly in the chip — the
+    user needs a reason for hotkey presses to be rejected with
+    "Model is not ready yet". Painting it the same as Idle (the
+    previous behaviour, leftover from when the topbar carried the
+    only loading indicator) caused exactly that confusion. We now
+    render the accent variant + a dedicated label."""
     from app.gui.widgets.recording_status_widget import RecordingStatusWidget
 
     w = RecordingStatusWidget()
@@ -132,7 +134,10 @@ def test_model_loading_state_falls_back_to_idle_appearance(qtbot):
 
     pill = _label_by_name(w, "RecordingStatusPill")
     assert pill.isVisibleTo(w)
-    assert pill.property("state") == "idle"
+    # Same accent shade as ``processing`` — both communicate
+    # "backend is busy, hold off".
+    assert pill.property("state") == "processing"
+    assert "loading" in pill.text().lower()
     assert w._vu_meter.isVisibleTo(w)
     assert w._vu_meter.current_level() == 0.0
 

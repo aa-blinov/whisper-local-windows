@@ -1,5 +1,8 @@
 """Tests for the AppController wiring Models view to config storage."""
 
+import sys
+import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
@@ -163,6 +166,26 @@ def test_controller_persists_selection_back_to_config(qtbot):
 
     assert ("whisper", "model", "whisper-large-v3-turbo") in config.writes
     assert window.models_view.active_alias() == "whisper-large-v3-turbo"
+
+
+def test_controller_preserves_alias_for_shared_canonical_model_change(qtbot):
+    """Shared-canonical presets must reach the backend by alias, not
+    just by HF repo id. ``gigaam-v3-ctc`` and ``gigaam-v3-rnnt`` both
+    point at ``istupakov/gigaam-v3-onnx`` but require different
+    onnx-asr ``load_id`` values."""
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"whisper": {"model": "gigaam-v3-ctc"}})
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+    window.models_view.model_selected.emit("gigaam-v3-rnnt")
+
+    qtbot.waitUntil(lambda: len(rec.model_change_requests) > 0)
+    assert rec.model_change_requests[-1] == ("gigaam-v3-rnnt", "float16")
 
 
 def test_controller_no_ops_when_selecting_already_active(qtbot):
@@ -330,9 +353,10 @@ def test_reset_does_not_re_emit_save_requested(qtbot):
     window.shortcuts_view.hotkeys_reset_requested.emit()
     writes_during = len(config.writes) - writes_before
 
-    # Reset writes exactly 3 settings: start, stop, cancel.
-    # If save_requested re-fired from set_values, we'd see extras.
-    assert writes_during == 3
+    # Reset writes exactly 5 settings: start, stop, cancel, mode,
+    # push_to_talk_key.  If save_requested re-fired from set_values,
+    # we'd see auto_paste / device / etc on top.
+    assert writes_during == 5
 
 
 # ---- Topbar sync ------------------------------------------------------------
@@ -348,7 +372,10 @@ def test_controller_syncs_topbar_model_on_init(qtbot):
 
     AppController(config=config, window=window)
 
-    assert "Large v3" in window.topbar._model_pill.text()
+    # Topbar pill shows the alias (compact) rather than the verbose
+    # ``display_name`` — keeps the pill from crowding the engine /
+    # cancel widgets on the same row.
+    assert "whisper-large-v3" in window.topbar._model_pill.text()
 
 
 def test_controller_updates_topbar_on_model_select(qtbot):
@@ -362,7 +389,7 @@ def test_controller_updates_topbar_on_model_select(qtbot):
     AppController(config=config, window=window)
     window.models_view.model_selected.emit("vosk-ru-small")
 
-    assert "Vosk" in window.topbar._model_pill.text()
+    assert "vosk-ru-small" in window.topbar._model_pill.text()
 
 
 def test_controller_clears_topbar_model_when_unknown(qtbot):
@@ -399,6 +426,8 @@ class FakeHistory:
         self.cleared = False
         self.exported_to: list[str] = []
         self.export_returns: bool = True
+        self.export_wait: Optional[threading.Event] = None
+        self.export_started = threading.Event()
 
     def get_entries(self):
         return list(self._entries)
@@ -409,6 +438,9 @@ class FakeHistory:
 
     def export_to_text(self, filepath: str) -> bool:
         self.exported_to.append(filepath)
+        self.export_started.set()
+        if self.export_wait is not None:
+            self.export_wait.wait(5)
         return self.export_returns
 
 
@@ -428,9 +460,12 @@ def test_controller_populates_history_view_from_manager(qtbot):
 
 
 def test_controller_clears_history_through_manager(qtbot, monkeypatch):
-    """Clear is destructive — confirm via QMessageBox before
-    forwarding to the manager. The test simulates clicking Yes."""
-    from PySide6.QtWidgets import QMessageBox
+    """Clear is destructive — confirm dialog must approve before the
+    manager is invoked.  The test patches our ``confirm`` helper to
+    simulate clicking the Yes button (we used to monkeypatch
+    ``QMessageBox.question`` directly; the helper replaced it so the
+    Mac alert shows the app icon instead of the system "?")."""
+    import app.gui.controllers._history_mixin as history_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
 
@@ -439,10 +474,7 @@ def test_controller_clears_history_through_manager(qtbot, monkeypatch):
     config = FakeConfig()
     history = FakeHistory([FakeHistoryEntry("a")])
 
-    monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda *a, **kw: QMessageBox.Yes,
-    )
+    monkeypatch.setattr(history_module, "confirm", lambda *a, **kw: True)
 
     AppController(config=config, window=window, history=history)
     window.history_view.clear_requested.emit()
@@ -455,7 +487,6 @@ def test_controller_deletes_cached_model_after_confirm(qtbot, monkeypatch):
     """Yes on the confirmation dialog → delete is called with the
     matching ModelInfo, then ``refresh_cache_state`` is invoked so the
     Download/Select label and the Delete-button visibility update."""
-    from PySide6.QtWidgets import QMessageBox
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
@@ -464,7 +495,7 @@ def test_controller_deletes_cached_model_after_confirm(qtbot, monkeypatch):
     qtbot.addWidget(window)
     config = FakeConfig()
 
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.Yes)
+    monkeypatch.setattr(controller_module, "confirm", lambda *a, **kw: True)
 
     deleted: list = []
 
@@ -484,14 +515,13 @@ def test_controller_deletes_cached_model_after_confirm(qtbot, monkeypatch):
     AppController(config=config, window=window)
     window.models_view.model_delete_requested.emit("vosk-ru-small")
 
-    assert deleted == ["vosk-ru-small"]
-    assert refreshed["called"] is True
+    qtbot.waitUntil(lambda: deleted == ["vosk-ru-small"], timeout=2000)
+    qtbot.waitUntil(lambda: refreshed["called"] is True, timeout=2000)
 
 
 def test_controller_does_not_delete_when_user_cancels(qtbot, monkeypatch):
     """Cancel on the confirmation dialog → cache stays put and no
     refresh fires (UI was already correct)."""
-    from PySide6.QtWidgets import QMessageBox
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
@@ -500,7 +530,7 @@ def test_controller_does_not_delete_when_user_cancels(qtbot, monkeypatch):
     qtbot.addWidget(window)
     config = FakeConfig()
 
-    monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.Cancel)
+    monkeypatch.setattr(controller_module, "confirm", lambda *a, **kw: False)
 
     deleted: list = []
     monkeypatch.setattr(
@@ -515,13 +545,51 @@ def test_controller_does_not_delete_when_user_cancels(qtbot, monkeypatch):
     assert deleted == []
 
 
+def test_controller_delete_runs_in_background(qtbot, monkeypatch):
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+
+    monkeypatch.setattr(controller_module, "confirm", lambda *a, **kw: True)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_delete(_info):
+        started.set()
+        release.wait(5)
+        return True
+
+    monkeypatch.setattr(controller_module, "delete_cached_for_info", slow_delete)
+
+    controller = AppController(config=config, window=window)
+
+    t0 = time.monotonic()
+    window.models_view.model_delete_requested.emit("vosk-ru-small")
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 0.5
+    qtbot.waitUntil(lambda: started.is_set(), timeout=2000)
+    assert controller._model_delete_in_progress == {"vosk-ru-small"}
+    assert window.models_view._cards["vosk-ru-small"]._delete_btn.text() == "Deleting…"
+
+    release.set()
+    qtbot.waitUntil(
+        lambda: controller._model_delete_in_progress == set(),
+        timeout=2000,
+    )
+
+
 def test_controller_delete_dialog_warns_about_shared_canonical(qtbot, monkeypatch):
     """``gigaam-v3-ctc`` and ``gigaam-v3-rnnt`` point at the same HF
     repo (``istupakov/gigaam-v3-onnx``); deleting one wipes weights for
     both decoders.  The confirm-dialog text must mention the sibling
     so the user isn't surprised when the other card flips back to
     'Download'."""
-    from PySide6.QtWidgets import QMessageBox
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
@@ -532,12 +600,12 @@ def test_controller_delete_dialog_warns_about_shared_canonical(qtbot, monkeypatc
 
     captured: dict = {}
 
-    def fake_question(parent, title, text, *args, **kwargs):
+    def fake_confirm(parent, title, text, **kwargs):
         captured["title"] = title
         captured["text"] = text
-        return QMessageBox.Cancel
+        return False
 
-    monkeypatch.setattr(QMessageBox, "question", fake_question)
+    monkeypatch.setattr(controller_module, "confirm", fake_confirm)
     monkeypatch.setattr(
         controller_module, "delete_cached_for_info", lambda info: True
     )
@@ -639,20 +707,23 @@ def test_controller_storage_change_writes_config_and_updates_env(
     )
     info_calls: list = []
     monkeypatch.setattr(
-        QMessageBox, "information",
+        "app.gui.controllers._storage_mixin.notify",
         lambda *a, **kw: info_calls.append((a, kw)),
     )
 
     AppController(config=config, window=window)
     window.shortcuts_view.storage_path_change_requested.emit()
 
-    assert config._data.get("storage", {}).get("models_dir") == chosen
+    qtbot.waitUntil(
+        lambda: config._data.get("storage", {}).get("models_dir") == chosen,
+        timeout=3000,
+    )
     # ``HF_HOME`` updated live so the next ``onnx_asr.load_model``
     # download routes through huggingface_hub into the new root.
     assert os.environ.get("HF_HOME") == chosen
     # Info dialog body must NOT mention restart/next-launch — that
     # wording is now a lie since the change applies live.
-    assert info_calls, "expected QMessageBox.information to fire after change"
+    assert info_calls, "expected notify() to fire after change"
     args, _kwargs = info_calls[0]
     body_text = " ".join(str(a) for a in args).lower()
     assert "restart" not in body_text
@@ -727,13 +798,15 @@ def test_controller_storage_change_offers_migration_when_old_has_weights(
         QFileDialog, "getExistingDirectory",
         lambda *a, **kw: str(new_root),
     )
-    # User clicks Yes on the migration prompt.
+    # User clicks Move on the migration prompt — the
+    # confirm_three_way helper resolves to "yes" so the cache
+    # actually relocates.  ``notify`` (post-migration info dialog)
+    # is already stubbed by the autouse ``stub_modal_dialogs``
+    # fixture so we don't need to silence it here.
     monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda *a, **kw: QMessageBox.Yes,
+        "app.gui.controllers._storage_mixin.confirm_three_way",
+        lambda *a, **kw: "yes",
     )
-    # Swallow the post-migration restart info dialog.
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
     moves: list = []
     real_move = controller_module.move_cached_dir
@@ -749,9 +822,12 @@ def test_controller_storage_change_offers_migration_when_old_has_weights(
 
     # Hub moved, gigaam absent so its move was a no-op (still
     # called — controller decides per-subdir).
-    assert any("hub" in src for src, _ in moves)
+    qtbot.waitUntil(lambda: any("hub" in src for src, _ in moves), timeout=3000)
     # Files actually moved on disk.
-    assert (new_root / "hub" / "model.bin").exists()
+    qtbot.waitUntil(
+        lambda: (new_root / "hub" / "model.bin").exists(),
+        timeout=3000,
+    )
     # New path written to config.
     assert config._data["storage"]["models_dir"] == str(new_root)
 
@@ -788,12 +864,14 @@ def test_controller_storage_change_no_prompt_when_old_root_is_empty(
 
     question_calls: list = []
 
-    def fake_question(*args, **kwargs):
+    def fake_confirm_three_way(*args, **kwargs):
         question_calls.append(args)
-        return QMessageBox.Yes  # would say Yes if asked
+        return "yes"  # would say "yes" if asked
 
-    monkeypatch.setattr(QMessageBox, "question", fake_question)
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "app.gui.controllers._storage_mixin.confirm_three_way",
+        fake_confirm_three_way,
+    )
 
     AppController(config=config, window=window)
     window.shortcuts_view.storage_path_change_requested.emit()
@@ -801,7 +879,10 @@ def test_controller_storage_change_no_prompt_when_old_root_is_empty(
     # No migration prompt fired — old root was empty.
     assert question_calls == []
     # Path still written.
-    assert config._data["storage"]["models_dir"] == str(new_root)
+    qtbot.waitUntil(
+        lambda: config._data["storage"]["models_dir"] == str(new_root),
+        timeout=3000,
+    )
 
 
 def test_controller_storage_change_no_on_migration_writes_config_only(
@@ -839,10 +920,9 @@ def test_controller_storage_change_no_on_migration_writes_config_only(
         lambda *a, **kw: str(new_root),
     )
     monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda *a, **kw: QMessageBox.No,
+        "app.gui.controllers._storage_mixin.confirm_three_way",
+        lambda *a, **kw: "no",
     )
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
     moves: list = []
     monkeypatch.setattr(
@@ -855,7 +935,10 @@ def test_controller_storage_change_no_on_migration_writes_config_only(
 
     assert moves == []
     assert (old_root / "hub" / "model.bin").exists()
-    assert config._data["storage"]["models_dir"] == str(new_root)
+    qtbot.waitUntil(
+        lambda: config._data["storage"]["models_dir"] == str(new_root),
+        timeout=3000,
+    )
 
 
 def test_controller_storage_change_cancel_on_migration_aborts(
@@ -893,15 +976,18 @@ def test_controller_storage_change_cancel_on_migration_aborts(
         lambda *a, **kw: str(new_root),
     )
     monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda *a, **kw: QMessageBox.Cancel,
+        "app.gui.controllers._storage_mixin.confirm_three_way",
+        lambda *a, **kw: "cancel",
     )
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
-    AppController(config=config, window=window)
+    controller = AppController(config=config, window=window)
     window.shortcuts_view.storage_path_change_requested.emit()
 
     # Nothing changed — user can re-pick.
+    qtbot.waitUntil(
+        lambda: controller._storage_change_in_progress is False,
+        timeout=3000,
+    )
     assert config._data["storage"]["models_dir"] == "C:/initial"
 
 
@@ -930,7 +1016,6 @@ def test_controller_storage_change_refreshes_model_card_cache_state(
         QFileDialog, "getExistingDirectory",
         lambda *a, **kw: chosen,
     )
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
     refresh_calls: list = []
     monkeypatch.setattr(
@@ -941,9 +1026,59 @@ def test_controller_storage_change_refreshes_model_card_cache_state(
     AppController(config=config, window=window)
     window.shortcuts_view.storage_path_change_requested.emit()
 
+    qtbot.waitUntil(lambda: bool(refresh_calls), timeout=3000)
     assert refresh_calls, (
         "refresh_cache_state must be called so model cards update "
         "Download→Select without requiring a restart"
+    )
+
+
+def test_controller_storage_change_does_not_block_on_slow_probe(
+    qtbot, monkeypatch,
+):
+    from PySide6.QtWidgets import QFileDialog
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    monkeypatch.setenv("HF_HOME", "")
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({"storage": {"models_dir": ""}})
+
+    monkeypatch.setattr(
+        controller_module, "get_models_root", lambda v: v or "C:/default"
+    )
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory",
+        lambda *a, **kw: "D:/lazy-models",
+    )
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_size(_root):
+        started.set()
+        release.wait(5)
+        return 0
+
+    monkeypatch.setattr(controller_module, "cached_models_size", slow_size)
+
+    AppController(config=config, window=window)
+
+    t0 = time.monotonic()
+    window.shortcuts_view.storage_path_change_requested.emit()
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 0.5
+    qtbot.waitUntil(lambda: started.is_set(), timeout=2000)
+    assert not window.shortcuts_view._change_storage_btn.isEnabled()
+
+    release.set()
+    qtbot.waitUntil(
+        lambda: config._data["storage"]["models_dir"] == "D:/lazy-models",
+        timeout=3000,
     )
 
 
@@ -966,7 +1101,6 @@ def test_controller_storage_reset_refreshes_model_card_cache_state(
     monkeypatch.setattr(
         controller_module, "get_models_root", lambda v: v or "C:/default"
     )
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
     refresh_calls: list = []
     monkeypatch.setattr(
@@ -1157,13 +1291,38 @@ def test_controller_hf_token_clear_button_wipes_config_and_env(
     assert window.shortcuts_view.hf_token() == ""
 
 
-def test_controller_open_storage_folder_uses_os_startfile(qtbot, monkeypatch):
-    """Clicking ``Open folder`` must call ``os.startfile`` with the
-    resolved storage path.  Regression test for a NameError that
-    crashed the click because ``os`` wasn't imported in
-    ``app_controller.py``."""
-    import os as _os
+def _patch_open_folder(monkeypatch, captured: list) -> None:
+    """Capture whichever platform-specific call ``_on_storage_open``
+    issues to launch the OS file manager.
 
+    Windows uses ``os.startfile`` (which doesn't exist as an attribute
+    on macOS / Linux — hence ``raising=False`` so the setattr creates
+    it on the fly when the test runs on a non-Windows host); macOS /
+    Linux use ``subprocess.Popen([...])``.
+    """
+    import os as _os
+    import subprocess as _sp
+
+    monkeypatch.setattr(
+        _os, "startfile",
+        lambda p: captured.append(p),
+        raising=False,
+    )
+
+    class _FakePopen:
+        def __init__(self, args, *a, **kw):
+            captured.append(args[1])
+
+    monkeypatch.setattr(_sp, "Popen", _FakePopen)
+
+
+def test_controller_open_storage_folder_invokes_platform_opener(
+    qtbot, monkeypatch,
+):
+    """Clicking ``Open folder`` must call the platform's file-manager
+    opener with the resolved storage path. Regression test for a
+    NameError that crashed the click because ``os`` wasn't imported
+    in ``app_controller.py``."""
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
@@ -1177,24 +1336,23 @@ def test_controller_open_storage_folder_uses_os_startfile(qtbot, monkeypatch):
         lambda v: v or "C:/resolved/default",
     )
     captured: list = []
-    monkeypatch.setattr(_os, "startfile", lambda p: captured.append(p))
+    _patch_open_folder(monkeypatch, captured)
 
     AppController(config=config, window=window)
     window.shortcuts_view.storage_open_requested.emit()
 
     assert captured == ["C:/resolved/default"], (
-        "expected os.startfile to be called with the resolved path"
+        "expected the platform opener to be called with the resolved path"
     )
 
 
 def test_controller_open_storage_folder_creates_dir_if_missing(
     qtbot, monkeypatch, tmp_path,
 ):
-    """Brand-new install (cache dir doesn't exist yet): the open-folder
-    handler creates the directory before launching Explorer so the
-    user doesn't get a 'path not found' popup from the OS."""
-    import os as _os
-
+    """Brand-new install (cache dir doesn't exist yet): the
+    open-folder handler creates the directory before launching the
+    file manager so the user doesn't get a 'path not found' popup
+    from the OS."""
     import app.gui.controllers.app_controller as controller_module
     from app.gui.controllers.app_controller import AppController
     from app.gui.main_window import MainWindow
@@ -1207,7 +1365,7 @@ def test_controller_open_storage_folder_creates_dir_if_missing(
     monkeypatch.setattr(
         controller_module, "get_models_root", lambda _v: str(fresh_dir)
     )
-    monkeypatch.setattr(_os, "startfile", lambda p: None)
+    _patch_open_folder(monkeypatch, [])
 
     assert not fresh_dir.exists()
 
@@ -1215,7 +1373,7 @@ def test_controller_open_storage_folder_creates_dir_if_missing(
     window.shortcuts_view.storage_open_requested.emit()
 
     assert fresh_dir.exists(), (
-        "expected the controller to mkdir before opening Explorer"
+        "expected the controller to mkdir before opening the file manager"
     )
 
 
@@ -1248,7 +1406,7 @@ def test_controller_storage_reset_clears_config_and_updates_env(
     )
     info_calls: list = []
     monkeypatch.setattr(
-        QMessageBox, "information",
+        "app.gui.controllers._storage_mixin.notify",
         lambda *a, **kw: info_calls.append(a),
     )
 
@@ -1274,8 +1432,8 @@ def test_controller_clear_cancelled_keeps_entries(qtbot, monkeypatch):
     history = FakeHistory([FakeHistoryEntry("a"), FakeHistoryEntry("b")])
 
     monkeypatch.setattr(
-        QMessageBox, "question",
-        lambda *a, **kw: QMessageBox.Cancel,
+        "app.gui.controllers._history_mixin.confirm",
+        lambda *a, **kw: False,
     )
 
     AppController(config=config, window=window, history=history)
@@ -1302,12 +1460,11 @@ def test_controller_export_writes_through_manager(qtbot, monkeypatch):
         QFileDialog, "getSaveFileName",
         lambda *a, **kw: (chosen_path, "Text files (*.txt)"),
     )
-    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
     AppController(config=config, window=window, history=history)
     window.history_view.export_requested.emit()
 
-    assert history.exported_to == [chosen_path]
+    qtbot.waitUntil(lambda: history.exported_to == [chosen_path], timeout=2000)
 
 
 def test_controller_export_cancelled_does_not_call_manager(qtbot, monkeypatch):
@@ -1331,6 +1488,39 @@ def test_controller_export_cancelled_does_not_call_manager(qtbot, monkeypatch):
     assert history.exported_to == []
 
 
+def test_controller_export_does_not_block_on_slow_manager(qtbot, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    history = FakeHistory([FakeHistoryEntry("hi")])
+    history.export_wait = threading.Event()
+
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName",
+        lambda *a, **kw: ("C:/tmp/history-export.txt", "Text files (*.txt)"),
+    )
+
+    AppController(config=config, window=window, history=history)
+
+    t0 = time.monotonic()
+    window.history_view.export_requested.emit()
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 0.5
+    assert window.history_view._export_btn.text() == "Exporting…"
+    qtbot.waitUntil(lambda: history.export_started.is_set(), timeout=2000)
+
+    history.export_wait.set()
+    qtbot.waitUntil(
+        lambda: window.history_view._export_btn.text() == "Export",
+        timeout=2000,
+    )
+
+
 def test_controller_export_with_empty_history_skips_dialog(qtbot, monkeypatch):
     """Don't bother the user with a save-as dialog when there's
     nothing to write — just inform them."""
@@ -1350,7 +1540,7 @@ def test_controller_export_with_empty_history_skips_dialog(qtbot, monkeypatch):
     )
     info_called = []
     monkeypatch.setattr(
-        QMessageBox, "information",
+        "app.gui.controllers._history_mixin.notify",
         lambda *a, **kw: info_called.append(True),
     )
 
@@ -1489,6 +1679,29 @@ def test_controller_updates_sidebar_recording_pill_on_state_change(qtbot):
 
     rec.state_changed.emit("idle")
     assert pill.property("state") == "idle"
+
+
+def test_controller_updates_recording_overlay_on_state_change(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    rec = FakeRecordingController()
+
+    AppController(config=config, window=window, recording=rec)
+
+    rec.state_changed.emit("recording")
+    assert window.recording_overlay.isVisible()
+    assert window.recording_overlay.state() == "recording"
+
+    rec.state_changed.emit("processing")
+    assert window.recording_overlay.isVisible()
+    assert window.recording_overlay.state() == "processing"
+
+    rec.state_changed.emit("idle")
+    assert not window.recording_overlay.isVisible()
 
 
 def test_controller_routes_topbar_cancel_to_recording_controller(qtbot):
@@ -1799,9 +2012,12 @@ def test_controller_routes_model_select_through_recording_when_present(qtbot):
     assert ("whisper", "model", "vosk-ru-small") in config.writes
     # compute_type written too — the registry tells us each card's preference
     assert ("whisper", "compute_type", "float16") in config.writes
-    # AND recording stack was asked to actually switch (with compute_type)
+    # AND recording stack was asked to actually switch using the
+    # registry alias, because multiple presets can share one canonical
+    # repo but still differ by backend load_id / decoder choice.
+    qtbot.waitUntil(lambda: len(rec.model_change_requests) > 0)
     assert rec.model_change_requests == [
-        ("alphacep/vosk-model-small-ru", "float16"),
+        ("vosk-ru-small", "float16"),
     ]
 
 
@@ -1931,6 +2147,179 @@ def test_controller_quit_requested_calls_request_quit_and_app_quit(qtbot, monkey
     # when setQuitOnLastWindowClosed(False) is set for tray support.
     assert quit_calls == [None]
     assert app_quit_calls == [None]
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin", reason="macOS-only path resolution test"
+)
+def test_resolve_macos_bundle_path_finds_enclosing_app():
+    from app.gui.controllers.app_controller import _resolve_macos_bundle_path
+    from pathlib import Path
+
+    assert (
+        _resolve_macos_bundle_path(
+            "/Applications/Lazy to Text.app/Contents/MacOS/python"
+        )
+        == str(Path("/Applications/Lazy to Text.app"))
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin", reason="macOS-only path resolution test"
+)
+def test_controller_restart_requested_relaunches_frozen_macos_bundle(
+    qtbot, monkeypatch
+):
+    import sys
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QApplication
+
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    controller = AppController(config=config, window=window)
+
+    quit_calls: list[None] = []
+    original_request_quit = window.request_quit
+    window.request_quit = (
+        lambda: quit_calls.append(None) or original_request_quit()
+    )
+
+    app_quit_calls: list[None] = []
+    monkeypatch.setattr(
+        QApplication.instance(),
+        "quit",
+        lambda: app_quit_calls.append(None),
+    )
+
+    popen_calls: list[list[str]] = []
+
+    class _DummyPopen:
+        def __init__(self, argv, **kwargs):
+            popen_calls.append(list(argv))
+
+    execv_calls: list[tuple[str, list[str]]] = []
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(
+        sys,
+        "frozen",
+        True,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sys,
+        "executable",
+        "/Applications/Lazy to Text.app/Contents/MacOS/python",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["/Applications/Lazy to Text.app/Contents/MacOS/Lazy to Text"],
+    )
+    monkeypatch.setattr(controller_module.subprocess, "Popen", _DummyPopen)
+    monkeypatch.setattr(
+        controller_module.os,
+        "execv",
+        lambda path, argv: execv_calls.append((path, argv)),
+    )
+
+    controller._on_restart_requested()
+
+    assert popen_calls == [["/usr/bin/open", "-n", str(Path("/Applications/Lazy to Text.app"))]]
+    assert quit_calls == [None]
+    assert app_quit_calls == [None]
+    assert execv_calls == []
+
+
+def test_controller_restart_requested_uses_execv_outside_frozen_macos(
+    qtbot, monkeypatch
+):
+    import sys
+
+    import app.gui.controllers.app_controller as controller_module
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    controller = AppController(config=config, window=window)
+
+    execv_calls: list[tuple[str, list[str]]] = []
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setattr(
+        sys,
+        "executable",
+        "/Users/me/project/.venv/bin/python",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["lazy-to-text-ui"],
+    )
+    monkeypatch.setattr(
+        controller_module.os,
+        "execv",
+        lambda path, argv: execv_calls.append((path, argv)),
+    )
+
+    controller._on_restart_requested()
+
+    assert execv_calls == [
+        ("/Users/me/project/.venv/bin/python", ["/Users/me/project/.venv/bin/python", "lazy-to-text-ui"])
+    ]
+
+
+def test_controller_refreshes_macos_permissions_live(qtbot):
+    from PySide6.QtWidgets import QComboBox
+
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    class _HotkeyListener:
+        def __init__(self):
+            self.stop_calls = 0
+            self.start_calls = 0
+
+        def stop_listening(self):
+            self.stop_calls += 1
+
+        def start_listening(self):
+            self.start_calls += 1
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig()
+    recorder = FakeAudioRecorder()
+    recorder.device = 7
+    rec = FakeRecordingController(
+        state_manager=FakeStateManager(audio_recorder=recorder),
+    )
+    rec.list_input_devices = lambda: [(7, "USB Mic"), (9, "AirPods Mic")]
+    rec.current_input_device = lambda: 7
+    rec._hotkey_listener = _HotkeyListener()
+
+    controller = AppController(config=config, window=window, recording=rec)
+
+    combo = window.shortcuts_view.findChild(QComboBox, "MicrophoneCombo")
+    combo.clear()
+    combo.addItem("stale", None)
+
+    controller._on_macos_permissions_changed()
+
+    assert combo.count() == 3
+    assert combo.itemText(1) == "[7] USB Mic"
+    assert combo.currentData() == 7
+    assert rec._hotkey_listener.stop_calls == 1
+    assert rec._hotkey_listener.start_calls == 1
 
 
 def test_controller_forwards_recording_state_to_tray(qtbot):
@@ -2188,5 +2577,50 @@ def test_controller_pushes_inference_settings_to_live_backend_on_change(qtbot):
     new = InferenceSettings(language="ru", vad_filter=False, beam_size=4)
     window.models_view.inference_settings_changed.emit("whisper-large-v3", new)
 
+    qtbot.waitUntil(lambda: bool(backend.received), timeout=2000)
     # Most recent push must match what we emitted.
     assert backend.received[-1] == new
+
+
+def test_controller_inference_push_does_not_block_model_selection(qtbot):
+    from app.gui.controllers.app_controller import AppController
+    from app.gui.main_window import MainWindow
+
+    class _SlowBackend:
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.received: list[object] = []
+
+        def update_inference_settings(self, settings) -> None:
+            self.started.set()
+            self.release.wait(5)
+            self.received.append(settings)
+
+    backend = _SlowBackend()
+
+    class _StateManager:
+        def __init__(self) -> None:
+            self.backend = backend
+            self.audio_recorder = None
+            self.clipboard_manager = None
+
+    rec = FakeRecordingController(state_manager=_StateManager())
+    rec.state_manager = _StateManager()
+    rec.state_manager.backend = backend
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    config = FakeConfig({})
+
+    AppController(config=config, window=window, recording=rec)
+
+    t0 = time.monotonic()
+    window.models_view.model_selected.emit("whisper-large-v3")
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 0.5
+    qtbot.waitUntil(lambda: backend.started.is_set(), timeout=2000)
+
+    backend.release.set()
+    qtbot.waitUntil(lambda: bool(backend.received), timeout=2000)

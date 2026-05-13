@@ -21,7 +21,10 @@ def test_tray_icon_constructs(qtbot, qapp):
 
     tray = AppTrayIcon(parent=qapp)
     assert tray is not None
-    assert tray.toolTip() == "Lazy to Text"
+    # Tooltip is state-dependent now — default state is ``idle`` so the
+    # initial tooltip is the idle one.  ``set_state`` updates it as the
+    # backend transitions through recording / processing / model_loading.
+    assert tray.toolTip() == "Lazy to Text — idle"
 
 
 def test_tray_default_state_is_idle(qtbot, qapp):
@@ -61,6 +64,28 @@ def test_set_state_rejects_unknown_value(qtbot, qapp):
     tray = AppTrayIcon(parent=qapp)
     with pytest.raises(ValueError):
         tray.set_state("dancing")
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_tooltip"),
+    [
+        ("idle", "Lazy to Text — idle"),
+        ("recording", "Lazy to Text — recording"),
+        ("processing", "Lazy to Text — transcribing"),
+        ("model_loading", "Lazy to Text — loading model"),
+    ],
+)
+def test_set_state_updates_tooltip(qtbot, qapp, state, expected_tooltip):
+    """Hover-tooltip should mirror the current state — particularly
+    important on macOS where the menu-bar template icons are
+    minimalist shapes (ring / disc / dots / dashed ring) and the
+    tooltip is the only place the user can read the human-readable
+    name."""
+    from app.gui.widgets.tray_icon import AppTrayIcon
+
+    tray = AppTrayIcon(parent=qapp)
+    tray.set_state(state)
+    assert tray.toolTip() == expected_tooltip
 
 
 # ---- Signals ---------------------------------------------------------------
